@@ -1,0 +1,20 @@
+RT7 ESP32 API Change Notes — V3
+
+目前已完成：門鈴搬到 Railway。
+
+ESP32 門鈴 URL：
+https://rt7-cloud-server-production.up.railway.app/api/rt7/phase9n/doorbell/event
+
+建議下一步 ESP32 開機註冊：
+POST https://rt7-cloud-server-production.up.railway.app/api/device/register
+
+JSON 範例：
+{
+  "device_id":"#1",
+  "device_name":"前門",
+  "ip":"192.168.0.179",
+  "version":"RT7_PHASE10_CLOUD_DOORBELL_CLIENT"
+}
+
+暫時不要一次改 AI Vision / Door Open / Face Match。
+建議等 V3 門鈴、事件、設備註冊穩定後，再做 V4 遠端開門。

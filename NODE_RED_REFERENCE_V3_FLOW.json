@@ -1,0 +1,87 @@
+[
+  {
+    "id": "tab_rt7_cloud_v3_reference",
+    "type": "tab",
+    "label": "RT7 Cloud V3 Node-RED Reference",
+    "disabled": false,
+    "info": "Reference only. Do not import together with main flow if endpoints already exist."
+  },
+  {
+    "id": "doorbell_in_v3_ref",
+    "type": "http in",
+    "z": "tab_rt7_cloud_v3_reference",
+    "name": "POST /api/rt7/phase9n/doorbell/event",
+    "url": "/api/rt7/phase9n/doorbell/event",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 230,
+    "y": 100,
+    "wires": [["doorbell_fn_v3_ref"]]
+  },
+  {
+    "id": "doorbell_fn_v3_ref",
+    "type": "function",
+    "z": "tab_rt7_cloud_v3_reference",
+    "name": "Doorbell reference: same as Railway handleDoorbell()",
+    "func": "const body = msg.payload || {};\nconst now = new Date().toISOString();\nconst last = {\n  type:'doorbell',\n  endpoint:'legacy_phase9n',\n  device_id: body.device_id || body.device || '#1',\n  device_name: body.device_name || body.name || 'RT7 ESP32-S3-CAM',\n  ip: body.ip || msg.req?.ip || '',\n  source: body.source || 'esp32_button',\n  count: body.count || 1,\n  message: body.message || '有人按門鈴',\n  time: now\n};\nflow.set('rt7_doorbell_last', last);\nnode.warn('[RT7_CLOUD_V3_REFERENCE][DOORBELL] '+JSON.stringify(last));\nmsg.payload = {ok:true, message:'doorbell received', state:{ok:true,last:last}};\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 600,
+    "y": 100,
+    "wires": [["doorbell_resp_v3_ref"]]
+  },
+  {
+    "id": "doorbell_resp_v3_ref",
+    "type": "http response",
+    "z": "tab_rt7_cloud_v3_reference",
+    "name": "doorbell response",
+    "statusCode": "200",
+    "headers": {},
+    "x": 920,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "event_log_in_v3_ref",
+    "type": "http in",
+    "z": "tab_rt7_cloud_v3_reference",
+    "name": "POST /api/events/log",
+    "url": "/api/events/log",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 190,
+    "y": 180,
+    "wires": [["event_log_fn_v3_ref"]]
+  },
+  {
+    "id": "event_log_fn_v3_ref",
+    "type": "function",
+    "z": "tab_rt7_cloud_v3_reference",
+    "name": "Event logger reference",
+    "func": "const e = Object.assign({time:new Date().toISOString(), server:'node_red_reference'}, msg.payload||{});\nnode.warn('[RT7_CLOUD_V3_REFERENCE][EVENT] '+JSON.stringify(e));\nmsg.payload={ok:true,event:e};\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 500,
+    "y": 180,
+    "wires": [["event_log_resp_v3_ref"]]
+  },
+  {
+    "id": "event_log_resp_v3_ref",
+    "type": "http response",
+    "z": "tab_rt7_cloud_v3_reference",
+    "name": "event log response",
+    "statusCode": "200",
+    "headers": {},
+    "x": 760,
+    "y": 180,
+    "wires": []
+  }
+]

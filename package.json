@@ -1,12 +1,13 @@
 {
-  "name": "rt7-cloud-server-v2-doorbell",
-  "version": "2.0.0",
-  "description": "RT7 Cloud Server V2 Doorbell API with Node-RED migration map",
+  "name": "rt7-cloud-server-v3",
+  "version": "3.0.0",
+  "description": "RT7 Cloud Server V3: doorbell player, event logger, device registry, WebSocket notify, Node-RED migration map",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
   }
 }
