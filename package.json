@@ -1,7 +1,7 @@
 {
-  "name": "rt7-cloud-server-v4-2-snapshot-bridge-test",
-  "version": "4.2.0",
-  "description": "RT7 Railway Cloud Server V4.2: Snapshot Bridge test only, with Node-RED mapping base",
+  "name": "rt7-cloud-server-v4-3-original-ui-snapshot",
+  "version": "4.3.0",
+  "description": "RT7 Railway cloud server V4.3 original mobile UI with latest ESP32 snapshot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

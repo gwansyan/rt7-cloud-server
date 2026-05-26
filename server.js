@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_2_SNAPSHOT_BRIDGE_TEST';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_3_ORIGINAL_UI_SNAPSHOT';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -132,8 +132,8 @@ table{width:100%;border-collapse:collapse;background:white}th,td{border-bottom:1
 </style>`;
 
 app.get('/', (req, res) => {
-  res.type('html').send(htmlShell('RT7 Cloud Server V3', `${baseCss}
-<header class="top"><h1>RT7 CLOUD SERVER V3</h1><p>Doorbell + Event Logger + Device Registry + WebSocket</p></header>
+  res.type('html').send(htmlShell('RT7 Cloud Server V4.3', `${baseCss}
+<header class="top"><h1>RT7 CLOUD SERVER V4.3</h1><p>Doorbell + Snapshot + Event Logger + Device Registry + WebSocket</p></header>
 <main class="wrap">
 <section class="card"><h2 class="ok">Server OK</h2><p>Railway Node.js Server is running.</p>
 <a class="btn" href="/rt7_cloud_original_ui_doorbell">原始 UI 雲端門鈴</a>
@@ -145,7 +145,7 @@ app.get('/', (req, res) => {
 <a class="btn" href="/api/rt7/doorbell/state">門鈴狀態 JSON</a>
 <a class="btn" href="/api/events/latest">事件紀錄 JSON</a>
 </section>
-<section class="card"><h3>部署策略</h3><p>V4.2 採「只測 Snapshot Bridge」：ESP32 主動上傳照片到 Railway，手機/瀏覽器讀取最新照片；不混入對講或 Face Match。</p></section>
+<section class="card"><h3>部署策略</h3><p>V4.3 採「原始手機 UI + 最新 Snapshot」：保留原始 UI 風格，只把 ESP32 主動上傳的最新照片整合到手機畫面；不混入對講或 Face Match。</p></section>
 </main>`));
 });
 
@@ -344,7 +344,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div style="width:34px"></div></header>
 <div class="deviceBar"><select id="deviceSel"><option value="">讀取設備中...</option></select></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">雲端門鈴模式<br><span class="small">影像串流下一版雲端化</span></div><img id="stream" alt=""><div class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
+<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Snapshot<br><span class="small">ESP32 POST /api/rt7/camera/snapshot</span></div><img id="stream" alt=""><div class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="refreshSnapshot(true)">更新照片</button><button class="vbtn vdark" onclick="stopVideo()">清除顯示</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="unlockAudio()" title="啟用提示音">🎙️</button></section>
 <section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="registerName()">＋</div>註冊</div><div class="act"><div class="circle" onclick="unlockAudio()">🎙️</div>AI語音助理</div></section>
@@ -352,7 +352,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <div id="json" style="display:none">ready</div>
 <script>
 const API_BASE = location.origin;
-let DEVICES=[]; let lastCount=null; let audioOK=false; let audioCtx=null; let currentDevice=null;
+let DEVICES=[]; let lastCount=null; let audioOK=false; let audioCtx=null; let currentDevice=null; let lastSnapshotTime='';
 function $(id){return document.getElementById(id)}
 function setJson(o){$('json').textContent=typeof o==='string'?o:JSON.stringify(o,null,2)}
 function setDoor(msg){$('doorText').textContent=msg||''}
@@ -369,11 +369,29 @@ async function testDoorbell(){const d=selectedDevice();const s=await j('/api/tes
 function registerName(){const name=($('regName')&&$('regName').value)||'gwansyan';setAnswer('註冊名稱：'+name+'（雲端版先保留原始 UI）');}
 function resetLocal(){lastCount=null;$('doorAlert').style.display='none';setDoor('本機顯示已重設');setAnswer('雲端門鈴待機中')}
 function enableAi(){setAnswer('AI 已啟用（雲端 UI）')} function disableAi(){setAnswer('AI 已關閉（雲端 UI）')} function manualDoor(){setDoor('開門：此版尚未連接雲端開門 API')}
-function startVideo(){const d=selectedDevice();if(!d.ip){setAnswer('此設備沒有 IP，影像串流下一版雲端化');return;}$('emptyVideo').style.display='none';$('stream').src='http://'+d.ip+'/api/camera/stream?_='+Date.now();setAnswer('嘗試連線區網影像：'+d.ip)}
-function stopVideo(){$('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('影像已停止')}
-function wsConnect(){try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='doorbell'&&m.payload){loadState(false);showDoorbell(m.payload,true)}}catch(_){}};ws.onclose=()=>setTimeout(wsConnect,3000)}catch(e){}}
+async function refreshSnapshot(manual=false){
+  try{
+    const s=await j('/api/rt7/camera/state');
+    setJson(s);
+    if(s.latest_url && s.snapshot){
+      const t=s.snapshot.time||'';
+      if(t!==lastSnapshotTime || manual){
+        lastSnapshotTime=t;
+        $('emptyVideo').style.display='none';
+        $('stream').src=s.latest_url+'?_='+Date.now();
+        setAnswer('最新 Snapshot：'+(t?new Date(t).toLocaleTimeString():'已更新'));
+      }
+    }else if(manual){
+      $('stream').removeAttribute('src'); $('stream').src=''; $('emptyVideo').style.display='flex';
+      setAnswer('尚無雲端 Snapshot，請先由 ESP32 上傳照片');
+    }
+  }catch(e){ if(manual) setAnswer('讀取 Snapshot 失敗：'+e.message); }
+}
+function startVideo(){refreshSnapshot(true)}
+function stopVideo(){$('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('影像顯示已清除，雲端照片仍保留')}
+function wsConnect(){try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='doorbell'&&m.payload){loadState(false);showDoorbell(m.payload,true);refreshSnapshot(false)} if(m.type==='snapshot'){refreshSnapshot(true)}}catch(_){}};ws.onclose=()=>setTimeout(wsConnect,3000)}catch(e){}}
 $('deviceSel').addEventListener('change',()=>{currentDevice=selectedDevice();setAnswer('已切換 '+(currentDevice.name||currentDevice.id));});
-loadDevices().then(()=>loadState(true)); setInterval(()=>loadState(false),2200); wsConnect();
+loadDevices().then(()=>{loadState(true);refreshSnapshot(true)}); setInterval(()=>{loadState(false);refreshSnapshot(false)},2200); wsConnect();
 </script></body></html>`);
 });
 
@@ -641,6 +659,7 @@ const NODE_RED_MAPPING = [
   { group:'02 Event Log', status:'done', nodered:'GET /api/rt7/events/latest, GET /api/rt7/events/clear, /rt7_event_log', railway:'same API names retained; stored in data/rt7_event_log.jsonl', test:'GET latest, clear, then trigger doorbell' },
   { group:'03 Device Manager', status:'done', nodered:'GET /api/rt7/device/state, POST /api/rt7/device/set, /rt7_device_manager', railway:'same API names retained; stored in data/rt7_devices.json', test:'save device IP/name and reload admin page' },
   { group:'04 Snapshot Bridge', status:'done-v4.2', nodered:'ESP32 /api/camera/snapshot via Node-RED local proxy', railway:'POST /api/rt7/camera/snapshot; POST /api/rt7/camera/snapshot_json; GET /api/rt7/camera/latest.jpg; GET /api/rt7/camera/state; GET /rt7_snapshot_bridge_test', test:'ESP32 actively uploads JPEG/base64; phone page refreshes latest image; clear endpoint works' },
+  { group:'04B Original UI Snapshot', status:'done-v4.3', nodered:'Original phone UI camera block / Node-RED image refresh', railway:'GET /rt7_cloud_original_ui_doorbell now displays /api/rt7/camera/latest.jpg and auto-refreshes on snapshot WebSocket event', test:'Open original UI after ESP32 snapshot POST; verify image appears in black video area' },
   { group:'05 Vision QA', status:'partial', nodered:'GET /api/rt7/phase9i/vision_qa', railway:'GET /api/rt7/phase9i/vision_qa uses latest uploaded snapshot + OpenAI if OPENAI_API_KEY exists', test:'Upload snapshot, ask question, verify answer' },
   { group:'06 Voice Vision Router', status:'partial', nodered:'POST /api/rt7/phase9j/voice_vision', railway:'POST /api/rt7/phase9j/voice_vision text-mode scaffold; audio upload reserved', test:'POST {text:"請問鏡頭看到什麼"}' },
   { group:'07 Door Open Queue', status:'partial', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
@@ -650,7 +669,7 @@ const NODE_RED_MAPPING = [
 app.get('/api/rt7/mapping', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, mapping:NODE_RED_MAPPING }));
 app.get('/api/rt7/mapping/status', (req,res)=>{
   const count = NODE_RED_MAPPING.reduce((a,x)=>{ a[x.status]=(a[x.status]||0)+1; return a; },{});
-  res.json({ ok:true, version:SERVER_VERSION, count, next_recommended:'V4.3 Mobile UI display latest Snapshot only after V4.2 upload test passes' });
+  res.json({ ok:true, version:SERVER_VERSION, count, next_recommended:'V4.4 Door Open Queue only after V4.3 original UI snapshot passes' });
 });
 app.get('/rt7_mapping', (req,res)=>{
   const rows = NODE_RED_MAPPING.map(x=>`<tr><td>${x.group}</td><td><b>${x.status}</b></td><td><code>${x.nodered}</code></td><td><code>${x.railway}</code></td><td>${x.test}</td></tr>`).join('');
