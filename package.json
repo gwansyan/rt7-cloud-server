@@ -1,7 +1,7 @@
 {
-  "name": "rt7-cloud-server-v3",
-  "version": "3.0.0",
-  "description": "RT7 Cloud Server V3: doorbell player, event logger, device registry, WebSocket notify, Node-RED migration map",
+  "name": "rt7-cloud-server-v4-2-snapshot-bridge-test",
+  "version": "4.2.0",
+  "description": "RT7 Railway Cloud Server V4.2: Snapshot Bridge test only, with Node-RED mapping base",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V3_ORIGINAL_UI_DOORBELL_FIX53_KEEP_ORIGINAL_UI';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_2_SNAPSHOT_BRIDGE_TEST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -137,12 +137,15 @@ app.get('/', (req, res) => {
 <main class="wrap">
 <section class="card"><h2 class="ok">Server OK</h2><p>Railway Node.js Server is running.</p>
 <a class="btn" href="/rt7_cloud_original_ui_doorbell">原始 UI 雲端門鈴</a>
+<a class="btn green" href="/rt7_cloud_phase10_no_nodered">Phase10 雲端影像/對講/AI（無 Node-RED）</a>
 <a class="btn" href="/rt7_cloud_doorbell_player">雲端門鈴播放器</a>
 <a class="btn" href="/rt7_cloud_admin">雲端管理頁</a>
+<a class="btn green" href="/rt7_snapshot_bridge_test">V4.2 Snapshot Bridge 測試頁</a>
+<a class="btn" href="/api/rt7/camera/state">Snapshot 狀態 JSON</a>
 <a class="btn" href="/api/rt7/doorbell/state">門鈴狀態 JSON</a>
 <a class="btn" href="/api/events/latest">事件紀錄 JSON</a>
 </section>
-<section class="card"><h3>部署策略</h3><p>V3 採「一個功能一個功能」搬移，保留 Node-RED 對照文件，方便日後維護。</p></section>
+<section class="card"><h3>部署策略</h3><p>V4.2 採「只測 Snapshot Bridge」：ESP32 主動上傳照片到 Railway，手機/瀏覽器讀取最新照片；不混入對講或 Face Match。</p></section>
 </main>`));
 });
 
@@ -307,6 +310,31 @@ loadAll();
 
 
 
+
+// ---------- V4.2 Snapshot Bridge test page ----------
+app.get('/rt7_snapshot_bridge_test', (req, res) => {
+  res.type('html').send(htmlShell('RT7 V4.2 Snapshot Bridge Test', `${baseCss}
+<header class="top"><h1>RT7 V4.2 Snapshot Bridge</h1><p>只測 ESP32 → Railway Snapshot 上傳 / 手機讀取</p></header>
+<main class="wrap">
+<section class="card"><h2>測試目標</h2><p>本頁只驗證 Snapshot Bridge，不測對講、不測 Face Match、不測 AI Vision。</p><div class="grid"><a class="btn green" href="/api/rt7/camera/state">Snapshot 狀態</a><a class="btn" href="/api/rt7/camera/latest.jpg" target="_blank">開啟最新 JPG</a><button class="btn gray" onclick="refreshState()">重新讀取</button><button class="btn red" onclick="clearSnapshot()">清除 Snapshot</button></div></section>
+<section class="card"><h2>最新 Snapshot</h2><div style="background:#000;aspect-ratio:4/3;border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden"><img id="img" style="max-width:100%;max-height:100%;display:none"><div id="empty" style="color:#cbd5e1;font-weight:900;text-align:center">尚無照片<br><span class="muted">請 ESP32 POST /api/rt7/camera/snapshot</span></div></div><p class="muted">圖片 URL：<code>/api/rt7/camera/latest.jpg</code></p></section>
+<section class="card"><h2>ESP32 上傳方式</h2><p>方式 A：直接 POST JPEG binary：</p><pre class="status">POST https://rt7-cloud-server-production.up.railway.app/api/rt7/camera/snapshot
+Content-Type: image/jpeg
+Body: JPEG bytes</pre><p>方式 B：POST base64 JSON：</p><pre class="status">POST /api/rt7/camera/snapshot_json
+Content-Type: application/json
+{"image_b64":"...","device_id":"#1"}</pre></section>
+<section class="card"><h2>目前狀態</h2><pre id="log" class="status">loading...</pre></section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+async function j(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{}));const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,status:r.status,raw:t}}}
+async function refreshState(){const s=await j('/api/rt7/camera/state');$('log').textContent=JSON.stringify(s,null,2);if(s.latest_url){$('img').src=s.latest_url+'?_='+Date.now();$('img').style.display='block';$('empty').style.display='none';}else{$('img').style.display='none';$('empty').style.display='block';}}
+async function clearSnapshot(){const s=await j('/api/rt7/camera/clear',{method:'POST'});$('log').textContent=JSON.stringify(s,null,2);refreshState();}
+setInterval(refreshState,3000);refreshState();
+try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='snapshot')refreshState();}catch(_){}}}catch(e){}
+</script>`));
+});
+
 // ---------- Original RT7 mobile-style cloud doorbell UI ----------
 app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 Cloud Original UI Doorbell</title>
@@ -348,6 +376,287 @@ $('deviceSel').addEventListener('change',()=>{currentDevice=selectedDevice();set
 loadDevices().then(()=>loadState(true)); setInterval(()=>loadState(false),2200); wsConnect();
 </script></body></html>`);
 });
+
+
+// ============================================================================
+// V4 NO-NODERED PHASE10 BRIDGE
+// Goal: migrate the original Node-RED RT7 image/intercom/access-control routes
+// into Railway Express. Railway cannot directly reach a private LAN ESP32 unless
+// the ESP32 is exposed by VPN/Tailscale/tunnel, so routes support two modes:
+//   1) Cloud-native ingest: ESP32 POSTs snapshots/events to Railway.
+//   2) Optional proxy: if a device has a public/tunnel URL or reachable IP, Railway proxies.
+// ============================================================================
+const SNAPSHOT_FILE = path.join(DATA_DIR, 'rt7_latest_snapshot.jpg');
+let cloudState = {
+  ai_enabled: true,
+  plugins: { motion: true, face: true, doorbell: true, intercom: true },
+  last_snapshot: null,
+  last_vision: null,
+  last_voice: null,
+  last_proxy: null,
+  last_door_open: null,
+  current_device_id: '#1'
+};
+
+function getCurrentDevice(req) {
+  const devices = readDevices();
+  const qid = safeString(req.query.device_id || req.query.device || '').trim();
+  const qip = safeString(req.query.ip || '').trim();
+  if (qip) return { id: qid || 'query', name: 'query device', ip: qip, base_url: qip.startsWith('http') ? qip : ('http://' + qip) };
+  let dev = devices.find(d => safeString(d.id) === qid) || devices.find(d => safeString(d.id) === cloudState.current_device_id) || devices[0] || defaultDevices()[0];
+  const base = safeString(dev.base_url || dev.url || dev.ip).trim();
+  return Object.assign({}, dev, { base_url: base ? (base.startsWith('http') ? base : ('http://' + base)) : '' });
+}
+
+function isReachableDeviceUrl(baseUrl) {
+  if (!baseUrl) return false;
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)/i.test(baseUrl)) return false;
+  // Private RFC1918 addresses are not reachable from Railway unless routed by a tunnel.
+  // We still allow them when RT7_ALLOW_PRIVATE_PROXY=1 for local testing.
+  if (process.env.RT7_ALLOW_PRIVATE_PROXY === '1') return true;
+  if (/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(baseUrl)) return false;
+  return true;
+}
+
+async function proxyToEsp(req, res, espPath, method) {
+  const dev = getCurrentDevice(req);
+  if (!isReachableDeviceUrl(dev.base_url)) {
+    const payload = { ok:false, mode:'cloud_bridge', error:'ESP32_NOT_REACHABLE_FROM_RAILWAY', message:'Railway 無法直接連到區網 ESP32 IP。請改用 ESP32 主動 POST 雲端端點，或設定 Tailscale/公開 HTTPS URL 後存到設備管理。', device:dev, path:espPath };
+    cloudState.last_proxy = Object.assign({ time: nowIso() }, payload);
+    appendEvent({ type:'proxy_skip', path:espPath, device_id:dev.id, ip:dev.ip || dev.base_url, message:payload.message });
+    return res.status(200).json(payload);
+  }
+  try {
+    const qs = new URLSearchParams(req.query || {}); qs.delete('_'); qs.delete('ip'); qs.delete('device_id'); qs.delete('device');
+    const url = dev.base_url.replace(/\/$/,'') + espPath + (qs.toString() ? ('?' + qs.toString()) : '');
+    const options = { method: method || req.method, headers: {} };
+    if (req.method === 'POST') {
+      if (typeof req.body === 'string' || Buffer.isBuffer(req.body)) options.body = req.body;
+      else options.body = JSON.stringify(req.body || {}), options.headers['Content-Type'] = 'application/json';
+    }
+    const r = await fetch(url, options);
+    const ct = r.headers.get('content-type') || 'text/plain';
+    const buf = Buffer.from(await r.arrayBuffer());
+    cloudState.last_proxy = { ok:r.ok, status:r.status, url, time:nowIso() };
+    res.status(r.status).type(ct).send(buf);
+  } catch (e) {
+    const payload = { ok:false, error:'PROXY_FAILED', message:String(e.message || e), path:espPath, device:dev };
+    cloudState.last_proxy = Object.assign({ time: nowIso() }, payload);
+    appendEvent({ type:'proxy_error', path:espPath, message:payload.message, device_id:dev.id });
+    res.status(200).json(payload);
+  }
+}
+
+// Node-RED compatible event aliases
+app.get('/api/rt7/events/latest', (req,res)=>res.redirect(307, '/api/events/latest?limit=' + encodeURIComponent(req.query.limit || '200')));
+app.get('/api/rt7/events/clear', (req,res)=>res.redirect(307, '/api/events/clear'));
+app.get('/api/rt7/devices/list', (req,res)=>res.json({ ok:true, devices:readDevices(), current_device_id:cloudState.current_device_id }));
+app.post('/api/rt7/devices/save', (req,res)=>{
+  const devices = saveDevices(req.body?.devices || req.body || []);
+  appendEvent({ type:'devices_save', device_count:devices.length, message:'devices saved from Phase10 API' });
+  res.json({ ok:true, devices });
+});
+app.get('/api/rt7/device/state', (req,res)=>res.json({ ok:true, current_device_id:cloudState.current_device_id, device:getCurrentDevice(req), cloudState }));
+app.post('/api/rt7/device/set', (req,res)=>{ cloudState.current_device_id = safeString(req.body?.device_id || req.body?.id || req.query.device_id || '#1'); res.json({ ok:true, current_device_id:cloudState.current_device_id, device:getCurrentDevice(req) }); });
+app.get('/api/rt7/device/proxy_status', (req,res)=>proxyToEsp(req,res,'/api/status','GET'));
+
+// Independent full intercom proxy-compatible endpoints
+app.get('/api/ind_full/ui/state', (req,res)=>proxyToEsp(req,res,'/api/ui/state','GET'));
+app.get('/api/ind_full/audio/phone_begin', (req,res)=>proxyToEsp(req,res,'/api/audio/phone_begin','GET'));
+app.post('/api/ind_full/audio/phone_pcm_hex', express.text({type:'*/*', limit:'2mb'}), (req,res)=>proxyToEsp(req,res,'/api/audio/phone_pcm_hex','POST'));
+app.get('/api/ind_full/audio/phone_end', (req,res)=>proxyToEsp(req,res,'/api/audio/phone_end','GET'));
+app.get('/api/ind_full/audio/esp_begin', (req,res)=>proxyToEsp(req,res,'/api/audio/esp_begin','GET'));
+app.get('/api/ind_full/audio/esp_pcm_hex', (req,res)=>proxyToEsp(req,res,'/api/audio/esp_pcm_hex','GET'));
+app.get('/api/ind_full/audio/esp_end', (req,res)=>proxyToEsp(req,res,'/api/audio/esp_end','GET'));
+app.get('/api/ind_full/audio/speaker_tone', (req,res)=>proxyToEsp(req,res,'/api/audio/speaker_tone','GET'));
+app.get('/api/ind_full/audio/mic_raw_test', (req,res)=>proxyToEsp(req,res,'/api/audio/mic_raw_test','GET'));
+
+// Plugin / guard state compatible with Phase6C3 Node-RED flow
+app.get('/api/rt7/phase6c3_plugin/ping', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, mode:'railway_no_nodered', time:nowIso() }));
+app.get('/api/rt7/phase6c3_plugin/plugins/state', (req,res)=>res.json({ ok:true, plugins:cloudState.plugins, ai_enabled:cloudState.ai_enabled, last_snapshot:cloudState.last_snapshot, last_vision:cloudState.last_vision }));
+app.get('/api/rt7/phase6c3_plugin/plugins/:plugin/:action', (req,res)=>{ const p=req.params.plugin, a=req.params.action; cloudState.plugins[p] = !/disable|off|0/i.test(a); appendEvent({type:'plugin_set', plugin:p, enabled:cloudState.plugins[p]}); res.json({ok:true, plugins:cloudState.plugins}); });
+app.get('/api/rt7/phase6c3_plugin/plugins/reset', (req,res)=>{ cloudState.plugins={ motion:true, face:true, doorbell:true, intercom:true }; res.json({ok:true, plugins:cloudState.plugins}); });
+app.get('/api/rt7/phase6c3_plugin/status', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, cloudState, doorbellState }));
+app.get('/api/rt7/phase6c3_plugin/camera/status', (req,res)=>res.json({ ok:true, camera:{ latest:!!cloudState.last_snapshot, last_snapshot:cloudState.last_snapshot } }));
+app.get('/api/rt7/phase6c3_plugin/camera/state', (req,res)=>res.json({ ok:true, state:{ latest_snapshot:cloudState.last_snapshot, url: cloudState.last_snapshot ? '/api/rt7/camera/latest.jpg' : '' } }));
+app.post('/api/rt7/phase6a_fix2/motion/event', (req,res)=>{ const ev=appendEvent(Object.assign({ type:'motion', message:'ESP32 motion event' }, req.body || {})); broadcast('motion', ev); res.json({ok:true,event:ev}); });
+app.get('/api/rt7/phase6c3_plugin/alarm/confirm', (req,res)=>{ const ev=appendEvent({type:'alarm_confirm', message:'alarm confirmed from cloud UI'}); broadcast('alarm_confirm', ev); res.json({ok:true,event:ev}); });
+
+// ESP32 actively uploads snapshots here. Supports raw image/jpeg or JSON {image_b64/jpeg_b64}.
+app.post('/api/rt7/camera/snapshot', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), (req,res)=>{
+  ensureDataDir();
+  let buf = Buffer.isBuffer(req.body) ? req.body : null;
+  if (!buf || buf.length < 10) return res.status(400).json({ok:false,error:'JPEG_BODY_REQUIRED'});
+  fs.writeFileSync(SNAPSHOT_FILE, buf);
+  cloudState.last_snapshot = { ok:true, bytes:buf.length, time:nowIso(), source:'raw_post', device_id:safeString(req.query.device_id || req.headers['x-rt7-device-id'] || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
+  const ev=appendEvent({ type:'snapshot', bytes:buf.length, message:'snapshot uploaded' });
+  broadcast('snapshot', cloudState.last_snapshot);
+  res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
+});
+app.post('/api/rt7/camera/snapshot_json', (req,res)=>{
+  ensureDataDir();
+  const b64 = safeString(req.body?.image_b64 || req.body?.jpeg_b64 || req.body?.b64 || '').replace(/^data:image\/jpeg;base64,/, '');
+  if (!b64) return res.status(400).json({ok:false,error:'image_b64 required'});
+  const buf = Buffer.from(b64, 'base64');
+  fs.writeFileSync(SNAPSHOT_FILE, buf);
+  cloudState.last_snapshot = { ok:true, bytes:buf.length, time:nowIso(), source:'json_b64', device_id:safeString(req.body?.device_id || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
+  const ev=appendEvent({ type:'snapshot', bytes:buf.length, message:'snapshot uploaded json' });
+  broadcast('snapshot', cloudState.last_snapshot);
+  res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
+});
+app.get('/api/rt7/camera/latest.jpg', (req,res)=>{ ensureDataDir(); if (!fs.existsSync(SNAPSHOT_FILE)) return res.status(404).json({ok:false,error:'NO_SNAPSHOT'}); res.type('image/jpeg').send(fs.readFileSync(SNAPSHOT_FILE)); });
+app.get('/api/rt7/camera/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, snapshot:cloudState.last_snapshot, latest_url: cloudState.last_snapshot ? '/api/rt7/camera/latest.jpg' : '', test_page:'/rt7_snapshot_bridge_test' }));
+app.post('/api/rt7/camera/clear', (req,res)=>{ ensureDataDir(); if (fs.existsSync(SNAPSHOT_FILE)) fs.unlinkSync(SNAPSHOT_FILE); cloudState.last_snapshot=null; const ev=appendEvent({type:'snapshot_clear', message:'Snapshot cleared'}); broadcast('snapshot_clear', ev); res.json({ok:true, event:ev}); });
+
+// Phase8C motion configuration: stored in cloud, ESP32 may poll it later.
+let motionConfig = { enabled:false, sensitivity:5, updated_at:null };
+app.get('/api/rt7/phase8c/esp_motion/enable', (req,res)=>{ motionConfig.enabled=true; motionConfig.updated_at=nowIso(); res.json({ok:true, motionConfig}); });
+app.get('/api/rt7/phase8c/esp_motion/disable', (req,res)=>{ motionConfig.enabled=false; motionConfig.updated_at=nowIso(); res.json({ok:true, motionConfig}); });
+app.get('/api/rt7/phase8c/esp_motion/config', (req,res)=>res.json({ok:true, motionConfig}));
+app.get('/api/rt7/phase8c/esp_motion/status', (req,res)=>res.json({ok:true, motionConfig, last_motion: readEvents(50).reverse().find(e=>e.type==='motion') || null}));
+app.get('/api/rt7/return_fix2/enable', (req,res)=>{ cloudState.ai_enabled=true; res.json({ok:true, ai_enabled:true}); });
+app.post('/api/rt7/return_fix2/enable', (req,res)=>{ cloudState.ai_enabled=true; res.json({ok:true, ai_enabled:true}); });
+app.get('/api/rt7/return_fix2/disable', (req,res)=>{ cloudState.ai_enabled=false; res.json({ok:true, ai_enabled:false}); });
+
+async function openAiChat(messages, max_tokens=360) {
+  const key = safeString(process.env.OPENAI_API_KEY).replace(/^Bearer\s+/i,'').trim();
+  if (!key) throw new Error('OPENAI_API_KEY missing');
+  const model = safeString(process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini').trim();
+  const r = await fetch('https://api.openai.com/v1/chat/completions', { method:'POST', headers:{ Authorization:'Bearer '+key, 'Content-Type':'application/json' }, body:JSON.stringify({ model, temperature:0.25, max_tokens, messages }) });
+  const body = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(body?.error?.message || ('OpenAI HTTP '+r.status));
+  return safeString(body?.choices?.[0]?.message?.content).trim();
+}
+async function analyzeLatestSnapshot(question) {
+  ensureDataDir();
+  if (!fs.existsSync(SNAPSHOT_FILE)) return { ok:false, mode:'VISION', error:'NO_CLOUD_SNAPSHOT', answer:'雲端尚未收到 ESP32 上傳的照片。請先讓 ESP32 POST /api/rt7/camera/snapshot。' };
+  const b64 = fs.readFileSync(SNAPSHOT_FILE).toString('base64');
+  const answer = await openAiChat([{ role:'user', content:[ {type:'text', text: question || '請用繁體中文簡短描述門口畫面，並判斷是否有人臉或可疑狀況。'}, {type:'image_url', image_url:{url:'data:image/jpeg;base64,'+b64} } ] }], 360);
+  cloudState.last_vision = { ok:true, question, answer, time:nowIso(), snapshot:cloudState.last_snapshot };
+  appendEvent({ type:'vision_qa', question, answer:answer.slice(0,200), message:'vision qa completed' });
+  return { ok:true, mode:'VISION', question, answer, snapshot:cloudState.last_snapshot };
+}
+
+async function transcribeAudioB64(audio_b64, mime) {
+  const key = safeString(process.env.OPENAI_API_KEY).replace(/^Bearer\s+/i,'').trim();
+  if (!key) throw new Error('OPENAI_API_KEY missing');
+  let b64 = safeString(audio_b64); if (b64.includes(',')) b64 = b64.split(',').pop();
+  const buf = Buffer.from(b64, 'base64');
+  if (buf.length < 800) throw new Error('AUDIO_TOO_SMALL');
+  const blob = new Blob([buf], { type: mime || 'audio/webm' });
+  const fd = new FormData(); fd.append('model','whisper-1'); fd.append('language','zh'); fd.append('response_format','json'); fd.append('file', blob, 'rt7_voice.webm');
+  const r = await fetch('https://api.openai.com/v1/audio/transcriptions', { method:'POST', headers:{ Authorization:'Bearer '+key }, body:fd });
+  const body = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(body?.error?.message || ('Whisper HTTP '+r.status));
+  return safeString(body.text).trim();
+}
+
+async function handleVisionQa(req,res) {
+  try { const q = safeString(req.query.q || req.query.question || '請問鏡頭目前看到什麼？'); res.json(await analyzeLatestSnapshot(q)); }
+  catch(e) { res.status(200).json({ok:false, mode:'VISION', error:String(e.message||e), answer:'雲端 Vision 分析失敗。'}); }
+}
+app.get('/api/rt7/phase9a/vision_qa', handleVisionQa);
+app.get('/api/rt7/phase9b/vision_qa', handleVisionQa);
+app.get('/api/rt7/phase9g/vision_qa', handleVisionQa);
+app.get('/api/rt7/phase9i/vision_qa', handleVisionQa);
+app.get('/api/rt7/phase9d/vision_qa_ping', (req,res)=>res.json({ok:true, version:SERVER_VERSION, latest_snapshot:cloudState.last_snapshot}));
+app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
+  const started = Date.now();
+  try {
+    const mode = safeString(req.body?.mode || 'auto').toLowerCase();
+    const text = req.body?.text ? safeString(req.body.text).trim() : await transcribeAudioB64(req.body?.audio_b64 || '', req.body?.mime || 'audio/webm');
+    if (!text) return res.json({ok:false, error:'NO_TRANSCRIPT', answer:'沒有辨識到文字。'});
+    const visionWords = ['鏡頭','畫面','看到','看見','門口','人臉','有人','誰在','照片','影像','辨識'];
+    const isVision = mode === 'vision' || (mode !== 'chat' && visionWords.some(w=>text.includes(w)));
+    let result;
+    if (isVision) result = await analyzeLatestSnapshot(text);
+    else {
+      const answer = await openAiChat([{role:'system', content:'你是 RT7 AI 語音助理。請用繁體中文、口語、簡潔回答。'}, {role:'user', content:text}], 420);
+      result = { ok:true, mode:'CHAT', text, answer };
+    }
+    cloudState.last_voice = Object.assign({ time:nowIso(), ms:Date.now()-started }, result);
+    res.json(Object.assign({ version:SERVER_VERSION, voice_ms:Date.now()-started }, result, { text }));
+  } catch(e) { res.status(200).json({ok:false, version:SERVER_VERSION, error:String(e.message||e), answer:'雲端語音/影像 AI 處理失敗。'}); }
+});
+
+// Door open: compatible endpoint. If ESP32 is not reachable, records a cloud command for ESP32 polling.
+let pendingCommands = [];
+function queueCommand(cmd) { const c=Object.assign({id:'cmd_'+Date.now(), time:nowIso()}, cmd); pendingCommands.push(c); pendingCommands=pendingCommands.slice(-50); broadcast('command', c); appendEvent({type:'command', command:c.command, message:c.message||c.command}); return c; }
+app.get('/api/rt7/phase9l/door/open', async (req,res)=>{
+  const dev=getCurrentDevice(req);
+  if (isReachableDeviceUrl(dev.base_url)) return proxyToEsp(req,res,'/api/door/open','GET');
+  const cmd=queueCommand({ command:'door_open', device_id:dev.id, message:'雲端開門命令已排入佇列，等待 ESP32 輪詢' });
+  cloudState.last_door_open = cmd;
+  res.json({ ok:true, mode:'cloud_command_queue', command:cmd, note:'ESP32 可輪詢 /api/rt7/device/commands?device_id=#1 取得命令' });
+});
+app.get('/api/rt7/device/commands', (req,res)=>{ const id=safeString(req.query.device_id||req.query.device||''); const list=id?pendingCommands.filter(c=>!c.device_id||c.device_id===id):pendingCommands; res.json({ok:true, commands:list}); });
+app.post('/api/rt7/device/commands/ack', (req,res)=>{ const id=safeString(req.body?.id||req.query.id); pendingCommands=pendingCommands.filter(c=>c.id!==id); res.json({ok:true, pending:pendingCommands.length}); });
+
+app.get('/rt7_cloud_phase10_no_nodered', (req,res)=>{
+  res.type('html').send(htmlShell('RT7 Phase10 Cloud No Node-RED', `${baseCss}
+<style>.phone{max-width:430px;margin:0 auto;background:#fff;min-height:100vh}.videoBox{background:#000;aspect-ratio:4/3;position:relative;display:flex;align-items:center;justify-content:center;color:#cbd5e1;text-align:center;font-weight:900}.videoBox img{width:100%;height:100%;object-fit:cover}.doorAlert{display:none;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:12px;margin:10px;font-size:22px;font-weight:900;text-align:center}.rowbtn{display:grid;grid-template-columns:1fr 1fr;gap:8px}.small{font-size:12px;color:#64748b}.mic{width:118px;height:118px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;font-size:62px}.pill{display:inline-block;border-radius:999px;padding:4px 9px;background:#e2e8f0;font-weight:900}</style>
+<div class="phone">
+<header class="top"><h1>RT7 PHASE10</h1><p>Railway 雲端影像 / 對講 / AI 門禁（無 Node-RED）</p></header>
+<div class="wrap">
+<section class="card"><b>目前設備</b><select id="deviceSel"></select><p class="small">區網 IP 在 Railway 通常無法被反向連線；建議 ESP32 主動上傳 snapshot / doorbell / commands polling。</p></section>
+<section class="videoBox"><img id="snap" style="display:none"><div id="empty">等待 ESP32 上傳照片<br><span class="small">POST /api/rt7/camera/snapshot</span></div></section>
+<div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div>
+<section class="card"><div>狀態：<span class="pill" id="status">ready</span></div><div>回答：<b id="answer">雲端待機中</b></div></section>
+<section class="card rowbtn"><button class="btn green" onclick="refreshSnap()">更新影像</button><button class="btn" onclick="askVision()">問鏡頭</button><button class="btn red" onclick="openDoor()">開門</button><button class="btn gray" onclick="testDoorbell()">測試門鈴</button><button class="btn" onclick="enableAudio()">啟用提示音</button><button class="btn gray" onclick="loadState(true)">更新狀態</button></section>
+<section class="card" style="text-align:center"><button class="mic" onclick="voiceText()">🎙️</button><p class="small">第一版先支援文字測試；手機錄音可 POST /api/rt7/phase9j/voice_vision。</p></section>
+<pre class="status" id="log">ready</pre>
+</div></div>
+<script>
+let DEVICES=[], audioCtx=null, audioOK=false, lastCount=null; const $=id=>document.getElementById(id);
+function log(o){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+(typeof o==='string'?o:JSON.stringify(o,null,2))+'\n'+$('log').textContent}
+async function j(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{}));const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
+function beep(f,d,t){if(!audioCtx)return;const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.frequency.value=f;g.gain.value=.18;o.connect(g);g.connect(audioCtx.destination);o.start(audioCtx.currentTime+t);o.stop(audioCtx.currentTime+t+d)}
+function ding(){if(audioOK){beep(880,.18,0);beep(660,.22,.26)}}
+async function enableAudio(){audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();await audioCtx.resume();audioOK=true;$('answer').textContent='提示音已啟用';ding()}
+async function loadDevices(){const d=await j('/api/rt7/devices/list');DEVICES=d.devices||[];$('deviceSel').innerHTML=(DEVICES.length?DEVICES:[{id:'#1',name:'RT7'}]).map(x=>'<option value="'+(x.id||'')+'">'+(x.id||'')+' / '+(x.name||'')+(x.ip?' / '+x.ip:'')+'</option>').join('')}
+async function refreshSnap(){const s=await j('/api/rt7/camera/state');log(s); if(s.latest_url){$('snap').src=s.latest_url+'?_='+Date.now();$('snap').style.display='block';$('empty').style.display='none';$('status').textContent='snapshot';}else{$('answer').textContent='尚無雲端照片'}}
+async function loadState(manual){const s=await j('/api/rt7/doorbell/state');log(s); const c=Number(s.state?.count||0), last=s.state?.last||{}; if(lastCount===null)lastCount=c; else if(c>lastCount){$('doorAlert').style.display='block';$('answer').textContent='收到門鈴';ding();setTimeout(()=>$('doorAlert').style.display='none',5000)} lastCount=c; if(manual&&last.message)$('answer').textContent=last.message;}
+async function testDoorbell(){log(await j('/api/test/doorbell'));loadState(false)}
+async function openDoor(){const r=await j('/api/rt7/phase9l/door/open?device_id='+encodeURIComponent($('deviceSel').value));log(r);$('answer').textContent=r.note||r.message||'開門命令已送出'}
+async function askVision(){const q=prompt('要問鏡頭什麼？','門口目前看到什麼？')||''; if(!q)return; $('answer').textContent='Vision 分析中...'; const r=await j('/api/rt7/phase9i/vision_qa?q='+encodeURIComponent(q));log(r);$('answer').textContent=r.answer||r.error||'無回應'}
+async function voiceText(){const t=prompt('輸入要測試的語音文字','請問鏡頭看到什麼？')||''; if(!t)return; const r=await j('/api/rt7/phase9j/voice_vision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t,mode:'auto'})});log(r);$('answer').textContent=r.answer||r.error||'無回應'}
+function ws(){try{const w=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');w.onmessage=e=>{try{const m=JSON.parse(e.data); if(['doorbell','snapshot','command'].includes(m.type)){log(m); if(m.type==='doorbell'){loadState(false);ding()} if(m.type==='snapshot')refreshSnap();}}catch(_){}};w.onclose=()=>setTimeout(ws,3000)}catch(e){}}
+loadDevices().then(()=>{refreshSnap();loadState(true)});setInterval(()=>loadState(false),2500);ws();
+</script>`));
+});
+app.get('/rt7_independent_full_video_intercom', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_nodered'));
+app.get('/rt7_face_guard', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_nodered'));
+app.get('/rt7_admin_home', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
+app.get('/rt7_device_manager', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
+app.get('/rt7_log_viewer', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
+
+
+// -----------------------------------------------------------------------------
+// V4.1 Maintenance Mapping API
+// Purpose: keep Railway Node.js and original Node-RED flow comparable.
+// -----------------------------------------------------------------------------
+const NODE_RED_MAPPING = [
+  { group:'00 Core', status:'done', nodered:'GET /rt7_independent_full_video_intercom', railway:'GET /rt7_cloud_phase10_no_nodered', test:'Open phone page; verify original UI style and buttons' },
+  { group:'01 Doorbell', status:'done', nodered:'POST /api/rt7/phase9n/doorbell/event, POST /api/rt7/doorbell/ring, GET /api/rt7/doorbell/state', railway:'same API names retained', test:'ESP32 POST -> phone UI shows event and dingdong plays' },
+  { group:'02 Event Log', status:'done', nodered:'GET /api/rt7/events/latest, GET /api/rt7/events/clear, /rt7_event_log', railway:'same API names retained; stored in data/rt7_event_log.jsonl', test:'GET latest, clear, then trigger doorbell' },
+  { group:'03 Device Manager', status:'done', nodered:'GET /api/rt7/device/state, POST /api/rt7/device/set, /rt7_device_manager', railway:'same API names retained; stored in data/rt7_devices.json', test:'save device IP/name and reload admin page' },
+  { group:'04 Snapshot Bridge', status:'done-v4.2', nodered:'ESP32 /api/camera/snapshot via Node-RED local proxy', railway:'POST /api/rt7/camera/snapshot; POST /api/rt7/camera/snapshot_json; GET /api/rt7/camera/latest.jpg; GET /api/rt7/camera/state; GET /rt7_snapshot_bridge_test', test:'ESP32 actively uploads JPEG/base64; phone page refreshes latest image; clear endpoint works' },
+  { group:'05 Vision QA', status:'partial', nodered:'GET /api/rt7/phase9i/vision_qa', railway:'GET /api/rt7/phase9i/vision_qa uses latest uploaded snapshot + OpenAI if OPENAI_API_KEY exists', test:'Upload snapshot, ask question, verify answer' },
+  { group:'06 Voice Vision Router', status:'partial', nodered:'POST /api/rt7/phase9j/voice_vision', railway:'POST /api/rt7/phase9j/voice_vision text-mode scaffold; audio upload reserved', test:'POST {text:"請問鏡頭看到什麼"}' },
+  { group:'07 Door Open Queue', status:'partial', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
+  { group:'08 Phase6C3 Plugin', status:'stub', nodered:'phase6c3_plugin ping/plugins/motion/face endpoints', railway:'compatible endpoints kept; advanced face cache/enroll needs next incremental port', test:'GET ping/plugins/state; do not enable full face match yet' },
+  { group:'09 Intercom Audio', status:'stub', nodered:'/api/ind_full/audio/* local proxy to ESP32 audio endpoints', railway:'/api/ind_full/audio/* returns compatibility JSON / queue scaffold', test:'Call begin/end endpoints; later add WebSocket PCM bridge one step at a time' }
+];
+app.get('/api/rt7/mapping', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, mapping:NODE_RED_MAPPING }));
+app.get('/api/rt7/mapping/status', (req,res)=>{
+  const count = NODE_RED_MAPPING.reduce((a,x)=>{ a[x.status]=(a[x.status]||0)+1; return a; },{});
+  res.json({ ok:true, version:SERVER_VERSION, count, next_recommended:'V4.3 Mobile UI display latest Snapshot only after V4.2 upload test passes' });
+});
+app.get('/rt7_mapping', (req,res)=>{
+  const rows = NODE_RED_MAPPING.map(x=>`<tr><td>${x.group}</td><td><b>${x.status}</b></td><td><code>${x.nodered}</code></td><td><code>${x.railway}</code></td><td>${x.test}</td></tr>`).join('');
+  res.type('html').send(htmlShell('RT7 Node-RED / Railway Mapping', `${baseCss}<div class="wrap"><h1>RT7 Node-RED / Railway API 對照表</h1><p>版本：${SERVER_VERSION}</p><p><a class="btn" href="/rt7_cloud_phase10_no_nodered">回手機頁</a> <a class="btn gray" href="/api/rt7/mapping">JSON</a></p><table border="1" cellspacing="0" cellpadding="8" style="width:100%;border-collapse:collapse;background:#fff"><thead><tr><th>功能</th><th>狀態</th><th>Node-RED 原始路由</th><th>Railway 對應 API</th><th>測試</th></tr></thead><tbody>${rows}</tbody></table></div>`));
+});
+
 
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso() }));
