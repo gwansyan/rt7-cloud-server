@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_3_ORIGINAL_UI_SNAPSHOT';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_3A_ORIGINAL_UI_SNAPSHOT_DOORBELL_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -176,8 +176,15 @@ function handleDoorbell(req, res, endpointName) {
 }
 
 app.post('/api/rt7/phase9n/doorbell/event', (req, res) => handleDoorbell(req, res, 'legacy_phase9n'));
+app.get('/api/rt7/phase9n/doorbell/event', (req, res) => handleDoorbell(req, res, 'legacy_phase9n_get'));
 app.post('/api/rt7/doorbell/ring', (req, res) => handleDoorbell(req, res, 'legacy_ring'));
+app.get('/api/rt7/doorbell/ring', (req, res) => handleDoorbell(req, res, 'legacy_ring_get'));
+app.post('/api/rt7/doorbell', (req, res) => handleDoorbell(req, res, 'compat_rt7_doorbell'));
+app.get('/api/rt7/doorbell', (req, res) => handleDoorbell(req, res, 'compat_rt7_doorbell_get'));
+app.post('/api/rt7/doorbell/event', (req, res) => handleDoorbell(req, res, 'compat_rt7_event'));
+app.get('/api/rt7/doorbell/event', (req, res) => handleDoorbell(req, res, 'compat_rt7_event_get'));
 app.post('/api/doorbell', (req, res) => handleDoorbell(req, res, 'cloud_v3'));
+app.get('/api/doorbell', (req, res) => handleDoorbell(req, res, 'cloud_v3_get'));
 app.get('/api/rt7/doorbell/state', (req, res) => res.json({ ok: true, state: doorbellState }));
 app.get('/api/doorbell/state', (req, res) => res.json({ ok: true, state: doorbellState }));
 
@@ -500,6 +507,26 @@ app.get('/api/rt7/phase6c3_plugin/camera/state', (req,res)=>res.json({ ok:true, 
 app.post('/api/rt7/phase6a_fix2/motion/event', (req,res)=>{ const ev=appendEvent(Object.assign({ type:'motion', message:'ESP32 motion event' }, req.body || {})); broadcast('motion', ev); res.json({ok:true,event:ev}); });
 app.get('/api/rt7/phase6c3_plugin/alarm/confirm', (req,res)=>{ const ev=appendEvent({type:'alarm_confirm', message:'alarm confirmed from cloud UI'}); broadcast('alarm_confirm', ev); res.json({ok:true,event:ev}); });
 
+
+function getSnapshotMeta_() {
+  ensureDataDir();
+  if (cloudState.last_snapshot) return cloudState.last_snapshot;
+  if (fs.existsSync(SNAPSHOT_FILE)) {
+    const st = fs.statSync(SNAPSHOT_FILE);
+    cloudState.last_snapshot = {
+      ok: true,
+      bytes: st.size,
+      time: st.mtime.toISOString(),
+      source: 'restored_from_file',
+      device_id: '#1',
+      ip: '',
+      url: '/api/rt7/camera/latest.jpg'
+    };
+    return cloudState.last_snapshot;
+  }
+  return null;
+}
+
 // ESP32 actively uploads snapshots here. Supports raw image/jpeg or JSON {image_b64/jpeg_b64}.
 app.post('/api/rt7/camera/snapshot', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), (req,res)=>{
   ensureDataDir();
@@ -523,7 +550,7 @@ app.post('/api/rt7/camera/snapshot_json', (req,res)=>{
   res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
 });
 app.get('/api/rt7/camera/latest.jpg', (req,res)=>{ ensureDataDir(); if (!fs.existsSync(SNAPSHOT_FILE)) return res.status(404).json({ok:false,error:'NO_SNAPSHOT'}); res.type('image/jpeg').send(fs.readFileSync(SNAPSHOT_FILE)); });
-app.get('/api/rt7/camera/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, snapshot:cloudState.last_snapshot, latest_url: cloudState.last_snapshot ? '/api/rt7/camera/latest.jpg' : '', test_page:'/rt7_snapshot_bridge_test' }));
+app.get('/api/rt7/camera/state', (req,res)=>{ const snap=getSnapshotMeta_(); res.json({ ok:true, version:SERVER_VERSION, snapshot:snap, latest_url: snap ? '/api/rt7/camera/latest.jpg' : '', test_page:'/rt7_snapshot_bridge_test' }); });
 app.post('/api/rt7/camera/clear', (req,res)=>{ ensureDataDir(); if (fs.existsSync(SNAPSHOT_FILE)) fs.unlinkSync(SNAPSHOT_FILE); cloudState.last_snapshot=null; const ev=appendEvent({type:'snapshot_clear', message:'Snapshot cleared'}); broadcast('snapshot_clear', ev); res.json({ok:true, event:ev}); });
 
 // Phase8C motion configuration: stored in cloud, ESP32 may poll it later.
