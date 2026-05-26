@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V3_ORIGINAL_UI_DOORBELL';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V3_ORIGINAL_UI_DOORBELL_FIX53_KEEP_ORIGINAL_UI';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -319,10 +319,9 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <section class="video"><div id="emptyVideo" class="emptyVideo">雲端門鈴模式<br><span class="small">影像串流下一版雲端化</span></div><img id="stream" alt=""><div class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="unlockAudio()" title="啟用提示音">🎙️</button></section>
-<section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="testDoorbell()">＋</div>測試</div><div class="act"><div class="circle" onclick="unlockAudio()">🎙️</div>AI語音助理</div></section>
+<section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="registerName()">＋</div>註冊</div><div class="act"><div class="circle" onclick="unlockAudio()">🎙️</div>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
-<section class="panel"><div class="grid"><button class="btn green" onclick="unlockAudio()">啟用提示音</button><button class="btn blue" onclick="playDingDong()">測試提示音</button><button class="btn gray" onclick="loadState(true)">立即讀取</button><button class="btn red" onclick="resetLocal()">本機重設顯示</button></div><div class="hint">手機瀏覽器通常需要先按一次「啟用提示音」或麥克風圖示，之後門鈴事件才可自動播放。</div></section>
-<pre id="json" class="json">ready</pre>
+<div id="json" style="display:none">ready</div>
 <script>
 const API_BASE = location.origin;
 let DEVICES=[]; let lastCount=null; let audioOK=false; let audioCtx=null; let currentDevice=null;
@@ -339,6 +338,7 @@ function playDingDong(){if(!audioCtx){setAnswer('請先啟用提示音');return;
 function showDoorbell(last, shouldSound){$('doorAlert').style.display='block';setDoor('有人按門鈴 #' + (last.count||''));setAnswer('收到雲端門鈴訊息'); if(shouldSound&&audioOK) playDingDong(); setTimeout(()=>{$('doorAlert').style.display='none'},5000)}
 async function loadState(manual=false){try{const s=await j('/api/rt7/doorbell/state');setJson(s);const st=s.state||{};const c=Number(st.count||0);const last=st.last||{};if(last.time){setDoor('最後：'+new Date(last.time).toLocaleTimeString());} if(lastCount===null){lastCount=c;} else if(c>lastCount){showDoorbell(last,true);lastCount=c;} if(manual&&last.message){showDoorbell(last,false);} lastCount=c;}catch(e){setAnswer('讀取失敗 '+e.message)}}
 async function testDoorbell(){const d=selectedDevice();const s=await j('/api/test/doorbell?ip='+encodeURIComponent(d.ip||'web')+'&device='+encodeURIComponent(d.id||'#1'));setJson(s);await loadState(true)}
+function registerName(){const name=($('regName')&&$('regName').value)||'gwansyan';setAnswer('註冊名稱：'+name+'（雲端版先保留原始 UI）');}
 function resetLocal(){lastCount=null;$('doorAlert').style.display='none';setDoor('本機顯示已重設');setAnswer('雲端門鈴待機中')}
 function enableAi(){setAnswer('AI 已啟用（雲端 UI）')} function disableAi(){setAnswer('AI 已關閉（雲端 UI）')} function manualDoor(){setDoor('開門：此版尚未連接雲端開門 API')}
 function startVideo(){const d=selectedDevice();if(!d.ip){setAnswer('此設備沒有 IP，影像串流下一版雲端化');return;}$('emptyVideo').style.display='none';$('stream').src='http://'+d.ip+'/api/camera/stream?_='+Date.now();setAnswer('嘗試連線區網影像：'+d.ip)}
