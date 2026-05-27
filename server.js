@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7E_WS_UPLOAD_NATIVE_MJPEG_7FPS';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7F_WS_UPLOAD_NATIVE_MJPEG_10FPS_TEST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -537,7 +537,7 @@ async function startVideo(){
     img.onload=()=>{ try{$('emptyVideo').style.display='none';}catch(e){} };
     img.src='/api/rt7/camera/stream.mjpg?_native='+Date.now();
   }
-  setAnswer('WS Upload + Native MJPEG 7FPS 串流已啟動：ESP32 用 WebSocket 上傳，手機用瀏覽器原生 MJPEG 解碼');
+  setAnswer('WS Upload + Native MJPEG 10FPS_TEST 串流已啟動：ESP32 用 WebSocket 上傳，手機用瀏覽器原生 MJPEG 解碼');
   startViewerHeartbeat();
 }
 async function stopVideo(){
@@ -589,7 +589,7 @@ const STREAM_FRAME_FILE = path.join(DATA_DIR, 'rt7_latest_stream_frame.jpg');
 let latestStreamFrame = null;
 let liveStreamState = { ok:true, enabled:true, seq:0, bytes:0, time:null, device_id:'', ip:'', clients:0, ws_viewers:0, ws_uploaders:0, transport:'ws_frame', fps_hint:'5-10fps ws / 3-5fps http fallback' };
 const RT7_VIEWER_ACTIVE_TTL_MS = 15000;
-const RT7_STREAM_FAST_MS = 120;
+const RT7_STREAM_FAST_MS = 100;
 const RT7_STREAM_IDLE_MS = 1000;
 const streamViewers = new Map();
 let cloudState = {
@@ -1026,7 +1026,7 @@ const NODE_RED_MAPPING = [
   { group:'03 Device Manager', status:'done', nodered:'GET /api/rt7/device/state, POST /api/rt7/device/set, /rt7_device_manager', railway:'same API names retained; stored in data/rt7_devices.json', test:'save device IP/name and reload admin page' },
   { group:'04 Snapshot Bridge', status:'done-v4.2', nodered:'ESP32 /api/camera/snapshot via Node-RED local proxy', railway:'POST /api/rt7/camera/snapshot; POST /api/rt7/camera/snapshot_json; GET /api/rt7/camera/latest.jpg; GET /api/rt7/camera/state; GET /rt7_snapshot_bridge_test', test:'ESP32 actively uploads JPEG/base64; phone page refreshes latest image; clear endpoint works' },
   { group:'04B Original UI Snapshot', status:'done-v4.3', nodered:'Original phone UI camera block / Node-RED image refresh', railway:'GET /rt7_cloud_original_ui_doorbell now displays /api/rt7/camera/latest.jpg and auto-refreshes on snapshot WebSocket event', test:'Open original UI after ESP32 snapshot POST; verify image appears in black video area' },
-  { group:'04C Live Stream Bridge', status:'done-v4.7e-ws-upload-native-mjpeg-7fps', nodered:'Original Node-RED MJPEG / live camera view', railway:'ESP32 WebSocket binary JPEG upload to /ws; HTTP POST /api/rt7/camera/frame fallback; GET /api/rt7/camera/stream.mjpg native browser MJPEG output; /rt7_cloud_original_ui_doorbell uses native MJPEG live stream', test:'ESP32 targets about 7 FPS via WebSocket upload; phone UI uses native MJPEG for Android Chrome compatibility; Snapshot remains fallback' },
+  { group:'04C Live Stream Bridge', status:'done-v4.7e-ws-upload-native-mjpeg-7fps', nodered:'Original Node-RED MJPEG / live camera view', railway:'ESP32 WebSocket binary JPEG upload to /ws; HTTP POST /api/rt7/camera/frame fallback; GET /api/rt7/camera/stream.mjpg native browser MJPEG output; /rt7_cloud_original_ui_doorbell uses native MJPEG live stream', test:'ESP32 targets about 10 FPS via WebSocket upload; phone UI uses native MJPEG for Android Chrome compatibility; Snapshot remains fallback' },
   { group:'05 Vision QA', status:'partial', nodered:'GET /api/rt7/phase9i/vision_qa', railway:'GET /api/rt7/phase9i/vision_qa uses latest uploaded snapshot + OpenAI if OPENAI_API_KEY exists', test:'Upload snapshot, ask question, verify answer' },
   { group:'06 Voice Vision Router', status:'partial', nodered:'POST /api/rt7/phase9j/voice_vision', railway:'POST /api/rt7/phase9j/voice_vision text-mode scaffold; audio upload reserved', test:'POST {text:"請問鏡頭看到什麼"}' },
   { group:'07 Door Open Queue', status:'done-v4.4', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
