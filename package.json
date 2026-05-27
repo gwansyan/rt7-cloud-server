@@ -1,7 +1,6 @@
 {
-  "name": "rt7-cloud-server-v4-8f7-internal-error-fix2",
-  "version": "4.8.7",
-  "description": "RT7 V4.8F7 auto LAN/cloud stream, fixes Internal Server Error and restores runtime state.",
+  "name": "rt7-cloud-server",
+  "version": "4.8.8",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
