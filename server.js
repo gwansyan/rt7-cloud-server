@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F1_AUTO_LAN_CLOUD_STREAM_NO_AUDIO_MODAL_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F2_AUTO_LAN_CLOUD_STREAM_DEVICE_LOAD_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -359,7 +359,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div style="width:34px"></div></header>
 <div id="audioOverlay" class="audioOverlay" style="display:none!important;pointer-events:none!important;"></div>
-<div class="deviceBar"><select id="deviceSel"><option value="">讀取設備中...</option></select></div>
+<div class="deviceBar"><select id="deviceSel"><option value="#1">#1 / RT7 ESP32-S3-CAM / 192.168.0.179</option></select></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">等待影像串流<br><span class="small">自動判斷：內網直連 / Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div id="streamModeBadge" class="badge live">AUTO</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="aiVoiceAssistant()" title="AI語音助理">🎙️</button></section>
@@ -368,15 +368,43 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <div id="json" style="display:none">ready</div>
 <script>
 const API_BASE = location.origin;
-let DEVICES=[]; let lastCount=null; let audioOK=false; let audioCtx=null; let currentDevice=null; let lastSnapshotTime='';
+let DEVICES=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:'192.168.0.179'}]; let lastCount=null; let audioOK=false; let audioCtx=null; let currentDevice=DEVICES[0]; let lastSnapshotTime='';
 let audioUnlockedOnce=false;
 function $(id){return document.getElementById(id)}
 function setJson(o){$('json').textContent=typeof o==='string'?o:JSON.stringify(o,null,2)}
 function setDoor(msg){$('doorText').textContent=msg||''}
 function setAnswer(msg){$('answerText').textContent=msg||''}
-function selectedDevice(){return DEVICES.find(d=>d.id===$('deviceSel').value)||DEVICES[0]||{id:'#1',name:'RT7 ESP32-S3-CAM',ip:''}}
+function selectedDevice(){
+  const sel=$('deviceSel');
+  const val=sel ? (sel.value || '#1') : '#1';
+  return DEVICES.find(d=>String(d.id)===String(val)) || DEVICES[0] || {id:'#1',name:'RT7 ESP32-S3-CAM',ip:'192.168.0.179'};
+}
 async function j(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{}));const t=await r.text();try{return JSON.parse(t)}catch(e){return {ok:r.ok,raw:t}}}
-async function loadDevices(){try{let d=await j('/api/devices');DEVICES=d.devices||[];if(!DEVICES.length)DEVICES=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:''}];$('deviceSel').innerHTML=DEVICES.map(function(x){return '<option value="'+String(x.id||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')+'">'+(x.id||'')+' / '+(x.name||'')+(x.ip?' / '+x.ip:'')+'</option>';}).join('');currentDevice=selectedDevice();}catch(e){$('deviceSel').innerHTML='<option>#1 / RT7 ESP32-S3-CAM</option>';}}
+function withTimeout_(p, ms){return Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms||900))]);}
+async function loadDevices(){
+  // V4.8F2: 先給預設設備，避免手機頁停在「讀取設備中」。
+  const fallback=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:'192.168.0.179'}];
+  function escAttr(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+  function render(list){
+    DEVICES=(list&&list.length)?list:fallback;
+    if(!DEVICES[0].ip) DEVICES[0].ip='192.168.0.179';
+    const sel=$('deviceSel');
+    if(sel){
+      sel.innerHTML=DEVICES.map(function(x){return '<option value="'+escAttr(x.id||'#1')+'">'+(x.id||'#1')+' / '+(x.name||'RT7 ESP32-S3-CAM')+(x.ip?' / '+x.ip:'')+'</option>';}).join('');
+    }
+    currentDevice=selectedDevice();
+  }
+  render(fallback);
+  try{
+    const d=await withTimeout_(j('/api/devices'),900);
+    const list=(d&&d.devices&&d.devices.length)?d.devices:fallback;
+    render(list);
+    setAnswer('設備已就緒，可按開始影像');
+  }catch(e){
+    render(fallback);
+    setAnswer('使用預設設備 192.168.0.179，可按開始影像');
+  }
+}
 function beep(freq,dur,delay){if(!audioCtx)return;const o=audioCtx.createOscillator();const g=audioCtx.createGain();o.type='sine';o.frequency.value=freq;g.gain.setValueAtTime(0.0001,audioCtx.currentTime+delay);g.gain.exponentialRampToValueAtTime(0.38,audioCtx.currentTime+delay+0.02);g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+delay+dur);o.connect(g);g.connect(audioCtx.destination);o.start(audioCtx.currentTime+delay);o.stop(audioCtx.currentTime+delay+dur+0.05)}
 function setAudioUi(ok){
   if($('unlockBtn')){$('unlockBtn').style.borderColor=ok?'#22c55e':'#cbd5e1';$('unlockBtn').style.background=ok?'#ecfdf5':'#eef2f7'}
@@ -621,7 +649,7 @@ document.addEventListener('touchstart', function(){ try{ unlockAudio(true); }cat
 
 function wsConnect(){try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='doorbell'&&m.payload){loadState(false);showDoorbell(m.payload,true);refreshSnapshot(false)} if(m.type==='snapshot'){refreshSnapshot(true)}}catch(_){}};ws.onclose=()=>setTimeout(wsConnect,3000)}catch(e){}}
 $('deviceSel').addEventListener('change',()=>{currentDevice=selectedDevice();setAnswer('已切換 '+(currentDevice.name||currentDevice.id));});
-setAudioUi(false); loadDevices().then(()=>{loadState(true); if(wantedVideo) startVideo(); else viewerPing('hidden'); refreshSnapshot(false)}); startViewerHeartbeat(); setInterval(()=>{loadState(false);refreshSnapshot(false)},3500); wsConnect();
+setAudioUi(false); loadDevices().then(()=>{loadState(true); viewerPing('hidden'); refreshSnapshot(false); setAnswer('設備已就緒，請按開始影像')}); startViewerHeartbeat(); setInterval(()=>{loadState(false);refreshSnapshot(false)},3500); wsConnect();
 </script></body></html>`);
 });
 
