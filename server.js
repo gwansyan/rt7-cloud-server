@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_3D_FORCE_AUDIO_UNLOCK';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_4_DOOR_OPEN_QUEUE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -400,7 +400,7 @@ async function loadState(manual=false){try{const s=await j('/api/rt7/doorbell/st
 async function testDoorbell(){const d=selectedDevice();const s=await j('/api/test/doorbell?ip='+encodeURIComponent(d.ip||'web')+'&device='+encodeURIComponent(d.id||'#1'));setJson(s);await loadState(true)}
 function registerName(){const name=($('regName')&&$('regName').value)||'gwansyan';setAnswer('註冊名稱：'+name+'（雲端版先保留原始 UI）');}
 function resetLocal(){lastCount=null;$('doorAlert').style.display='none';setDoor('本機顯示已重設');setAnswer('雲端門鈴待機中')}
-function enableAi(){setAnswer('AI 已啟用（雲端 UI）')} function disableAi(){setAnswer('AI 已關閉（雲端 UI）')} function manualDoor(){setDoor('開門：此版尚未連接雲端開門 API')}
+function enableAi(){setAnswer('AI 已啟用（雲端 UI）')} function disableAi(){setAnswer('AI 已關閉（雲端 UI）')} async function manualDoor(){const d=selectedDevice(); const r=await j('/api/rt7/door/open?device_id='+encodeURIComponent(d.id||'#1')); setJson(r); setDoor('開門命令已送出'); setAnswer('等待 ESP32 輪詢開門 Queue');}
 async function refreshSnapshot(manual=false){
   try{
     const s=await j('/api/rt7/camera/state');
@@ -649,18 +649,44 @@ app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
   } catch(e) { res.status(200).json({ok:false, version:SERVER_VERSION, error:String(e.message||e), answer:'雲端語音/影像 AI 處理失敗。'}); }
 });
 
-// Door open: compatible endpoint. If ESP32 is not reachable, records a cloud command for ESP32 polling.
+// Door open queue: phone/Railway queues command; ESP32 actively polls and ACKs.
 let pendingCommands = [];
-function queueCommand(cmd) { const c=Object.assign({id:'cmd_'+Date.now(), time:nowIso()}, cmd); pendingCommands.push(c); pendingCommands=pendingCommands.slice(-50); broadcast('command', c); appendEvent({type:'command', command:c.command, message:c.message||c.command}); return c; }
-app.get('/api/rt7/phase9l/door/open', async (req,res)=>{
-  const dev=getCurrentDevice(req);
-  if (isReachableDeviceUrl(dev.base_url)) return proxyToEsp(req,res,'/api/door/open','GET');
-  const cmd=queueCommand({ command:'door_open', device_id:dev.id, message:'雲端開門命令已排入佇列，等待 ESP32 輪詢' });
+let doorOpenQueueState = { ok:true, queued:0, acked:0, last:null, last_ack:null };
+function queueCommand(cmd) {
+  const c = Object.assign({ id:'cmd_'+Date.now()+'_'+Math.floor(Math.random()*1000), time:nowIso(), status:'pending' }, cmd);
+  pendingCommands.push(c);
+  pendingCommands = pendingCommands.slice(-50);
+  doorOpenQueueState.queued += 1;
+  doorOpenQueueState.last = c;
+  broadcast('command', c);
+  appendEvent({ type:'command', command:c.command, id:c.id, device_id:c.device_id, message:c.message||c.command });
+  return c;
+}
+function enqueueDoorOpen(req, res, endpointName) {
+  const dev = getCurrentDevice(req);
+  const deviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
+  const cmd = queueCommand({
+    command:'door_open',
+    action:'door_open',
+    device_id:deviceId,
+    endpoint:endpointName || 'door_open_queue',
+    pulse_ms:Number(req.query.pulse_ms || 800),
+    message:'雲端開門命令已排入佇列，等待 ESP32 輪詢'
+  });
   cloudState.last_door_open = cmd;
-  res.json({ ok:true, mode:'cloud_command_queue', command:cmd, note:'ESP32 可輪詢 /api/rt7/device/commands?device_id=#1 取得命令' });
-});
-app.get('/api/rt7/device/commands', (req,res)=>{ const id=safeString(req.query.device_id||req.query.device||''); const list=id?pendingCommands.filter(c=>!c.device_id||c.device_id===id):pendingCommands; res.json({ok:true, commands:list}); });
-app.post('/api/rt7/device/commands/ack', (req,res)=>{ const id=safeString(req.body?.id||req.query.id); pendingCommands=pendingCommands.filter(c=>c.id!==id); res.json({ok:true, pending:pendingCommands.length}); });
+  res.json({ ok:true, mode:'cloud_command_queue', command:cmd, state:doorOpenQueueState, note:'ESP32 輪詢 /api/rt7/device/commands/next?device_id='+deviceId+' 後執行開門並 ACK' });
+}
+app.get('/api/rt7/phase9l/door/open', (req,res)=>enqueueDoorOpen(req,res,'phase9l'));
+app.post('/api/rt7/phase9l/door/open', (req,res)=>enqueueDoorOpen(req,res,'phase9l_post'));
+app.get('/api/rt7/door/open', (req,res)=>enqueueDoorOpen(req,res,'rt7_door_open'));
+app.post('/api/rt7/door/open', (req,res)=>enqueueDoorOpen(req,res,'rt7_door_open_post'));
+app.get('/api/door/open', (req,res)=>enqueueDoorOpen(req,res,'compat_api_door_open'));
+app.get('/api/rt7/door/open/state', (req,res)=>res.json({ ok:true, state:doorOpenQueueState, pending:pendingCommands }));
+app.get('/api/rt7/device/commands', (req,res)=>{ const id=safeString(req.query.device_id||req.query.device||''); const list=id?pendingCommands.filter(c=>!c.device_id||c.device_id===id):pendingCommands; res.json({ok:true, commands:list, count:list.length, state:doorOpenQueueState}); });
+app.get('/api/rt7/device/commands/next', (req,res)=>{ const id=safeString(req.query.device_id||req.query.device||''); const cmd=pendingCommands.find(c=>!id || !c.device_id || c.device_id===id) || null; res.json({ok:true, command:cmd, has_command:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); });
+function ackCommand(req,res){ const id=safeString(req.body?.id||req.query.id); const status=safeString(req.body?.status||req.query.status||'done'); const idx=pendingCommands.findIndex(c=>c.id===id); let cmd=null; if(idx>=0){cmd=pendingCommands[idx]; pendingCommands.splice(idx,1);} doorOpenQueueState.acked+=1; doorOpenQueueState.last_ack={id, status, time:nowIso(), found:!!cmd, command:cmd}; appendEvent({type:'command_ack', id, status, found:!!cmd}); res.json({ok:true, id, status, found:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); }
+app.get('/api/rt7/device/commands/ack', ackCommand);
+app.post('/api/rt7/device/commands/ack', ackCommand);
 
 app.get('/rt7_cloud_phase10_no_nodered', (req,res)=>{
   res.type('html').send(htmlShell('RT7 Phase10 Cloud No Node-RED', `${baseCss}
@@ -714,7 +740,7 @@ const NODE_RED_MAPPING = [
   { group:'04B Original UI Snapshot', status:'done-v4.3', nodered:'Original phone UI camera block / Node-RED image refresh', railway:'GET /rt7_cloud_original_ui_doorbell now displays /api/rt7/camera/latest.jpg and auto-refreshes on snapshot WebSocket event', test:'Open original UI after ESP32 snapshot POST; verify image appears in black video area' },
   { group:'05 Vision QA', status:'partial', nodered:'GET /api/rt7/phase9i/vision_qa', railway:'GET /api/rt7/phase9i/vision_qa uses latest uploaded snapshot + OpenAI if OPENAI_API_KEY exists', test:'Upload snapshot, ask question, verify answer' },
   { group:'06 Voice Vision Router', status:'partial', nodered:'POST /api/rt7/phase9j/voice_vision', railway:'POST /api/rt7/phase9j/voice_vision text-mode scaffold; audio upload reserved', test:'POST {text:"請問鏡頭看到什麼"}' },
-  { group:'07 Door Open Queue', status:'partial', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
+  { group:'07 Door Open Queue', status:'done-v4.4', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
   { group:'08 Phase6C3 Plugin', status:'stub', nodered:'phase6c3_plugin ping/plugins/motion/face endpoints', railway:'compatible endpoints kept; advanced face cache/enroll needs next incremental port', test:'GET ping/plugins/state; do not enable full face match yet' },
   { group:'09 Intercom Audio', status:'stub', nodered:'/api/ind_full/audio/* local proxy to ESP32 audio endpoints', railway:'/api/ind_full/audio/* returns compatibility JSON / queue scaffold', test:'Call begin/end endpoints; later add WebSocket PCM bridge one step at a time' }
 ];
