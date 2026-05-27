@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F8_RESTORE_FUNCTIONS_AUTO_STREAM';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F9_RESTORE_DINGDONG_NO_OVERLAY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -459,24 +459,30 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><div class="leftBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用 AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉 AI</button></div><div class="rightBtns"><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></div></section>
+<section class="videoBtns"><div class="leftBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用 AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉 AI</button></div><div class="rightBtns"><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button><button id="btnAudio" class="vbtn vdark" type="button" style="background:#f59e0b">啟用提示音</button></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講結束</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
-<div class="debug" id="debug">V4.8F8 RESTORE_FUNCTIONS_AUTO_STREAM / no overlay / ip=${ip}</div>
+<div class="debug" id="debug">V4.8F9 RESTORE_DINGDONG_NO_OVERLAY / no overlay / ip=${ip}</div>
 <script>
 (function(){
-  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var ai=${aiOn?'true':'false'}; var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=document.getElementById('debug');
+  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var ai=${aiOn?'true':'false'}; var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=document.getElementById('debug'); var audioCtx=null; var audioOK=false; var audioTried=false;
   function setAnswer(t){ if(answer) answer.textContent=t; }
-  function setDebug(t){ if(debug) debug.textContent='V4.8F8 / '+t; }
+  function setDebug(t){ if(debug) debug.textContent='V4.8F9 / '+t; }
+  function tone(freq, delay, dur){ if(!audioCtx) return; try{ setTimeout(function(){ var o=audioCtx.createOscillator(); var g=audioCtx.createGain(); o.frequency.value=freq; g.gain.value=0.22; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(function(){try{o.stop()}catch(e){}}, dur); }, delay); }catch(e){} }
+  function playDingdong(){ if(!audioOK) return; tone(880,0,180); tone(660,260,220); }
+  async function enableDoorbellAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume(); audioOK=true; audioTried=true; setAnswer('門鈴提示音已啟用'); setDebug('audio enabled'); playDingdong(); return true; }catch(e){ setAnswer('提示音啟用失敗：'+(e.message||e)); setDebug('audio failed'); return false; } }
+  function tryUnlockAudioSilently(){ if(audioOK || audioTried) return; audioTried=true; try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); audioCtx.resume().then(function(){ audioOK=true; setDebug('audio auto-unlocked by touch'); }).catch(function(){ audioTried=false; }); }catch(e){ audioTried=false; } }
+  document.addEventListener('touchend', tryUnlockAudioSilently, {once:true, passive:true});
+  document.addEventListener('click', tryUnlockAudioSilently, {once:true, passive:true});
   function stopVideo(){ if(img){ img.removeAttribute('src'); } if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='等待影像串流<span class="small">自動判斷：內網直連 / Railway 雲端</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
   function cloud(){ if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img) img.src='/api/rt7/camera/stream.mjpg?_='+Date.now(); setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
   function lan(){ if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img) img.src='http://'+ip+'/api/camera/stream?_='+Date.now(); setAnswer('內網直連影像模式'); setDebug('lan stream '+ip); }
   function startAuto(){ setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先測內網，失敗切雲端'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done)return; done=true; cloud(); },1800); probe.onload=function(){ if(done)return; done=true; clearTimeout(t); lan(); }; probe.onerror=function(){ if(done)return; done=true; clearTimeout(t); cloud(); }; probe.src='http://'+ip+'/api/camera/stream?_probe='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
-  bind('btnStart', startAuto); bind('btnStop', stopVideo);
+  bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio);
   bind('btnAiOn', function(){ ai=true; document.getElementById('aiBadge').textContent='AI_ENABLE'; document.getElementById('aiBadge').classList.add('aiOn'); document.getElementById('btnAiVoice').classList.add('aiActive'); setAnswer('AI 已啟用'); setDebug('ai on'); });
   bind('btnAiOff', function(){ ai=false; document.getElementById('aiBadge').textContent='IDLE'; document.getElementById('aiBadge').classList.remove('aiOn'); document.getElementById('btnAiVoice').classList.remove('aiActive'); setAnswer('AI 已關閉'); setDebug('ai off'); });
   bind('btnOpenDoor', async function(){ setAnswer('開門命令送出中...'); try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer((r.note||r.message||'開門命令已送出')); setDebug('door open '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); } });
@@ -484,7 +490,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   bind('btnVoice', askVision); bind('btnAiVoice', function(){ ai=true; document.getElementById('aiBadge').textContent='AI_ENABLE'; document.getElementById('aiBadge').classList.add('aiOn'); document.getElementById('btnAiVoice').classList.add('aiActive'); askVision(); });
   bind('btnEndTalk', function(){ setAnswer('對講已結束'); setDebug('talk end'); });
   var lastCount=null;
-  async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; var d=document.getElementById('doorText'); if(d)d.textContent='最後：'+new Date().toLocaleTimeString(); var a=document.getElementById('doorAlert'); if(a){a.style.display='block'; setTimeout(function(){a.style.display='none'},5000);} setAnswer('收到雲端門鈴訊息'); } } }catch(e){} setTimeout(pollDoor,2500); }
+  async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; var d=document.getElementById('doorText'); if(d)d.textContent='最後：'+new Date().toLocaleTimeString(); var a=document.getElementById('doorAlert'); if(a){a.style.display='block'; setTimeout(function(){a.style.display='none'},5000);} setAnswer('收到雲端門鈴訊息'); playDingdong(); } } }catch(e){} setTimeout(pollDoor,2500); }
   pollDoor();
   if(mode==='auto') setTimeout(startAuto, 300); else if(mode==='lan') lan(); else if(mode==='cloud') cloud(); else stopVideo();
 })();
