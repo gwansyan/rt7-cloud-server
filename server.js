@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F9_RESTORE_DINGDONG_NO_OVERLAY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F10_LAN_STREAM_KEEP_FUNCTIONS';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -442,7 +442,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V4.8F8</title>
+<title>RT7 Cloud Original UI V4.8F10</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -464,12 +464,12 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講結束</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
-<div class="debug" id="debug">V4.8F9 RESTORE_DINGDONG_NO_OVERLAY / no overlay / ip=${ip}</div>
+<div class="debug" id="debug">V4.8F10 LAN_STREAM_KEEP_FUNCTIONS / no overlay / ip=${ip}</div>
 <script>
 (function(){
   var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var ai=${aiOn?'true':'false'}; var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=document.getElementById('debug'); var audioCtx=null; var audioOK=false; var audioTried=false;
   function setAnswer(t){ if(answer) answer.textContent=t; }
-  function setDebug(t){ if(debug) debug.textContent='V4.8F9 / '+t; }
+  function setDebug(t){ if(debug) debug.textContent='V4.8F10 / '+t; }
   function tone(freq, delay, dur){ if(!audioCtx) return; try{ setTimeout(function(){ var o=audioCtx.createOscillator(); var g=audioCtx.createGain(); o.frequency.value=freq; g.gain.value=0.22; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(function(){try{o.stop()}catch(e){}}, dur); }, delay); }catch(e){} }
   function playDingdong(){ if(!audioOK) return; tone(880,0,180); tone(660,260,220); }
   async function enableDoorbellAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume(); audioOK=true; audioTried=true; setAnswer('門鈴提示音已啟用'); setDebug('audio enabled'); playDingdong(); return true; }catch(e){ setAnswer('提示音啟用失敗：'+(e.message||e)); setDebug('audio failed'); return false; } }
