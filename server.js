@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_6D_VIEWER_FOREGROUND_FPS';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7_WS_FRAME_STREAM';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -85,6 +85,14 @@ function broadcast(type, payload) {
   const msg = JSON.stringify({ ok: true, type, payload, time: nowIso() });
   for (const ws of wss.clients) {
     if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  }
+}
+
+function broadcastBinaryToViewers(buf) {
+  for (const ws of wss.clients) {
+    if (ws.readyState === WebSocket.OPEN && ws.rt7Role === 'viewer') {
+      try { ws.send(buf, { binary: true }); } catch (_) {}
+    }
   }
 }
 
@@ -443,22 +451,38 @@ let viewerPingTimer = null;
 async function viewerPing(state){
   try{return await j('/api/rt7/camera/viewer/ping?viewer_id='+encodeURIComponent(viewerId)+'&state='+encodeURIComponent(state)+'&device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(e){return null;}
 }
+let frameWs=null, lastFrameUrl=null, frameWsRetry=null;
+function closeFrameWs(){ try{ if(frameWs){ frameWs.onclose=null; frameWs.close(); } }catch(e){} frameWs=null; }
+function wsFrameConnect(){
+  closeFrameWs();
+  const img=$('stream');
+  frameWs = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  frameWs.binaryType='blob';
+  frameWs.onopen=()=>{ try{frameWs.send(JSON.stringify({role:'viewer', stream:'frame_view', viewer_id:viewerId}));}catch(e){} setAnswer('WebSocket 即時影像已連線'); };
+  frameWs.onmessage=(ev)=>{
+    if(typeof ev.data === 'string') return;
+    $('emptyVideo').style.display='none';
+    if(lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
+    lastFrameUrl=URL.createObjectURL(ev.data);
+    img.src=lastFrameUrl;
+  };
+  frameWs.onclose=()=>{ if(wantedVideo && document.visibilityState==='visible'){ clearTimeout(frameWsRetry); frameWsRetry=setTimeout(wsFrameConnect,1200); } };
+  frameWs.onerror=()=>{ try{frameWs.close();}catch(e){} };
+}
 async function startVideo(){
   wantedVideo = true;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','1');
   await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
   $('emptyVideo').style.display='none';
-  const img=$('stream');
-  img.onerror=function(){ if(wantedVideo && document.visibilityState==='visible'){ setTimeout(()=>{img.src='/api/rt7/camera/stream.mjpg?_='+Date.now();},900); } };
-  img.src='/api/rt7/camera/stream.mjpg?_='+Date.now();
-  setAnswer('Live Stream 已啟動：前景 5FPS，背景/休眠降為 1FPS');
+  wsFrameConnect();
+  setAnswer('WebSocket Frame Stream 已啟動：前景高速，背景/休眠降為低 FPS');
   startViewerHeartbeat();
 }
 async function stopVideo(){
   wantedVideo = false;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','0');
   await viewerPing('stop');
-  $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('Live Stream 已停止顯示，ESP32 降為低 FPS 待機');
+  closeFrameWs(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('WebSocket 影像已停止顯示，ESP32 降為低 FPS 待機');
 }
 function startViewerHeartbeat(){
   if(viewerPingTimer) clearInterval(viewerPingTimer);
@@ -469,8 +493,8 @@ async function restoreVideo(reason){
   await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
   if(document.visibilityState==='visible'){
     $('emptyVideo').style.display='none';
-    $('stream').src='/api/rt7/camera/stream.mjpg?_='+Date.now();
-    setAnswer('回前景：影像串流自動恢復（'+reason+'）');
+    wsFrameConnect();
+    setAnswer('回前景：WebSocket 影像串流自動恢復（'+reason+'）');
   }
 }
 async function unlockWakeLock(){
@@ -499,7 +523,11 @@ setAudioUi(false); loadDevices().then(()=>{loadState(true); if(wantedVideo) star
 const SNAPSHOT_FILE = path.join(DATA_DIR, 'rt7_latest_snapshot.jpg');
 const STREAM_FRAME_FILE = path.join(DATA_DIR, 'rt7_latest_stream_frame.jpg');
 let latestStreamFrame = null;
-let liveStreamState = { ok:true, enabled:true, seq:0, bytes:0, time:null, device_id:'', ip:'', clients:0, fps_hint:'1-3fps' };
+let liveStreamState = { ok:true, enabled:true, seq:0, bytes:0, time:null, device_id:'', ip:'', clients:0, ws_viewers:0, ws_uploaders:0, transport:'ws_frame', fps_hint:'5-10fps ws / 3-5fps http fallback' };
+const RT7_VIEWER_ACTIVE_TTL_MS = 15000;
+const RT7_STREAM_FAST_MS = 120;
+const RT7_STREAM_IDLE_MS = 1000;
+const streamViewers = new Map();
 let cloudState = {
   ai_enabled: true,
   plugins: { motion: true, face: true, doorbell: true, intercom: true },
@@ -665,7 +693,23 @@ function streamMode_(mode, req) {
   return { ok:true, version:SERVER_VERSION, stream:liveStreamState, command:cmd };
 }
 
-// V4.6 Live Stream Bridge: ESP32 pushes low-FPS JPEG frames; browser reads as MJPEG.
+function acceptWsStreamFrame_(buf, ws) {
+  ensureDataDir();
+  if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf || []);
+  if (!buf || buf.length < 16 || buf[0] !== 0xFF || buf[1] !== 0xD8) return false;
+  latestStreamFrame = Buffer.from(buf);
+  fs.writeFileSync(STREAM_FRAME_FILE, latestStreamFrame);
+  fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
+  const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'ws_frame', device_id:safeString(ws?.rt7DeviceId || '#1'), ip:safeString(ws?._socket?.remoteAddress || ''), url:'/api/rt7/camera/latest.jpg' };
+  cloudState.last_snapshot = meta;
+  liveStreamState = Object.assign({}, liveStreamState, { ok:true, transport:'ws_frame', seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/ws' });
+  broadcastBinaryToViewers(latestStreamFrame);
+  broadcast('stream_frame', liveStreamState);
+  return true;
+}
+
+// V4.7 WebSocket Frame Stream: ESP32 sends binary JPEG frames to /ws; browser receives binary JPEG frames.
+// HTTP POST /api/rt7/camera/frame remains as a fallback.
 function acceptStreamFrame_(req, res) {
   ensureDataDir();
   const buf = Buffer.isBuffer(req.body) ? req.body : null;
@@ -682,6 +726,12 @@ function acceptStreamFrame_(req, res) {
 app.post('/api/rt7/camera/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
 app.post('/api/rt7/camera/stream/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
 app.get('/api/rt7/camera/stream/state', (req,res)=>{ streamViewerPrune_(); res.json({ ok:true, version:SERVER_VERSION, stream:liveStreamState, snapshot:getSnapshotMeta_() }); });
+app.get('/api/rt7/camera/ws/state', (req,res)=>{
+  let viewers=0, uploaders=0;
+  for (const ws of wss.clients) { if (ws.readyState === WebSocket.OPEN) { if (ws.rt7Role === 'viewer') viewers++; if (ws.rt7Role === 'esp32_frame_upload') uploaders++; } }
+  liveStreamState.ws_viewers=viewers; liveStreamState.ws_uploaders=uploaders;
+  res.json({ ok:true, version:SERVER_VERSION, ws:{ path:'/ws', viewers, uploaders }, stream:liveStreamState, snapshot:getSnapshotMeta_() });
+});
 app.get('/api/rt7/camera/stream/start', (req,res)=>res.json(streamMode_('fast', req)));
 app.get('/api/rt7/camera/stream/stop', (req,res)=>res.json(streamMode_('idle', req)));
 app.get('/api/rt7/camera/viewer/ping', (req,res)=>{
@@ -926,8 +976,30 @@ app.get('/rt7_mapping', (req,res)=>{
 });
 
 
-wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso() }));
+wss.on('connection', (ws, req) => {
+  ws.rt7Role = 'control';
+  ws.rt7DeviceId = '';
+  try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true })); } catch (_) {}
+  ws.on('message', (data, isBinary) => {
+    try {
+      if (isBinary || Buffer.isBuffer(data)) {
+        acceptWsStreamFrame_(Buffer.from(data), ws);
+        return;
+      }
+      const txt = data.toString('utf8');
+      let msg = null;
+      try { msg = JSON.parse(txt); } catch (_) {}
+      if (msg && msg.role) {
+        ws.rt7Role = safeString(msg.role);
+        ws.rt7DeviceId = safeString(msg.device_id || msg.device || msg.id || ws.rt7DeviceId || '#1');
+        if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', role:ws.rt7Role, version:SERVER_VERSION, time:nowIso() }));
+      }
+    } catch (e) {
+      try { ws.send(JSON.stringify({ ok:false, type:'ws_error', error:String(e.message||e) })); } catch (_) {}
+    }
+  });
+  ws.on('close', () => { ws.rt7Closed = true; });
 });
 
 ensureDataDir();
