@@ -1,5 +1,5 @@
 {
-  "name": "rt7-cloud-server-v4-6-live-stream-bridge",
+  "name": "rt7-cloud-server-v4-6d-viewer-foreground-fps",
   "version": "4.6.0",
   "description": "RT7 Railway cloud server V4.6 Live Stream Bridge: ESP32 pushes low-FPS MJPEG frames to Railway.",
   "main": "server.js",

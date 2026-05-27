@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_6B_LIVE_STREAM_SMOOTH_3FPS';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_6D_VIEWER_FOREGROUND_FPS';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -437,19 +437,53 @@ async function refreshSnapshot(manual=false){
     }
   }catch(e){ if(manual) setAnswer('讀取 Snapshot 失敗：'+e.message); }
 }
+const viewerId = 'rt7v_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+let wantedVideo = localStorage.getItem('RT7_CLOUD_WANTED_VIDEO') !== '0';
+let viewerPingTimer = null;
+async function viewerPing(state){
+  try{return await j('/api/rt7/camera/viewer/ping?viewer_id='+encodeURIComponent(viewerId)+'&state='+encodeURIComponent(state)+'&device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(e){return null;}
+}
 async function startVideo(){
-  try{await j('/api/rt7/camera/stream/start?device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(_){}
+  wantedVideo = true;
+  localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','1');
+  await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
   $('emptyVideo').style.display='none';
-  $('stream').src='/api/rt7/camera/stream.mjpg?fps=3&_='+Date.now();
-  setAnswer('Live Stream 已啟動（低 FPS 雲端橋接）');
+  const img=$('stream');
+  img.onerror=function(){ if(wantedVideo && document.visibilityState==='visible'){ setTimeout(()=>{img.src='/api/rt7/camera/stream.mjpg?_='+Date.now();},900); } };
+  img.src='/api/rt7/camera/stream.mjpg?_='+Date.now();
+  setAnswer('Live Stream 已啟動：前景 5FPS，背景/休眠降為 1FPS');
+  startViewerHeartbeat();
 }
 async function stopVideo(){
-  try{await j('/api/rt7/camera/stream/stop?device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(_){}
-  $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('Live Stream 已停止顯示，Snapshot 仍保留');
+  wantedVideo = false;
+  localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','0');
+  await viewerPing('stop');
+  $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('Live Stream 已停止顯示，ESP32 降為低 FPS 待機');
 }
+function startViewerHeartbeat(){
+  if(viewerPingTimer) clearInterval(viewerPingTimer);
+  viewerPingTimer=setInterval(()=>{ viewerPing((wantedVideo&&document.visibilityState==='visible')?'visible':'hidden'); },5000);
+}
+async function restoreVideo(reason){
+  if(!wantedVideo) return;
+  await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
+  if(document.visibilityState==='visible'){
+    $('emptyVideo').style.display='none';
+    $('stream').src='/api/rt7/camera/stream.mjpg?_='+Date.now();
+    setAnswer('回前景：影像串流自動恢復（'+reason+'）');
+  }
+}
+async function unlockWakeLock(){
+  try{ if(navigator.wakeLock) await navigator.wakeLock.request('screen'); }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') restoreVideo('visible'); else viewerPing('hidden'); });
+window.addEventListener('pageshow',()=>setTimeout(()=>restoreVideo('pageshow'),250));
+window.addEventListener('focus',()=>setTimeout(()=>restoreVideo('focus'),300));
+window.addEventListener('resize',()=>{ if(document.visibilityState==='visible') setTimeout(()=>restoreVideo('resize'),500); });
+document.addEventListener('pointerdown', unlockWakeLock, {once:true});
 function wsConnect(){try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='doorbell'&&m.payload){loadState(false);showDoorbell(m.payload,true);refreshSnapshot(false)} if(m.type==='snapshot'){refreshSnapshot(true)}}catch(_){}};ws.onclose=()=>setTimeout(wsConnect,3000)}catch(e){}}
 $('deviceSel').addEventListener('change',()=>{currentDevice=selectedDevice();setAnswer('已切換 '+(currentDevice.name||currentDevice.id));});
-setAudioUi(false); loadDevices().then(()=>{loadState(true);startVideo();refreshSnapshot(false)}); setInterval(()=>{loadState(false);refreshSnapshot(false)},3500); wsConnect();
+setAudioUi(false); loadDevices().then(()=>{loadState(true); if(wantedVideo) startVideo(); else viewerPing('hidden'); refreshSnapshot(false)}); startViewerHeartbeat(); setInterval(()=>{loadState(false);refreshSnapshot(false)},3500); wsConnect();
 </script></body></html>`);
 });
 
@@ -604,6 +638,33 @@ app.post('/api/rt7/camera/snapshot_json', (req,res)=>{
   res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
 });
 
+
+function streamViewerPrune_() {
+  const now = Date.now();
+  for (const [id, meta] of streamViewers.entries()) {
+    if (!meta || (now - (meta.ts || 0)) > RT7_VIEWER_ACTIVE_TTL_MS) streamViewers.delete(id);
+  }
+  liveStreamState.viewer_count = streamViewers.size;
+  liveStreamState.last_viewer_ping = streamViewers.size ? new Date(Math.max(...Array.from(streamViewers.values()).map(v=>v.ts||0))).toISOString() : null;
+  return streamViewers.size;
+}
+function streamMode_(mode, req) {
+  const dev = getCurrentDevice(req);
+  const deviceId = normalizeDoorCommandDeviceId_(safeString(req.query.device_id || dev.id || '#1'));
+  const fast = mode === 'fast';
+  liveStreamState.enabled = true;
+  liveStreamState.fps_mode = fast ? 'fast' : 'idle';
+  liveStreamState.desired_interval_ms = fast ? RT7_STREAM_FAST_MS : RT7_STREAM_IDLE_MS;
+  const cmd = queueCommand({
+    command: fast ? 'stream_start' : 'stream_idle',
+    action: fast ? 'stream_start' : 'stream_idle',
+    device_id: deviceId,
+    interval_ms: liveStreamState.desired_interval_ms,
+    message: fast ? 'viewer foreground: fast live stream' : 'viewer background: idle live stream'
+  });
+  return { ok:true, version:SERVER_VERSION, stream:liveStreamState, command:cmd };
+}
+
 // V4.6 Live Stream Bridge: ESP32 pushes low-FPS JPEG frames; browser reads as MJPEG.
 function acceptStreamFrame_(req, res) {
   ensureDataDir();
@@ -620,9 +681,19 @@ function acceptStreamFrame_(req, res) {
 }
 app.post('/api/rt7/camera/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
 app.post('/api/rt7/camera/stream/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
-app.get('/api/rt7/camera/stream/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, stream:liveStreamState, snapshot:getSnapshotMeta_() }));
-app.get('/api/rt7/camera/stream/start', (req,res)=>{ liveStreamState.enabled=true; const dev=getCurrentDevice(req); const deviceId=normalizeDoorCommandDeviceId_(safeString(req.query.device_id || dev.id || '#1')); const cmd=queueCommand({command:'stream_start', action:'stream_start', device_id:deviceId, message:'start live stream'}); res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, command:cmd}); });
-app.get('/api/rt7/camera/stream/stop', (req,res)=>{ liveStreamState.enabled=false; const dev=getCurrentDevice(req); const deviceId=normalizeDoorCommandDeviceId_(safeString(req.query.device_id || dev.id || '#1')); const cmd=queueCommand({command:'stream_stop', action:'stream_stop', device_id:deviceId, message:'stop live stream'}); res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, command:cmd}); });
+app.get('/api/rt7/camera/stream/state', (req,res)=>{ streamViewerPrune_(); res.json({ ok:true, version:SERVER_VERSION, stream:liveStreamState, snapshot:getSnapshotMeta_() }); });
+app.get('/api/rt7/camera/stream/start', (req,res)=>res.json(streamMode_('fast', req)));
+app.get('/api/rt7/camera/stream/stop', (req,res)=>res.json(streamMode_('idle', req)));
+app.get('/api/rt7/camera/viewer/ping', (req,res)=>{
+  const id = safeString(req.query.viewer_id || req.ip || clientIp(req) || 'viewer');
+  const state = safeString(req.query.state || 'visible');
+  if (state === 'hidden' || state === 'stop') streamViewers.delete(id);
+  else streamViewers.set(id, { ts:Date.now(), ip:clientIp(req), ua:req.headers['user-agent']||'', state });
+  const n = streamViewerPrune_();
+  if (n > 0 && liveStreamState.fps_mode !== 'fast') return res.json(streamMode_('fast', req));
+  if (n <= 0 && liveStreamState.fps_mode !== 'idle') return res.json(streamMode_('idle', req));
+  res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, viewers:n});
+});
 app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
   res.writeHead(200, { 'Content-Type':'multipart/x-mixed-replace; boundary=rt7frame', 'Cache-Control':'no-cache, no-store, must-revalidate, private', 'Connection':'keep-alive', 'Pragma':'no-cache', 'Expires':'0', 'X-Accel-Buffering':'no' });
   liveStreamState.clients = (liveStreamState.clients || 0) + 1;
@@ -642,7 +713,7 @@ app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
     } catch (e) { clearInterval(timer); try { res.end(); } catch(_){} }
   };
   sendFrame();
-  const timer = setInterval(sendFrame, 120);
+  const timer = setInterval(sendFrame, 80);
   req.on('close', ()=>{ clearInterval(timer); liveStreamState.clients = Math.max(0, (liveStreamState.clients || 1)-1); });
 });
 
