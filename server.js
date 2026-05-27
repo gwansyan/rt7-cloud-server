@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7A_WS_RENDER_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7B_WS_RENDER_DATAURL_FALLBACK';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -455,14 +455,21 @@ let frameWs=null, lastFrameUrl=null, frameWsRetry=null;
 let frameRenderBusy=false, framePending=null, frameSeq=0, frameOk=0, frameDrop=0, lastFrameAt=0;
 function revokeLastFrameUrl_(){ try{ if(lastFrameUrl){ URL.revokeObjectURL(lastFrameUrl); lastFrameUrl=null; } }catch(e){} }
 function closeFrameWs(){ try{ if(frameWs){ frameWs.onclose=null; frameWs.close(); } }catch(e){} frameWs=null; frameRenderBusy=false; framePending=null; }
+async function rt7BlobToDataUrl_(blob){
+  return await new Promise((resolve,reject)=>{
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+    fr.readAsDataURL(blob);
+  });
+}
 async function rt7RenderFrame_(data){
   const img=$('stream');
   if(!img) return;
   let blob=null;
   try{
     if(data instanceof Blob){
-      const ab = await data.arrayBuffer();
-      blob = new Blob([ab], {type:'image/jpeg'});
+      blob = data.type === 'image/jpeg' ? data : new Blob([await data.arrayBuffer()], {type:'image/jpeg'});
     } else if(data instanceof ArrayBuffer){
       blob = new Blob([data], {type:'image/jpeg'});
     } else if(data && data.buffer){
@@ -471,17 +478,23 @@ async function rt7RenderFrame_(data){
       return;
     }
     if(blob.size < 32) return;
-    const url = URL.createObjectURL(blob);
-    const prevUrl = lastFrameUrl;
-    lastFrameUrl = url;
-    img.onload = () => { try{ if(prevUrl) URL.revokeObjectURL(prevUrl); }catch(e){} };
-    img.onerror = () => { try{ URL.revokeObjectURL(url); }catch(e){} if(prevUrl) lastFrameUrl=prevUrl; setAnswer('WebSocket 影像 frame render 失敗，等待下一張...'); };
-    img.src = url;
+
+    // V4.7B: Android Chrome fallback.  ObjectURL sometimes shows a broken image
+    // when frames are replaced very quickly.  DataURL is slower but much more compatible
+    // for the RT7 low-size JPEG frames (~3-8KB).
+    const dataUrl = await rt7BlobToDataUrl_(blob);
+    img.onload = () => { $('emptyVideo').style.display='none'; };
+    img.onerror = () => {
+      setAnswer('WebSocket frame 已收到，但瀏覽器無法解碼，改用 latest.jpg fallback...');
+      img.src = '/api/rt7/camera/latest.jpg?_wsfallback=' + Date.now();
+    };
+    img.src = dataUrl;
     $('emptyVideo').style.display='none';
     frameOk++; lastFrameAt=Date.now();
     if(frameOk===1 || frameOk%30===0) setAnswer('WebSocket 即時影像顯示中 frame='+frameOk+' drop='+frameDrop);
   }catch(e){
-    setAnswer('WebSocket 影像解碼失敗：'+(e.message||e));
+    setAnswer('WebSocket 影像解碼失敗：'+(e.message||e)+'，改用 latest.jpg fallback');
+    try{ img.src='/api/rt7/camera/latest.jpg?_wsfallback='+Date.now(); $('emptyVideo').style.display='none'; }catch(_){}
   }
 }
 async function drainFrameQueue_(){
