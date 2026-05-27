@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7_WS_FRAME_STREAM';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7A_WS_RENDER_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -452,19 +452,61 @@ async function viewerPing(state){
   try{return await j('/api/rt7/camera/viewer/ping?viewer_id='+encodeURIComponent(viewerId)+'&state='+encodeURIComponent(state)+'&device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(e){return null;}
 }
 let frameWs=null, lastFrameUrl=null, frameWsRetry=null;
-function closeFrameWs(){ try{ if(frameWs){ frameWs.onclose=null; frameWs.close(); } }catch(e){} frameWs=null; }
+let frameRenderBusy=false, framePending=null, frameSeq=0, frameOk=0, frameDrop=0, lastFrameAt=0;
+function revokeLastFrameUrl_(){ try{ if(lastFrameUrl){ URL.revokeObjectURL(lastFrameUrl); lastFrameUrl=null; } }catch(e){} }
+function closeFrameWs(){ try{ if(frameWs){ frameWs.onclose=null; frameWs.close(); } }catch(e){} frameWs=null; frameRenderBusy=false; framePending=null; }
+async function rt7RenderFrame_(data){
+  const img=$('stream');
+  if(!img) return;
+  let blob=null;
+  try{
+    if(data instanceof Blob){
+      const ab = await data.arrayBuffer();
+      blob = new Blob([ab], {type:'image/jpeg'});
+    } else if(data instanceof ArrayBuffer){
+      blob = new Blob([data], {type:'image/jpeg'});
+    } else if(data && data.buffer){
+      blob = new Blob([data.buffer], {type:'image/jpeg'});
+    } else {
+      return;
+    }
+    if(blob.size < 32) return;
+    const url = URL.createObjectURL(blob);
+    const prevUrl = lastFrameUrl;
+    lastFrameUrl = url;
+    img.onload = () => { try{ if(prevUrl) URL.revokeObjectURL(prevUrl); }catch(e){} };
+    img.onerror = () => { try{ URL.revokeObjectURL(url); }catch(e){} if(prevUrl) lastFrameUrl=prevUrl; setAnswer('WebSocket 影像 frame render 失敗，等待下一張...'); };
+    img.src = url;
+    $('emptyVideo').style.display='none';
+    frameOk++; lastFrameAt=Date.now();
+    if(frameOk===1 || frameOk%30===0) setAnswer('WebSocket 即時影像顯示中 frame='+frameOk+' drop='+frameDrop);
+  }catch(e){
+    setAnswer('WebSocket 影像解碼失敗：'+(e.message||e));
+  }
+}
+async function drainFrameQueue_(){
+  if(frameRenderBusy) return;
+  frameRenderBusy=true;
+  try{
+    while(framePending){
+      const data=framePending; framePending=null;
+      await rt7RenderFrame_(data);
+    }
+  } finally { frameRenderBusy=false; }
+}
 function wsFrameConnect(){
   closeFrameWs();
+  revokeLastFrameUrl_();
   const img=$('stream');
   frameWs = new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
-  frameWs.binaryType='blob';
-  frameWs.onopen=()=>{ try{frameWs.send(JSON.stringify({role:'viewer', stream:'frame_view', viewer_id:viewerId}));}catch(e){} setAnswer('WebSocket 即時影像已連線'); };
+  frameWs.binaryType='arraybuffer';
+  frameWs.onopen=()=>{ try{frameWs.send(JSON.stringify({role:'viewer', stream:'frame_view', viewer_id:viewerId}));}catch(e){} setAnswer('WebSocket 即時影像已連線，等待 JPEG frame...'); };
   frameWs.onmessage=(ev)=>{
     if(typeof ev.data === 'string') return;
-    $('emptyVideo').style.display='none';
-    if(lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
-    lastFrameUrl=URL.createObjectURL(ev.data);
-    img.src=lastFrameUrl;
+    if(framePending) frameDrop++;
+    framePending = ev.data;
+    frameSeq++;
+    drainFrameQueue_();
   };
   frameWs.onclose=()=>{ if(wantedVideo && document.visibilityState==='visible'){ clearTimeout(frameWsRetry); frameWsRetry=setTimeout(wsFrameConnect,1200); } };
   frameWs.onerror=()=>{ try{frameWs.close();}catch(e){} };
@@ -482,7 +524,7 @@ async function stopVideo(){
   wantedVideo = false;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','0');
   await viewerPing('stop');
-  closeFrameWs(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('WebSocket 影像已停止顯示，ESP32 降為低 FPS 待機');
+  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('WebSocket 影像已停止顯示，ESP32 降為低 FPS 待機');
 }
 function startViewerHeartbeat(){
   if(viewerPingTimer) clearInterval(viewerPingTimer);
