@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F5_HARD_REMOVE_ALL_OVERLAY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F6_INTERNAL_ERROR_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -375,103 +375,71 @@ try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+locat
 // ---------- Original RT7 mobile-style cloud doorbell UI ----------
 app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   const q = req.query || {};
-  const mode = (q.mode || 'idle').toString();
-  const ip = (q.ip || '192.168.0.179').toString().replace(/[^0-9.]/g, '') || '192.168.0.179';
+  const mode = safeString(q.mode || 'idle').toLowerCase();
+  const ip = safeString(q.ip || '192.168.0.179').replace(/[^0-9.]/g, '') || '192.168.0.179';
   const aiOn = q.ai === '1' || cloudState.ai_enabled === true;
-  let streamSrc = '';
-  let streamModeText = 'AUTO';
+  const self = (m, extra='') => `/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(m)}&ai=${aiOn?'1':'0'}${extra}`;
+  let imgSrc = '';
+  let modeLabel = 'AUTO';
   let hint = '等待影像串流';
+  let answer = '雲端門鈴待機中';
   if (mode === 'lan') {
-    streamSrc = `http://${ip}/api/camera/stream?_=${Date.now()}`;
-    streamModeText = 'LAN';
+    imgSrc = `http://${ip}/api/camera/stream?_=${Date.now()}`;
+    modeLabel = 'LAN';
     hint = '內網直連 ESP32 流暢影像';
+    answer = '內網直連影像模式';
   } else if (mode === 'cloud') {
-    streamSrc = `/api/rt7/camera/stream.mjpg?_=${Date.now()}`;
-    streamModeText = 'CLOUD';
+    imgSrc = `/api/rt7/camera/stream.mjpg?_=${Date.now()}`;
+    modeLabel = 'CLOUD';
     hint = 'Railway 雲端遠端影像';
+    answer = '雲端遠端影像模式';
   } else if (mode === 'auto') {
-    streamSrc = '';
-    streamModeText = 'AUTO';
+    modeLabel = 'AUTO';
     hint = '自動判斷中：先測內網，失敗切雲端';
+    answer = '自動判斷影像來源中';
   }
-  res.type('html').send(`<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI Doorbell V4.8F5</title>
+  const doorLast = doorbellState.last || null;
+  const doorText = doorLast && doorLast.time ? ('最後：' + new Date(doorLast.time).toLocaleTimeString('zh-TW')) : '等待事件';
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>RT7 Cloud Original UI Doorbell V4.8F6</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
-*{box-sizing:border-box;-webkit-tap-highlight-color:rgba(0,0,0,0);}
-html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;}
-body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:32px;}
-/* V4.8F5: No overlay. No fixed transparent layer. No fullscreen blocker. */
-.top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900;}
-.hamb{font-size:34px;line-height:1}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:34px}
-.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}
-.deviceText{width:100%;height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827;text-decoration:none;}
-.video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden;}
-.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0;}
-.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.4;padding:12px;pointer-events:none;}
-.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22);pointer-events:none}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
-.videoBtns{display:flex;justify-content:space-between;gap:8px;background:#fff;padding:8px 12px;border-bottom:1px solid var(--line)}.videoBtns .leftBtns,.videoBtns .rightBtns{display:flex;gap:8px}.vbtn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:9px;color:#fff;font-weight:900;padding:12px 12px;font-size:14px;min-width:72px;text-decoration:none;touch-action:manipulation}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}
-.statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.statusLine .dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.doorAlert{grid-column:1/3;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:12px;font-size:22px;font-weight:900;text-align:center;display:none}
-.micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none}
-.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}
-.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{font-size:11px;color:#94a3b8;padding:6px 12px 0;word-break:break-all}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
+/* V4.8F6: no overlay, no modal, no fixed blocker, no capture touch listener */
+a,button,input,select{pointer-events:auto!important;touch-action:manipulation!important} .noTouch{pointer-events:none!important}
+.top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900}.hamb{font-size:34px}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:34px}
+.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827;text-decoration:none}
+.video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px;pointer-events:none}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22);pointer-events:none}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
+.videoBtns{display:flex;justify-content:space-between;gap:8px;background:#fff;padding:8px 12px;border-bottom:1px solid var(--line)}.leftBtns,.rightBtns{display:flex;gap:8px}.vbtn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:9px;color:#fff;font-weight:900;padding:12px 12px;font-size:14px;min-width:72px;text-decoration:none}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}
+.statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.doorAlert{grid-column:1/3;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:12px;font-size:22px;font-weight:900;text-align:center;display:none}
+.micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{font-size:11px;color:#94a3b8;padding:6px 12px 0;word-break:break-all}
+.fallback{display:none;padding:8px 12px;background:#fff;border-bottom:1px solid var(--line);gap:8px}.fallback a{display:inline-flex;background:#475569;color:#fff;text-decoration:none;padding:8px 10px;border-radius:8px;font-weight:900;font-size:13px}
 @media(max-height:740px){.top{height:56px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
-</style>
-</head>
-<body>
+</style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
-<div class="deviceBar"><a class="deviceText" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=idle">#1 / RT7 ESP32-S3-CAM / ${ip}<span>⌄</span></a></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt="" ${streamSrc ? `src="${streamSrc}"` : ''}><div class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${streamModeText}</div></section>
-<section class="videoBtns"><div class="leftBtns"><a class="vbtn vblue" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode)}&ai=1">啟用 AI</a><a class="vbtn vred" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode)}&ai=0">關閉 AI</a></div><div class="rightBtns"><a id="startAuto" class="vbtn vdark" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=auto&ai=${aiOn?'1':'0'}">開始影像</a><a class="vbtn vdark" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=idle&ai=${aiOn?'1':'0'}">停止影像</a></div></section>
-<section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${mode==='lan'?'內網直連影像':mode==='cloud'?'雲端遠端影像':mode==='auto'?'自動判斷影像來源':'雲端門鈴待機中'}</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><a class="bigMic" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode)}&ai=1" title="AI語音助理">🎙️</a></section>
-<section class="actions"><div class="act"><a class="circle" href="/api/rt7/door/open?device_id=%231">🚪</a>開門</div><div class="act"><a class="circle" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode)}&ai=${aiOn?'1':'0'}">👥</a>名單</div><div class="act"><a class="circle" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=idle&ai=${aiOn?'1':'0'}">◼</a>對講結束</div><div class="act"><a class="circle" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode)}&ai=${aiOn?'1':'0'}">＋</a>註冊</div><div class="act"><a class="circle ${aiOn?'aiActive':''}" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode)}&ai=1">🎙️</a>AI語音助理</div></section>
-<div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
-<div class="debug">V4.8F5 HARD_REMOVE_ALL_OVERLAY / mode=${mode} / ip=${ip}</div>
+<div class="deviceBar"><a class="deviceText" href="${self('idle')}">#1 / RT7 ESP32-S3-CAM / ${ip}<span>⌄</span></a></div>
+<section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt="" ${imgSrc ? `src="${imgSrc}"` : ''}><div class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
+<section class="videoBtns"><div class="leftBtns"><a class="vbtn vblue" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode||'idle')}&ai=1">啟用 AI</a><a class="vbtn vred" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode||'idle')}&ai=0">關閉 AI</a></div><div class="rightBtns"><a class="vbtn vdark" href="${self('auto')}">開始影像</a><a class="vbtn vdark" href="${self('idle')}">停止影像</a></div></section>
+<section class="fallback"><a href="${self('lan')}">強制 LAN</a><a href="${self('cloud')}">強制 CLOUD</a><a href="${self('auto')}">AUTO</a></section>
+<section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
+<section class="micZone"><a class="bigMic" href="/api/rt7/phase9i/vision_qa?q=${encodeURIComponent('請用繁體中文簡短描述目前門口畫面')}">🎙️</a></section>
+<section class="actions"><div class="act"><a class="circle" href="/api/rt7/door/open?device_id=%231">🚪</a>開門</div><div class="act"><a class="circle" href="${self(mode||'idle')}">👥</a>名單</div><div class="act"><a class="circle" href="${self('idle')}">◼</a>對講結束</div><div class="act"><a class="circle" href="${self(mode||'idle')}">＋</a>註冊</div><div class="act"><a class="circle ${aiOn?'aiActive':''}" href="/rt7_cloud_original_ui_doorbell?ip=${encodeURIComponent(ip)}&mode=${encodeURIComponent(mode||'idle')}&ai=1">🎙️</a>AI語音助理</div></section>
+<div class="reg"><label>註冊名稱</label><input value="gwansyan"></div>
+<div class="debug">V4.8F6 INTERNAL_ERROR_FIX / mode=${mode} / ip=${ip} / no overlay</div>
 <script>
 (function(){
-  var mode = ${JSON.stringify(mode)};
-  var ip = ${JSON.stringify(ip)};
-  var img = document.getElementById('stream');
-  var empty = document.getElementById('emptyVideo');
-  var badge = document.getElementById('streamModeBadge');
-  function setCloud(){
-    if(badge) badge.textContent='CLOUD';
-    if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>';
-    if(img) img.src='/api/rt7/camera/stream.mjpg?_='+Date.now();
+  var mode=${JSON.stringify(mode)}; var ip=${JSON.stringify(ip)}; var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge');
+  function cloud(){ if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img) img.src='/api/rt7/camera/stream.mjpg?_='+Date.now(); }
+  function lan(){ if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img) img.src='http://'+ip+'/api/camera/stream?_='+Date.now(); }
+  if(mode==='auto'){
+    var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done)return; done=true; cloud(); },1800);
+    probe.onload=function(){ if(done)return; done=true; clearTimeout(t); lan(); };
+    probe.onerror=function(){ if(done)return; done=true; clearTimeout(t); cloud(); };
+    probe.src='http://'+ip+'/api/camera/stream?_probe='+Date.now();
   }
-  function setLan(){
-    if(badge) badge.textContent='LAN';
-    if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>';
-    if(img) img.src='http://'+ip+'/api/camera/stream?_='+Date.now();
-  }
-  if(mode === 'auto'){
-    // Use image probe. If LAN frame does not load quickly, switch to cloud.
-    var probe = new Image();
-    var done = false;
-    var t = setTimeout(function(){ if(done) return; done=true; setCloud(); }, 1800);
-    probe.onload = function(){ if(done) return; done=true; clearTimeout(t); setLan(); };
-    probe.onerror = function(){ if(done) return; done=true; clearTimeout(t); setCloud(); };
-    probe.src = 'http://' + ip + '/api/camera/stream?_probe=' + Date.now();
-  }
-  // doorbell polling without overlays
-  var lastCount = null;
-  async function pollDoor(){
-    try{
-      var r = await fetch('/api/rt7/doorbell/state?_=' + Date.now(), {cache:'no-store'});
-      var j = await r.json();
-      var st = j.state || j;
-      if(st && typeof st.count === 'number'){
-        if(lastCount === null) lastCount = st.count;
-        if(st.count !== lastCount){ lastCount = st.count; document.getElementById('doorText').textContent='最後：'+new Date().toLocaleTimeString(); var a=document.getElementById('doorAlert'); if(a){a.style.display='block'; setTimeout(function(){a.style.display='none'},5000);} }
-      }
-    }catch(e){}
-    setTimeout(pollDoor, 2500);
-  }
+  var lastCount=null;
+  async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var j=await r.json(); var st=j.state||j; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; var d=document.getElementById('doorText'); if(d)d.textContent='最後：'+new Date().toLocaleTimeString(); var a=document.getElementById('doorAlert'); if(a){a.style.display='block'; setTimeout(function(){a.style.display='none'},5000);} } } }catch(e){} setTimeout(pollDoor,2500); }
   pollDoor();
 })();
 </script>
