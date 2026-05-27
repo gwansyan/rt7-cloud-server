@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7C_WS_HTTP_FALLBACK_RELAY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7D_NATIVE_MJPEG_FALLBACK';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -528,16 +528,23 @@ async function startVideo(){
   wantedVideo = true;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','1');
   await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
+  closeFrameWs();
+  revokeLastFrameUrl_();
+  const img=$('stream');
   $('emptyVideo').style.display='none';
-  wsFrameConnect();
-  setAnswer('WebSocket Frame Stream 已啟動：前景高速，背景/休眠降為低 FPS');
+  if(img){
+    img.onerror=()=>{ setAnswer('MJPEG 顯示失敗，改讀 latest.jpg'); img.src='/api/rt7/camera/latest.jpg?_fallback='+Date.now(); };
+    img.onload=()=>{ try{$('emptyVideo').style.display='none';}catch(e){} };
+    img.src='/api/rt7/camera/stream.mjpg?_native='+Date.now();
+  }
+  setAnswer('Native MJPEG 串流已啟動：使用瀏覽器原生解碼，避免 WebSocket JPEG 黑畫面');
   startViewerHeartbeat();
 }
 async function stopVideo(){
   wantedVideo = false;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','0');
   await viewerPing('stop');
-  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('WebSocket 影像已停止顯示，ESP32 降為低 FPS 待機');
+  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('MJPEG 影像已停止顯示，ESP32 降為低 FPS 待機');
 }
 function startViewerHeartbeat(){
   if(viewerPingTimer) clearInterval(viewerPingTimer);
@@ -548,8 +555,10 @@ async function restoreVideo(reason){
   await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
   if(document.visibilityState==='visible'){
     $('emptyVideo').style.display='none';
-    wsFrameConnect();
-    setAnswer('回前景：WebSocket 影像串流自動恢復（'+reason+'）');
+    closeFrameWs();
+    const img=$('stream');
+    if(img) img.src='/api/rt7/camera/stream.mjpg?_restore='+Date.now();
+    setAnswer('回前景：Native MJPEG 影像串流自動恢復（'+reason+'）');
   }
 }
 async function unlockWakeLock(){
