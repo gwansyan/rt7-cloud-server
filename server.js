@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7F_WS_UPLOAD_NATIVE_MJPEG_10FPS_TEST';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7G_ADAPTIVE_7_10FPS_DROP_OLD_FRAME';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -587,9 +587,11 @@ setAudioUi(false); loadDevices().then(()=>{loadState(true); if(wantedVideo) star
 const SNAPSHOT_FILE = path.join(DATA_DIR, 'rt7_latest_snapshot.jpg');
 const STREAM_FRAME_FILE = path.join(DATA_DIR, 'rt7_latest_stream_frame.jpg');
 let latestStreamFrame = null;
+let rt7MjpegCongestUntilMs = 0;
 let liveStreamState = { ok:true, enabled:true, seq:0, bytes:0, time:null, device_id:'', ip:'', clients:0, ws_viewers:0, ws_uploaders:0, transport:'ws_frame', fps_hint:'5-10fps ws / 3-5fps http fallback' };
 const RT7_VIEWER_ACTIVE_TTL_MS = 15000;
-const RT7_STREAM_FAST_MS = 100;
+const RT7_STREAM_FAST_MS = 100;       // adaptive high target: ~10 FPS
+const RT7_STREAM_STABLE_MS = 140;     // adaptive fallback: ~7 FPS
 const RT7_STREAM_IDLE_MS = 1000;
 const streamViewers = new Map();
 let cloudState = {
@@ -746,7 +748,8 @@ function streamMode_(mode, req) {
   const fast = mode === 'fast';
   liveStreamState.enabled = true;
   liveStreamState.fps_mode = fast ? 'fast' : 'idle';
-  liveStreamState.desired_interval_ms = fast ? RT7_STREAM_FAST_MS : RT7_STREAM_IDLE_MS;
+  liveStreamState.desired_interval_ms = fast ? ((Date.now() < rt7MjpegCongestUntilMs) ? RT7_STREAM_STABLE_MS : RT7_STREAM_FAST_MS) : RT7_STREAM_IDLE_MS;
+  liveStreamState.adaptive_mode = fast ? ((Date.now() < rt7MjpegCongestUntilMs) ? 'fallback_7fps' : 'target_10fps') : 'idle_1fps';
   const cmd = queueCommand({
     command: fast ? 'stream_start' : 'stream_idle',
     action: fast ? 'stream_start' : 'stream_idle',
@@ -825,13 +828,24 @@ app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
       const seq = liveStreamState.seq || 0;
       if (seq === lastSeq) return;
       lastSeq = seq;
-      res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\n\r\n`);
-      res.write(frame);
-      res.write('\r\n');
+      // V4.7G: drop-old-frame MJPEG. If this viewer's socket is congested,
+      // do not build a backlog; mark adaptive fallback and let ESP32 slow to ~7 FPS.
+      const ok1 = res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\n\r\n`);
+      const ok2 = res.write(frame);
+      const ok3 = res.write('\r\n');
+      if (!ok1 || !ok2 || !ok3) {
+        rt7MjpegCongestUntilMs = Date.now() + 5000;
+        liveStreamState.congested_count = (liveStreamState.congested_count || 0) + 1;
+        liveStreamState.adaptive_mode = 'fallback_7fps';
+        liveStreamState.desired_interval_ms = RT7_STREAM_STABLE_MS;
+      } else if (Date.now() > rt7MjpegCongestUntilMs) {
+        liveStreamState.adaptive_mode = 'target_10fps';
+        liveStreamState.desired_interval_ms = RT7_STREAM_FAST_MS;
+      }
     } catch (e) { clearInterval(timer); try { res.end(); } catch(_){} }
   };
   sendFrame();
-  const timer = setInterval(sendFrame, 80);
+  const timer = setInterval(sendFrame, 45); // V4.7G: check often, but send only newest seq; no queue
   req.on('close', ()=>{ clearInterval(timer); liveStreamState.clients = Math.max(0, (liveStreamState.clients || 1)-1); });
 });
 
