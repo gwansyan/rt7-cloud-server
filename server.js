@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7B_WS_RENDER_DATAURL_FALLBACK';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7C_WS_HTTP_FALLBACK_RELAY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -774,9 +774,13 @@ function acceptStreamFrame_(req, res) {
   fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
   const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'live_frame', device_id:safeString(req.query.device_id || req.headers['x-rt7-device-id'] || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
   cloudState.last_snapshot = meta;
-  liveStreamState = Object.assign({}, liveStreamState, { ok:true, seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/api/rt7/camera/stream.mjpg' });
+  liveStreamState = Object.assign({}, liveStreamState, { ok:true, transport:'http_frame_relay', seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/api/rt7/camera/stream.mjpg' });
+  // V4.7C: IMPORTANT FIX. If ESP32 falls back to HTTP POST frames, still relay
+  // the JPEG bytes to WebSocket viewers. Previous V4.7A/B only updated cache and
+  // sent JSON metadata, so phone showed "WS connected" but received no binary JPEG.
+  broadcastBinaryToViewers(latestStreamFrame);
   broadcast('stream_frame', liveStreamState);
-  res.json({ ok:true, version:SERVER_VERSION, frame:{ seq:liveStreamState.seq, bytes:buf.length, time:meta.time }, snapshot:meta });
+  res.json({ ok:true, version:SERVER_VERSION, frame:{ seq:liveStreamState.seq, bytes:buf.length, time:meta.time, transport:'http_frame_relay' }, snapshot:meta });
 }
 app.post('/api/rt7/camera/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
 app.post('/api/rt7/camera/stream/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
