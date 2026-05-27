@@ -662,19 +662,34 @@ function queueCommand(cmd) {
   appendEvent({ type:'command', command:c.command, id:c.id, device_id:c.device_id, message:c.message||c.command });
   return c;
 }
+function normalizeDoorCommandDeviceId_(id) {
+  const raw = safeString(id || '');
+  const low = raw.toLowerCase();
+  // UI device list historically uses #1, while ESP32 V4.4 polls with rt7-esp32-s3-cam-01.
+  // Normalize the primary camera so Railway Queue and ESP32 polling use the same device_id.
+  if (!raw || raw === '#1' || raw === '1' || low.includes('rt7 esp32-s3-cam') || low.includes('esp32-s3-cam')) return 'rt7-esp32-s3-cam-01';
+  return raw;
+}
+function commandMatchesDevice_(cmd, id) {
+  const pollId = normalizeDoorCommandDeviceId_(id);
+  const cmdId = normalizeDoorCommandDeviceId_(cmd?.device_id || '');
+  return !pollId || !cmdId || cmdId === pollId;
+}
 function enqueueDoorOpen(req, res, endpointName) {
   const dev = getCurrentDevice(req);
-  const deviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
+  const requestedDeviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
+  const deviceId = normalizeDoorCommandDeviceId_(requestedDeviceId);
   const cmd = queueCommand({
     command:'door_open',
     action:'door_open',
     device_id:deviceId,
+    requested_device_id:requestedDeviceId,
     endpoint:endpointName || 'door_open_queue',
     pulse_ms:Number(req.query.pulse_ms || 800),
     message:'雲端開門命令已排入佇列，等待 ESP32 輪詢'
   });
   cloudState.last_door_open = cmd;
-  res.json({ ok:true, mode:'cloud_command_queue', command:cmd, state:doorOpenQueueState, note:'ESP32 輪詢 /api/rt7/device/commands/next?device_id='+deviceId+' 後執行開門並 ACK' });
+  res.json({ ok:true, mode:'cloud_command_queue', command:cmd, requested_device_id:requestedDeviceId, normalized_device_id:deviceId, state:doorOpenQueueState, note:'ESP32 輪詢 /api/rt7/device/commands/next?device_id='+deviceId+' 後執行開門並 ACK' });
 }
 app.get('/api/rt7/phase9l/door/open', (req,res)=>enqueueDoorOpen(req,res,'phase9l'));
 app.post('/api/rt7/phase9l/door/open', (req,res)=>enqueueDoorOpen(req,res,'phase9l_post'));
@@ -682,8 +697,8 @@ app.get('/api/rt7/door/open', (req,res)=>enqueueDoorOpen(req,res,'rt7_door_open'
 app.post('/api/rt7/door/open', (req,res)=>enqueueDoorOpen(req,res,'rt7_door_open_post'));
 app.get('/api/door/open', (req,res)=>enqueueDoorOpen(req,res,'compat_api_door_open'));
 app.get('/api/rt7/door/open/state', (req,res)=>res.json({ ok:true, state:doorOpenQueueState, pending:pendingCommands }));
-app.get('/api/rt7/device/commands', (req,res)=>{ const id=safeString(req.query.device_id||req.query.device||''); const list=id?pendingCommands.filter(c=>!c.device_id||c.device_id===id):pendingCommands; res.json({ok:true, commands:list, count:list.length, state:doorOpenQueueState}); });
-app.get('/api/rt7/device/commands/next', (req,res)=>{ const id=safeString(req.query.device_id||req.query.device||''); const cmd=pendingCommands.find(c=>!id || !c.device_id || c.device_id===id) || null; res.json({ok:true, command:cmd, has_command:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); });
+app.get('/api/rt7/device/commands', (req,res)=>{ const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||''); const list=id?pendingCommands.filter(c=>commandMatchesDevice_(c,id)):pendingCommands; res.json({ok:true, device_id:id, commands:list, count:list.length, state:doorOpenQueueState}); });
+app.get('/api/rt7/device/commands/next', (req,res)=>{ const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||''); const cmd=pendingCommands.find(c=>commandMatchesDevice_(c,id)) || null; res.json({ok:true, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); });
 function ackCommand(req,res){ const id=safeString(req.body?.id||req.query.id); const status=safeString(req.body?.status||req.query.status||'done'); const idx=pendingCommands.findIndex(c=>c.id===id); let cmd=null; if(idx>=0){cmd=pendingCommands[idx]; pendingCommands.splice(idx,1);} doorOpenQueueState.acked+=1; doorOpenQueueState.last_ack={id, status, time:nowIso(), found:!!cmd, command:cmd}; appendEvent({type:'command_ack', id, status, found:!!cmd}); res.json({ok:true, id, status, found:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); }
 app.get('/api/rt7/device/commands/ack', ackCommand);
 app.post('/api/rt7/device/commands/ack', ackCommand);
@@ -762,3 +777,4 @@ wss.on('connection', (ws) => {
 ensureDataDir();
 const port = process.env.PORT || 3000;
 server.listen(port, () => console.log(`${SERVER_VERSION} listening on ${port}`));
+
