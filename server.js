@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8C_COMPARE_SIMPLE_UI_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8D_FORCE_REMOVE_BLOCK_LAYER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1064,32 +1064,50 @@ app.get('/rt7_mapping', (req,res)=>{
 // Goal: keep product target no Node-RED / no Tailscale, but measure whether LAN
 // direct ESP32 MJPEG is smooth before comparing with cloud relay.
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// V4.8D Stream Compare Test: FORCE REMOVE BLOCK LAYER
+// No-JS link/form UI: avoids transparent overlay / select / inline onclick problems.
+// Query params drive the page: ?ip=192.168.0.179&mode=lan|cloud|both|stop
+// -----------------------------------------------------------------------------
 app.get('/rt7_stream_compare_test', (req, res) => {
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8C Stream Compare</title>
+  const ip = safeString(req.query.ip || '192.168.0.179').replace(/^https?:\/\//,'').replace(/\/.*$/,'') || '192.168.0.179';
+  const mode = safeString(req.query.mode || '');
+  const lanUrl = `http://${ip}/api/camera/stream?_lan=${Date.now()}`;
+  const cloudUrl = `/api/rt7/camera/stream.mjpg?_cloud=${Date.now()}`;
+  const showLan = mode === 'lan' || mode === 'both';
+  const showCloud = mode === 'cloud' || mode === 'both';
+  const esc = (x) => String(x || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8D Compare</title>
 <style>
-html,body{margin:0;padding:0;background:#f3f6f8;color:#17262a;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;overflow:auto}*{box-sizing:border-box}.top{background:#0d2a30;color:#fff;padding:16px;text-align:center;font-weight:900}.wrap{max-width:980px;margin:0 auto;padding:12px}.card{background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05)}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.ipRow{display:flex;gap:8px;align-items:center}.ipRow input{flex:1}.hint{font-size:13px;color:#64748b;line-height:1.6}.label{font-weight:900;color:#7a2a19;margin:8px 0}input{font-size:18px;padding:13px;border:2px solid #8aa1b2;border-radius:12px;background:#fff;color:#111;width:100%;-webkit-user-select:text;user-select:text}button{border:0;border-radius:12px;padding:14px 16px;margin:4px;color:#fff;font-weight:900;font-size:17px;touch-action:manipulation}.blue{background:#1583d8}.green{background:#16a34a}.red{background:#dc2626}.gray{background:#475569}.orange{background:#d97706}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.videoBox{position:relative;background:#000;min-height:260px;border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center}.videoBox img{display:block;width:100%;height:100%;min-height:260px;object-fit:contain;border:0}.empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;pointer-events:none}.info{font-size:13px;color:#475569;line-height:1.6;margin-top:6px}pre{white-space:pre-wrap;background:#0b1220;color:#cbd5e1;border-radius:12px;padding:10px;max-height:260px;overflow:auto}.ok{color:#16a34a;font-weight:900}.warn{color:#d97706;font-weight:900}.debug{font-size:13px;color:#0f766e;margin-top:8px;font-weight:800}@media(max-width:720px){.grid{grid-template-columns:1fr}.ipRow{display:block}.videoBox{min-height:220px}.videoBox img{min-height:220px}button{font-size:16px;padding:13px}}
-</style></head><body><div class="top">RT7 V4.8C 內網 / Railway 影像串流比較測試</div><div class="wrap">
-<div class="card"><b>測試目的</b><div class="hint">不使用 Node-RED、不使用 Tailscale。先測手機與 ESP32 同 Wi‑Fi 直連 <code>/api/camera/stream</code> 是否順暢，再比較 Railway 雲端串流。</div></div>
-<div class="card"><b>ESP32 IP</b><div class="ipRow"><input id="espIp" type="text" inputmode="decimal" value="192.168.0.179" placeholder="192.168.0.179"><button class="green" id="btnSave" type="button">套用 IP</button></div><div class="row"><button class="blue" id="btnDetect" type="button">讀取目前設備 IP</button><button class="gray" id="btnState" type="button">讀取狀態</button></div><div id="debug" class="debug">UI ready：本版移除 select，下方按鍵可直接點。</div></div>
-<div class="card"><div class="row"><button class="orange" id="btnLan" type="button">1. 內網直連 ESP32 串流</button><button class="green" id="btnCloud" type="button">2. Railway 雲端串流</button><button class="blue" id="btnBoth" type="button">同時比較</button><button class="red" id="btnStop" type="button">停止</button></div><div class="hint">若手機不在同一 Wi‑Fi，內網直連會失敗；一般外網使用仍走 Railway。</div></div>
-<div class="grid"><div class="card"><div class="label">內網直連 ESP32 /api/camera/stream</div><div class="videoBox"><img id="lanImg"><div id="lanEmpty" class="empty">尚未開始</div></div><div id="lanInfo" class="info"></div></div><div class="card"><div class="label">Railway /api/rt7/camera/stream.mjpg</div><div class="videoBox"><img id="cloudImg"><div id="cloudEmpty" class="empty">尚未開始</div></div><div id="cloudInfo" class="info"></div></div></div>
-<div class="card"><b>判讀方式</b><div class="hint">A. 內網直連順、Railway 慢：雲端 relay 是瓶頸。<br>B. 內網也慢：需調 ESP32 camera / Wi‑Fi / 解析度。<br>C. 內網不能開但 Railway 可開：手機不在同 Wi‑Fi，或瀏覽器擋 HTTPS 頁面載入 HTTP 私網影像。</div></div>
-<div class="card"><b>狀態</b><pre id="log">ready</pre></div></div>
-<script>
-'use strict';
-const $=id=>document.getElementById(id); let espIp='192.168.0.179';
-function log(x){$('log').textContent=(typeof x==='string'?x:JSON.stringify(x,null,2))+'\n\n'+$('log').textContent.slice(0,4000);} 
-function tap(s){$('debug').textContent=s+' @ '+new Date().toLocaleTimeString(); log(s);} 
-async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
-function saveIp(){espIp=($('espIp').value||espIp).trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');$('espIp').value=espIp;tap('ESP32 IP = '+espIp);}
-async function detectIp(){tap('讀取目前設備 IP');try{const d=await j('/api/rt7/camera/state');const ip=d?.snapshot?.ip||''; if(ip){$('espIp').value=ip; saveIp();} log(d);}catch(e){log('detect error '+e);}}
-async function loadState(){tap('讀取狀態');try{log(await j('/api/rt7/camera/stream/state'));}catch(e){log('state error '+e);}}
-function startLan(){saveIp();$('lanEmpty').style.display='none';$('lanImg').onerror=()=>{$('lanInfo').innerHTML='<span class="warn">內網直連失敗：確認同 Wi‑Fi，或瀏覽器是否擋 HTTP 私網影像。</span>';};$('lanImg').onload=()=>{$('lanInfo').innerHTML='<span class="ok">內網直連已啟動，不經 Railway。</span>';};$('lanImg').src='http://'+espIp+'/api/camera/stream?_lan='+Date.now();$('lanInfo').textContent='連線中：http://'+espIp+'/api/camera/stream';tap('start LAN');}
-async function startCloud(){tap('start Cloud');try{await j('/api/rt7/camera/stream/start');}catch(e){}$('cloudEmpty').style.display='none';$('cloudImg').onerror=()=>{$('cloudInfo').innerHTML='<span class="warn">Railway MJPEG 載入失敗</span>';};$('cloudImg').onload=()=>{$('cloudInfo').innerHTML='<span class="ok">Railway 雲端串流已啟動。</span>';};$('cloudImg').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();$('cloudInfo').textContent='連線中：/api/rt7/camera/stream.mjpg';}
-function startBoth(){startLan();startCloud();}
-async function stopAll(){$('lanImg').src='about:blank';$('cloudImg').src='about:blank';$('lanEmpty').style.display='flex';$('cloudEmpty').style.display='flex';try{await j('/api/rt7/camera/stream/stop');}catch(e){}tap('stopped');}
-function bind(){[['btnSave',saveIp],['btnDetect',detectIp],['btnState',loadState],['btnLan',startLan],['btnCloud',startCloud],['btnBoth',startBoth],['btnStop',stopAll]].forEach(([id,fn])=>{$(id).addEventListener('click',fn,{passive:false});}); document.addEventListener('click',e=>{if(e.target&&e.target.tagName==='BUTTON')tap('click '+e.target.id);},true);}
-bind(); detectIp().then(loadState);
+html,body{margin:0!important;padding:0!important;background:#f3f6f8!important;color:#17262a!important;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif!important;overflow:auto!important;touch-action:auto!important;pointer-events:auto!important}.top{background:#0d2a30;color:#fff;padding:16px;text-align:center;font-weight:900}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{position:relative!important;z-index:2!important;background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05);pointer-events:auto!important}.controls{position:relative!important;z-index:9999!important;pointer-events:auto!important}.btn,a.btn,button{display:inline-block;border:0;border-radius:12px;padding:12px 14px;margin:4px;color:#fff!important;font-weight:900;font-size:16px;text-decoration:none!important;position:relative!important;z-index:10000!important;pointer-events:auto!important;cursor:pointer!important}.blue{background:#1583d8}.green{background:#16a34a}.red{background:#dc2626}.gray{background:#475569}.orange{background:#d97706}input{font-size:18px;padding:12px;border:1px solid #9aa8b4;border-radius:10px;width:100%;box-sizing:border-box;margin:5px 0;position:relative!important;z-index:10000!important;pointer-events:auto!important;background:#fff!important}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video{position:relative!important;z-index:1!important;background:#000;min-height:260px;display:flex;align-items:center;justify-content:center;border-radius:12px;overflow:hidden;pointer-events:none!important}.video img{width:100%;height:100%;min-height:260px;object-fit:contain;pointer-events:none!important;position:relative!important;z-index:1!important}.empty{color:#fff;position:absolute;z-index:2;pointer-events:none}.label{font-weight:900;margin:8px 0;color:#7a2a19}.small{font-size:13px;color:#64748b;line-height:1.6}.ok{color:#16a34a;font-weight:900}.warn{color:#d97706;font-weight:900}pre{white-space:pre-wrap;background:#0b1220;color:#cbd5e1;border-radius:12px;padding:10px;max-height:260px;overflow:auto}body *::before,body *::after{pointer-events:none!important}@media(max-width:720px){.grid{grid-template-columns:1fr}.video{min-height:220px}.video img{min-height:220px}.btn,a.btn,button{font-size:15px;padding:11px 12px}}
+</style></head><body><div class="top">RT7 V4.8D 內網 / Railway 影像串流比較測試</div><div class="wrap">
+<div class="card"><b>測試目的</b><div class="small">不使用 Node-RED、不使用 Tailscale。先測手機與 ESP32 同 Wi‑Fi 時，直接讀 ESP32 <code>/api/camera/stream</code> 是否順暢；再比較 Railway 雲端轉發 <code>/api/rt7/camera/stream.mjpg</code>。</div></div>
+<div class="card controls"><form method="get" action="/rt7_stream_compare_test"><label><b>ESP32 IP</b></label><input name="ip" value="${esc(ip)}" autocomplete="off"><div><button class="green" type="submit" name="mode" value="lan">1. 內網直連 ESP32 串流</button><button class="blue" type="submit" name="mode" value="cloud">2. Railway 雲端串流</button><button class="orange" type="submit" name="mode" value="both">同時比較</button><a class="btn red" href="/rt7_stream_compare_test?ip=${encodeURIComponent(ip)}&mode=stop">停止</a><a class="btn gray" href="/api/rt7/camera/stream/state" target="_blank">狀態 JSON</a></div></form><div class="small">本版移除 select 與所有全頁 overlay；按鍵使用原生 form/link，不依賴 JavaScript。</div></div>
+<div class="grid"><div class="card"><div class="label">內網直連 ESP32 /api/camera/stream</div><div class="video">${showLan ? `<img src="${esc(lanUrl)}" alt="LAN stream">` : '<span class="empty">尚未開始</span>'}</div><div class="small">${showLan ? '讀取：'+esc(lanUrl) : '按「1. 內網直連 ESP32 串流」開始。'}</div></div><div class="card"><div class="label">Railway /api/rt7/camera/stream.mjpg</div><div class="video">${showCloud ? `<img src="${esc(cloudUrl)}" alt="Cloud stream">` : '<span class="empty">尚未開始</span>'}</div><div class="small">${showCloud ? '讀取：/api/rt7/camera/stream.mjpg' : '按「2. Railway 雲端串流」開始。'}</div></div></div>
+<div class="card"><b>判讀方式</b><div class="small">A. 內網直連順、Railway 慢：ESP32 攝影機正常，雲端 relay 是瓶頸。<br>B. 內網也慢：需回頭調 ESP32 camera frame size / jpeg quality / Wi‑Fi。<br>C. 內網不能開但 Railway 可開：手機不在同 Wi‑Fi 或瀏覽器擋 HTTP 私網影像。</div></div>
+<div class="card"><b>Debug</b><pre id="dbg">version=${SERVER_VERSION}\nmode=${esc(mode)}\nip=${esc(ip)}\n若按鍵仍不能按，代表不是本頁元素覆蓋，可能是瀏覽器翻譯/外掛/遠端控制浮層攔截。</pre></div>
+</div><script>
+(function(){
+  function dbg(s){var e=document.getElementById('dbg'); if(e)e.textContent=s+'\n'+e.textContent;}
+  // 強制移除常見全頁 blocker，保留本頁內容。
+  function unblock(){
+    var badWords=/overlay|backdrop|modal|mask|block|loading|fullscreen|translate|goog|popup/i;
+    document.querySelectorAll('body *').forEach(function(el){
+      if(el.closest('.wrap') || el.classList.contains('top')) return;
+      var id=(el.id||''), cls=(el.className||'');
+      var st=getComputedStyle(el);
+      if((st.position==='fixed'||st.position==='absolute') && parseInt(st.zIndex||'0',10)>1000 && badWords.test(id+' '+cls)){
+        el.style.pointerEvents='none'; el.style.display='none'; el.style.zIndex='-1';
+      }
+    });
+  }
+  unblock(); setInterval(unblock, 1500);
+  document.addEventListener('click', function(ev){
+    var p=document.elementFromPoint(ev.clientX, ev.clientY);
+    dbg('click target='+(ev.target&&ev.target.tagName)+' top='+(p?(p.tagName+'#'+(p.id||'')+'.'+(p.className||'')):'none'));
+  }, true);
+})();
 </script></body></html>`);
 });
 
