@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_4_DOOR_OPEN_QUEUE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_5_AI_VISION_QA';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -352,7 +352,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div style="width:34px"></div></header>
 <div id="audioOverlay" class="audioOverlay"><div class="audioCard"><div class="audioIcon">🔔</div><div class="audioTitle">啟用門鈴提示音</div><div class="audioText">手機瀏覽器需要先點一下，才能在有人按門鈴時自動播放 dingdong 提示音。</div><button class="audioStart" onclick="forceUnlockAudio()">點一下啟用聲音</button><div class="audioSmall">啟用後會播放一次測試提示音</div></div></div>
 <div class="deviceBar"><select id="deviceSel"><option value="">讀取設備中...</option></select></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Snapshot<br><span class="small">ESP32 POST /api/rt7/camera/snapshot</span></div><img id="stream" alt=""><div class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="refreshSnapshot(true)">更新照片</button><button class="vbtn vdark" onclick="stopVideo()">清除顯示</button></div></div></section>
+<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Snapshot<br><span class="small">ESP32 POST /api/rt7/camera/snapshot</span></div><img id="stream" alt=""><div class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="refreshSnapshot(true)">更新照片</button><button class="vbtn vblue" onclick="askVision()">問鏡頭</button><button class="vbtn vdark" onclick="stopVideo()">清除顯示</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="unlockAudio()" title="啟用提示音">🎙️</button></section>
 <section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="registerName()">＋</div>註冊</div><div class="act"><div class="circle" onclick="unlockAudio()">🎙️</div>AI語音助理</div></section>
@@ -401,6 +401,16 @@ async function testDoorbell(){const d=selectedDevice();const s=await j('/api/tes
 function registerName(){const name=($('regName')&&$('regName').value)||'gwansyan';setAnswer('註冊名稱：'+name+'（雲端版先保留原始 UI）');}
 function resetLocal(){lastCount=null;$('doorAlert').style.display='none';setDoor('本機顯示已重設');setAnswer('雲端門鈴待機中')}
 function enableAi(){setAnswer('AI 已啟用（雲端 UI）')} function disableAi(){setAnswer('AI 已關閉（雲端 UI）')} async function manualDoor(){const d=selectedDevice(); const r=await j('/api/rt7/door/open?device_id='+encodeURIComponent(d.id||'#1')); setJson(r); setDoor('開門命令已送出'); setAnswer('等待 ESP32 輪詢開門 Queue');}
+async function askVision(){
+  try{
+    setAnswer('AI Vision 分析中...');
+    const q='請用繁體中文簡短描述目前門口畫面，並判斷是否有人、是否有可疑狀況。';
+    const r=await j('/api/rt7/phase9i/vision_qa?q='+encodeURIComponent(q));
+    setJson(r);
+    if(r.ok){ setAnswer(r.answer||'Vision 完成'); }
+    else { setAnswer(r.answer||('Vision 失敗：'+(r.error||'unknown'))); }
+  }catch(e){ setAnswer('Vision 失敗：'+e.message); }
+}
 async function refreshSnapshot(manual=false){
   try{
     const s=await j('/api/rt7/camera/state');
@@ -622,14 +632,26 @@ async function transcribeAudioB64(audio_b64, mime) {
 }
 
 async function handleVisionQa(req,res) {
-  try { const q = safeString(req.query.q || req.query.question || '請問鏡頭目前看到什麼？'); res.json(await analyzeLatestSnapshot(q)); }
-  catch(e) { res.status(200).json({ok:false, mode:'VISION', error:String(e.message||e), answer:'雲端 Vision 分析失敗。'}); }
+  try {
+    const q = safeString(req.query.q || req.query.question || req.body?.q || req.body?.question || '請問鏡頭目前看到什麼？');
+    const out = await analyzeLatestSnapshot(q);
+    broadcast('vision_qa', { ok:out.ok, answer:out.answer, question:q, time:nowIso() });
+    res.json(Object.assign({ version:SERVER_VERSION }, out));
+  }
+  catch(e) { res.status(200).json({ok:false, version:SERVER_VERSION, mode:'VISION', error:String(e.message||e), answer:'雲端 Vision 分析失敗。請確認 Railway 已設定 OPENAI_API_KEY，且已先上傳 Snapshot。'}); }
 }
 app.get('/api/rt7/phase9a/vision_qa', handleVisionQa);
+app.post('/api/rt7/phase9a/vision_qa', handleVisionQa);
 app.get('/api/rt7/phase9b/vision_qa', handleVisionQa);
+app.post('/api/rt7/phase9b/vision_qa', handleVisionQa);
 app.get('/api/rt7/phase9g/vision_qa', handleVisionQa);
+app.post('/api/rt7/phase9g/vision_qa', handleVisionQa);
 app.get('/api/rt7/phase9i/vision_qa', handleVisionQa);
-app.get('/api/rt7/phase9d/vision_qa_ping', (req,res)=>res.json({ok:true, version:SERVER_VERSION, latest_snapshot:cloudState.last_snapshot}));
+app.post('/api/rt7/phase9i/vision_qa', handleVisionQa);
+app.get('/api/rt7/vision/qa', handleVisionQa);
+app.post('/api/rt7/vision/qa', handleVisionQa);
+app.get('/api/rt7/phase9d/vision_qa_ping', (req,res)=>res.json({ok:true, version:SERVER_VERSION, openai_key:!!safeString(process.env.OPENAI_API_KEY).trim(), latest_snapshot:getSnapshotMeta_(), last_vision:cloudState.last_vision}));
+app.get('/api/rt7/vision/state', (req,res)=>res.json({ok:true, version:SERVER_VERSION, openai_key:!!safeString(process.env.OPENAI_API_KEY).trim(), latest_snapshot:getSnapshotMeta_(), last_vision:cloudState.last_vision}));
 app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
   const started = Date.now();
   try {

@@ -1,7 +1,7 @@
 {
-  "name": "rt7-cloud-server-v4-3-original-ui-snapshot",
-  "version": "4.3.0",
-  "description": "RT7 Railway cloud server V4.3 original mobile UI with latest ESP32 snapshot",
+  "name": "rt7-cloud-server-v4-5-ai-vision-qa",
+  "version": "4.5.0",
+  "description": "RT7 Railway cloud server V4.5 AI Vision QA for latest ESP32 snapshot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
