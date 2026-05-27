@@ -8,14 +8,14 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/ws' });
 
-app.use(express.json({ limit: '4mb' }));
-app.use(express.urlencoded({ extended: true, limit: '4mb' }));
+app.use(express.json({ limit: '8mb' }));
+app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_5A_AI_UI_SYNC';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_6_LIVE_STREAM_BRIDGE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -352,7 +352,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div style="width:34px"></div></header>
 <div id="audioOverlay" class="audioOverlay"><div class="audioCard"><div class="audioIcon">🔔</div><div class="audioTitle">啟用門鈴提示音</div><div class="audioText">手機瀏覽器需要先點一下，才能在有人按門鈴時自動播放 dingdong 提示音。</div><button class="audioStart" onclick="forceUnlockAudio()">點一下啟用聲音</button><div class="audioSmall">啟用後會播放一次測試提示音</div></div></div>
 <div class="deviceBar"><select id="deviceSel"><option value="">讀取設備中...</option></select></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Snapshot<br><span class="small">ESP32 POST /api/rt7/camera/snapshot</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="refreshSnapshot(true)">更新照片</button><button class="vbtn vdark" onclick="stopVideo()">清除顯示</button></div></div></section>
+<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Live Stream<br><span class="small">ESP32 POST /api/rt7/camera/frame</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="aiVoiceAssistant()" title="AI語音助理">🎙️</button></section>
 <section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="registerName()">＋</div>註冊</div><div class="act"><div id="aiVoiceCircle" class="circle" onclick="aiVoiceAssistant()">🎙️</div>AI語音助理</div></section>
@@ -430,23 +430,26 @@ async function refreshSnapshot(manual=false){
     setJson(s);
     if(s.latest_url && s.snapshot){
       const t=s.snapshot.time||'';
-      if(t!==lastSnapshotTime || manual){
-        lastSnapshotTime=t;
-        $('emptyVideo').style.display='none';
-        $('stream').src=s.latest_url+'?_='+Date.now();
-        setAnswer('最新 Snapshot：'+(t?new Date(t).toLocaleTimeString():'已更新'));
-      }
+      lastSnapshotTime=t;
+      if(manual) setAnswer('最新 Snapshot：'+(t?new Date(t).toLocaleTimeString():'已更新'));
     }else if(manual){
-      $('stream').removeAttribute('src'); $('stream').src=''; $('emptyVideo').style.display='flex';
       setAnswer('尚無雲端 Snapshot，請先由 ESP32 上傳照片');
     }
   }catch(e){ if(manual) setAnswer('讀取 Snapshot 失敗：'+e.message); }
 }
-function startVideo(){refreshSnapshot(true)}
-function stopVideo(){$('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('影像顯示已清除，雲端照片仍保留')}
+async function startVideo(){
+  try{await j('/api/rt7/camera/stream/start?device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(_){}
+  $('emptyVideo').style.display='none';
+  $('stream').src='/api/rt7/camera/stream.mjpg?_='+Date.now();
+  setAnswer('Live Stream 已啟動（低 FPS 雲端橋接）');
+}
+async function stopVideo(){
+  try{await j('/api/rt7/camera/stream/stop?device_id='+encodeURIComponent((selectedDevice().id)||'#1'));}catch(_){}
+  $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('Live Stream 已停止顯示，Snapshot 仍保留');
+}
 function wsConnect(){try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='doorbell'&&m.payload){loadState(false);showDoorbell(m.payload,true);refreshSnapshot(false)} if(m.type==='snapshot'){refreshSnapshot(true)}}catch(_){}};ws.onclose=()=>setTimeout(wsConnect,3000)}catch(e){}}
 $('deviceSel').addEventListener('change',()=>{currentDevice=selectedDevice();setAnswer('已切換 '+(currentDevice.name||currentDevice.id));});
-setAudioUi(false); loadDevices().then(()=>{loadState(true);refreshSnapshot(true)}); setInterval(()=>{loadState(false);refreshSnapshot(false)},2200); wsConnect();
+setAudioUi(false); loadDevices().then(()=>{loadState(true);startVideo();refreshSnapshot(false)}); setInterval(()=>{loadState(false);refreshSnapshot(false)},3500); wsConnect();
 </script></body></html>`);
 });
 
@@ -460,6 +463,9 @@ setAudioUi(false); loadDevices().then(()=>{loadState(true);refreshSnapshot(true)
 //   2) Optional proxy: if a device has a public/tunnel URL or reachable IP, Railway proxies.
 // ============================================================================
 const SNAPSHOT_FILE = path.join(DATA_DIR, 'rt7_latest_snapshot.jpg');
+const STREAM_FRAME_FILE = path.join(DATA_DIR, 'rt7_latest_stream_frame.jpg');
+let latestStreamFrame = null;
+let liveStreamState = { ok:true, enabled:true, seq:0, bytes:0, time:null, device_id:'', ip:'', clients:0, fps_hint:'1-3fps' };
 let cloudState = {
   ai_enabled: true,
   plugins: { motion: true, face: true, doorbell: true, intercom: true },
@@ -597,6 +603,49 @@ app.post('/api/rt7/camera/snapshot_json', (req,res)=>{
   broadcast('snapshot', cloudState.last_snapshot);
   res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
 });
+
+// V4.6 Live Stream Bridge: ESP32 pushes low-FPS JPEG frames; browser reads as MJPEG.
+function acceptStreamFrame_(req, res) {
+  ensureDataDir();
+  const buf = Buffer.isBuffer(req.body) ? req.body : null;
+  if (!buf || buf.length < 16 || buf[0] !== 0xFF || buf[1] !== 0xD8) return res.status(400).json({ok:false,error:'JPEG_FRAME_REQUIRED'});
+  latestStreamFrame = Buffer.from(buf);
+  fs.writeFileSync(STREAM_FRAME_FILE, latestStreamFrame);
+  fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
+  const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'live_frame', device_id:safeString(req.query.device_id || req.headers['x-rt7-device-id'] || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
+  cloudState.last_snapshot = meta;
+  liveStreamState = Object.assign({}, liveStreamState, { ok:true, seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/api/rt7/camera/stream.mjpg' });
+  broadcast('stream_frame', liveStreamState);
+  res.json({ ok:true, version:SERVER_VERSION, frame:{ seq:liveStreamState.seq, bytes:buf.length, time:meta.time }, snapshot:meta });
+}
+app.post('/api/rt7/camera/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
+app.post('/api/rt7/camera/stream/frame', express.raw({type:['image/jpeg','image/jpg','application/octet-stream'], limit:'6mb'}), acceptStreamFrame_);
+app.get('/api/rt7/camera/stream/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, stream:liveStreamState, snapshot:getSnapshotMeta_() }));
+app.get('/api/rt7/camera/stream/start', (req,res)=>{ liveStreamState.enabled=true; const dev=getCurrentDevice(req); const deviceId=normalizeDoorCommandDeviceId_(safeString(req.query.device_id || dev.id || '#1')); const cmd=queueCommand({command:'stream_start', action:'stream_start', device_id:deviceId, message:'start live stream'}); res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, command:cmd}); });
+app.get('/api/rt7/camera/stream/stop', (req,res)=>{ liveStreamState.enabled=false; const dev=getCurrentDevice(req); const deviceId=normalizeDoorCommandDeviceId_(safeString(req.query.device_id || dev.id || '#1')); const cmd=queueCommand({command:'stream_stop', action:'stream_stop', device_id:deviceId, message:'stop live stream'}); res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, command:cmd}); });
+app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
+  res.writeHead(200, { 'Content-Type':'multipart/x-mixed-replace; boundary=rt7frame', 'Cache-Control':'no-cache, no-store, must-revalidate', 'Connection':'keep-alive', 'Pragma':'no-cache' });
+  liveStreamState.clients = (liveStreamState.clients || 0) + 1;
+  let lastSeq = -1;
+  const sendFrame = () => {
+    try {
+      let frame = latestStreamFrame;
+      if (!frame && fs.existsSync(STREAM_FRAME_FILE)) frame = fs.readFileSync(STREAM_FRAME_FILE);
+      if (!frame && fs.existsSync(SNAPSHOT_FILE)) frame = fs.readFileSync(SNAPSHOT_FILE);
+      if (!frame) return;
+      const seq = liveStreamState.seq || 0;
+      if (seq === lastSeq) return;
+      lastSeq = seq;
+      res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\n\r\n`);
+      res.write(frame);
+      res.write('\r\n');
+    } catch (e) { clearInterval(timer); try { res.end(); } catch(_){} }
+  };
+  sendFrame();
+  const timer = setInterval(sendFrame, 500);
+  req.on('close', ()=>{ clearInterval(timer); liveStreamState.clients = Math.max(0, (liveStreamState.clients || 1)-1); });
+});
+
 app.get('/api/rt7/camera/latest.jpg', (req,res)=>{ ensureDataDir(); if (!fs.existsSync(SNAPSHOT_FILE)) return res.status(404).json({ok:false,error:'NO_SNAPSHOT'}); res.type('image/jpeg').send(fs.readFileSync(SNAPSHOT_FILE)); });
 app.get('/api/rt7/camera/state', (req,res)=>{ const snap=getSnapshotMeta_(); res.json({ ok:true, version:SERVER_VERSION, snapshot:snap, latest_url: snap ? '/api/rt7/camera/latest.jpg' : '', test_page:'/rt7_snapshot_bridge_test' }); });
 app.post('/api/rt7/camera/clear', (req,res)=>{ ensureDataDir(); if (fs.existsSync(SNAPSHOT_FILE)) fs.unlinkSync(SNAPSHOT_FILE); cloudState.last_snapshot=null; const ev=appendEvent({type:'snapshot_clear', message:'Snapshot cleared'}); broadcast('snapshot_clear', ev); res.json({ok:true, event:ev}); });
@@ -788,6 +837,7 @@ const NODE_RED_MAPPING = [
   { group:'03 Device Manager', status:'done', nodered:'GET /api/rt7/device/state, POST /api/rt7/device/set, /rt7_device_manager', railway:'same API names retained; stored in data/rt7_devices.json', test:'save device IP/name and reload admin page' },
   { group:'04 Snapshot Bridge', status:'done-v4.2', nodered:'ESP32 /api/camera/snapshot via Node-RED local proxy', railway:'POST /api/rt7/camera/snapshot; POST /api/rt7/camera/snapshot_json; GET /api/rt7/camera/latest.jpg; GET /api/rt7/camera/state; GET /rt7_snapshot_bridge_test', test:'ESP32 actively uploads JPEG/base64; phone page refreshes latest image; clear endpoint works' },
   { group:'04B Original UI Snapshot', status:'done-v4.3', nodered:'Original phone UI camera block / Node-RED image refresh', railway:'GET /rt7_cloud_original_ui_doorbell now displays /api/rt7/camera/latest.jpg and auto-refreshes on snapshot WebSocket event', test:'Open original UI after ESP32 snapshot POST; verify image appears in black video area' },
+  { group:'04C Live Stream Bridge', status:'done-v4.6', nodered:'Original Node-RED MJPEG / live camera view', railway:'POST /api/rt7/camera/frame; GET /api/rt7/camera/stream.mjpg; GET /api/rt7/camera/stream/state; /rt7_cloud_original_ui_doorbell uses MJPEG live stream', test:'ESP32 pushes 1-3 FPS JPEG frames; phone UI shows low-FPS live video; Snapshot remains fallback' },
   { group:'05 Vision QA', status:'partial', nodered:'GET /api/rt7/phase9i/vision_qa', railway:'GET /api/rt7/phase9i/vision_qa uses latest uploaded snapshot + OpenAI if OPENAI_API_KEY exists', test:'Upload snapshot, ask question, verify answer' },
   { group:'06 Voice Vision Router', status:'partial', nodered:'POST /api/rt7/phase9j/voice_vision', railway:'POST /api/rt7/phase9j/voice_vision text-mode scaffold; audio upload reserved', test:'POST {text:"請問鏡頭看到什麼"}' },
   { group:'07 Door Open Queue', status:'done-v4.4', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
