@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7G_ADAPTIVE_7_10FPS_DROP_OLD_FRAME';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8_STREAM_COMPARE_LAN_CLOUD_TEST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1057,6 +1057,46 @@ app.get('/rt7_mapping', (req,res)=>{
   res.type('html').send(htmlShell('RT7 Node-RED / Railway Mapping', `${baseCss}<div class="wrap"><h1>RT7 Node-RED / Railway API 對照表</h1><p>版本：${SERVER_VERSION}</p><p><a class="btn" href="/rt7_cloud_phase10_no_nodered">回手機頁</a> <a class="btn gray" href="/api/rt7/mapping">JSON</a></p><table border="1" cellspacing="0" cellpadding="8" style="width:100%;border-collapse:collapse;background:#fff"><thead><tr><th>功能</th><th>狀態</th><th>Node-RED 原始路由</th><th>Railway 對應 API</th><th>測試</th></tr></thead><tbody>${rows}</tbody></table></div>`));
 });
 
+
+
+// -----------------------------------------------------------------------------
+// V4.8 Stream Compare Test: LAN direct stream vs Railway cloud stream.
+// Goal: keep product target no Node-RED / no Tailscale, but measure whether LAN
+// direct ESP32 MJPEG is smooth before comparing with cloud relay.
+// -----------------------------------------------------------------------------
+app.get('/rt7_stream_compare_test', (req, res) => {
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8 Stream Compare</title>
+<style>
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;margin:0;background:#f3f6f8;color:#17262a} .wrap{max-width:980px;margin:0 auto;padding:14px} .top{background:#0d2a30;color:#fff;padding:18px;text-align:center;font-weight:900} .card{background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05)} button{border:0;border-radius:12px;padding:12px 14px;margin:4px;color:#fff;font-weight:900;font-size:16px} .blue{background:#1583d8}.green{background:#16a34a}.red{background:#dc2626}.gray{background:#475569}.orange{background:#d97706} select,input{font-size:16px;padding:10px;border:1px solid #9aa8b4;border-radius:10px;width:100%;box-sizing:border-box;margin:5px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video{background:#000;min-height:260px;display:flex;align-items:center;justify-content:center;border-radius:12px;overflow:hidden}.video img{width:100%;height:100%;min-height:260px;object-fit:contain}.label{font-weight:900;margin:8px 0;color:#7a2a19}.small{font-size:13px;color:#64748b;line-height:1.6} pre{white-space:pre-wrap;background:#0b1220;color:#cbd5e1;border-radius:12px;padding:10px;max-height:260px;overflow:auto}.ok{color:#16a34a;font-weight:900}.warn{color:#d97706;font-weight:900}@media(max-width:720px){.grid{grid-template-columns:1fr}.video{min-height:220px}.video img{min-height:220px}}
+</style></head><body><div class="top">RT7 V4.8 內網 / 外網影像串流比較測試</div><div class="wrap">
+<div class="card"><b>測試目的</b><div class="small">不使用 Node-RED、不使用 Tailscale。先測手機與 ESP32 同 Wi-Fi 時，直接讀 ESP32 <code>/api/camera/stream</code> 是否順暢；再比較 Railway 雲端轉發 <code>/api/rt7/camera/stream.mjpg</code>。若內網順、外網慢，代表瓶頸在雲端轉發路徑，不是 ESP32 攝影機本身。</div></div>
+<div class="card"><label>選擇/輸入 ESP32 IP</label><select id="deviceSel"></select><input id="espIp" placeholder="例如 192.168.0.179"><div><button class="blue" onclick="loadDevices()">重新讀取設備</button><button class="green" onclick="saveIp()">套用 IP</button><button class="gray" onclick="loadState()">讀取狀態</button></div></div>
+<div class="card"><div><button class="orange" onclick="startLan()">1. 內網直連 ESP32 串流</button><button class="green" onclick="startCloud()">2. Railway 雲端串流</button><button class="blue" onclick="startBoth()">同時比較</button><button class="red" onclick="stopAll()">停止</button></div><div class="small">手機若不在同一 Wi-Fi，內網直連會失敗，這是正常。一般使用者外網仍走 Railway。</div></div>
+<div class="grid"><div class="card"><div class="label">內網直連 ESP32 /api/camera/stream</div><div class="video"><img id="lanImg"><span id="lanEmpty" style="color:#fff">尚未開始</span></div><div id="lanInfo" class="small"></div></div><div class="card"><div class="label">外網 / Railway /api/rt7/camera/stream.mjpg</div><div class="video"><img id="cloudImg"><span id="cloudEmpty" style="color:#fff">尚未開始</span></div><div id="cloudInfo" class="small"></div></div></div>
+<div class="card"><b>判讀方式</b><div class="small">A. 內網直連順、Railway 慢：ESP32 攝影機正常，雲端 relay 是瓶頸。<br>B. 內網也慢：需回頭調 ESP32 camera frame size / jpeg quality / Wi-Fi。<br>C. 內網不能開但 Railway 可開：手機不在同 Wi-Fi 或瀏覽器擋 HTTP 私網影像。</div></div>
+<div class="card"><b>狀態</b><pre id="log">ready</pre></div>
+</div><script>
+function $(id){return document.getElementById(id)}
+function log(x){$('log').textContent=(typeof x==='string'?x:JSON.stringify(x,null,2))+'\n\n'+$('log').textContent.slice(0,4000)}
+async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
+let espIp='192.168.0.179';
+async function loadDevices(){const d=await j('/api/devices');const devs=d.devices||[];$('deviceSel').innerHTML=devs.map(x=>'<option value="'+(x.ip||'')+'">'+(x.id||'')+' / '+(x.name||'')+' / '+(x.ip||'')+'</option>').join(''); if(devs[0]&&devs[0].ip){espIp=devs[0].ip;$('espIp').value=espIp;} log(d)}
+function saveIp(){espIp=($('espIp').value||$('deviceSel').value||espIp).trim().replace(/^https?:\/\//,'').replace(/\/.*/,'');$('espIp').value=espIp;log('ESP32 IP = '+espIp)}
+$('deviceSel').addEventListener('change',()=>{if($('deviceSel').value){$('espIp').value=$('deviceSel').value;saveIp();}})
+function startLan(){saveIp();$('lanEmpty').style.display='none';$('lanImg').onerror=()=>{$('lanInfo').innerHTML='<span class="warn">內網直連失敗：請確認手機與 ESP32 同 Wi-Fi，或瀏覽器是否擋 HTTP 私網影像。</span>';};$('lanImg').onload=()=>{$('lanInfo').innerHTML='<span class="ok">內網直連已啟動。</span> 這一路徑不經 Railway。';};$('lanImg').src='http://'+espIp+'/api/camera/stream?_lan='+Date.now();$('lanInfo').textContent='連線中： http://'+espIp+'/api/camera/stream';}
+async function startCloud(){await j('/api/rt7/camera/stream/start');$('cloudEmpty').style.display='none';$('cloudImg').onerror=()=>{$('cloudInfo').innerHTML='<span class="warn">Railway MJPEG 載入失敗</span>';};$('cloudImg').onload=()=>{$('cloudInfo').innerHTML='<span class="ok">Railway 雲端串流已啟動。</span>';};$('cloudImg').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();$('cloudInfo').textContent='連線中：/api/rt7/camera/stream.mjpg';}
+function startBoth(){startLan();startCloud();}
+async function stopAll(){$('lanImg').removeAttribute('src');$('lanImg').src='';$('cloudImg').removeAttribute('src');$('cloudImg').src='';$('lanEmpty').style.display='block';$('cloudEmpty').style.display='block';await j('/api/rt7/camera/stream/stop');log('stopped')}
+async function loadState(){const s=await j('/api/rt7/camera/stream/state');log(s)}
+loadDevices().then(loadState);setInterval(loadState,5000);
+</script></body></html>`);
+});
+
+app.get('/api/rt7/stream/compare/state', (req, res) => {
+  streamViewerPrune_();
+  const dev = getCurrentDevice(req);
+  res.json({ ok:true, version:SERVER_VERSION, lan:{ url: dev.base_url ? dev.base_url + '/api/camera/stream' : '', note:'手機與 ESP32 同 Wi-Fi 時測試；不經 Node-RED/Tailscale/Railway relay' }, cloud:{ url:'/api/rt7/camera/stream.mjpg', stream:liveStreamState, snapshot:getSnapshotMeta_() } });
+});
 
 wss.on('connection', (ws, req) => {
   ws.rt7Role = 'control';

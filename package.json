@@ -1,7 +1,7 @@
 {
-  "name": "rt7-cloud-server-v4-7-ws-frame-stream",
-  "version": "4.6.0",
-  "description": "RT7 Railway cloud server V4.7 WebSocket Frame Stream: ESP32 streams binary JPEG frames to Railway and phone viewer.",
+  "name": "rt7-cloud-server-v4-8-stream-compare-lan-cloud-test",
+  "version": "4.8.0",
+  "description": "RT7 Railway cloud server V4.8 stream compare test: LAN direct ESP32 MJPEG vs Railway cloud relay, no Node-RED and no Tailscale.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
