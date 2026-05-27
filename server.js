@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8G_AUTO_STREAM_NO_JS_BUTTON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F_AUTO_LAN_CLOUD_STREAM';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1146,25 +1146,27 @@ loadDevices().then(loadState);setInterval(loadState,5000);
 // ESP32 MJPEG, then falls back to Railway cloud MJPEG if LAN is unavailable.
 // -----------------------------------------------------------------------------
 app.get('/rt7_auto_stream_test', (req, res) => {
-  const ipRaw = String(req.query.ip || '192.168.0.179');
-  const ip = ipRaw.replace(/^https?:\/\//,'').replace(/\/.*$/,'').replace(/[^0-9a-zA-Z.:-]/g,'') || '192.168.0.179';
-  const mode = String(req.query.mode || 'idle');
-  const lanUrl = 'http://' + ip + '/api/camera/stream?_lan=' + Date.now();
-  const cloudUrl = '/api/rt7/camera/stream.mjpg?_cloud=' + Date.now();
-  const showLan = mode === 'lan' || mode === 'both';
-  const showCloud = mode === 'cloud' || mode === 'both' || mode === 'auto';
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 V4.8G Auto LAN/Cloud Stream</title>
-<style>
-html,body{margin:0;background:#f3f6f8;color:#17262a;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif}*{box-sizing:border-box;pointer-events:auto!important}.top{background:#0d2a30;color:#fff;text-align:center;padding:18px;font-weight:900}.wrap{max-width:960px;margin:0 auto;padding:14px}.card{background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05)}input{width:100%;font-size:18px;padding:12px;border:1px solid #8aa0b4;border-radius:10px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}.linkbtn,input[type=submit]{display:inline-block;border:0;border-radius:12px;padding:14px 16px;color:#fff;font-weight:900;font-size:17px;text-decoration:none;cursor:pointer;background:#1583d8}.green{background:#16a34a!important}.orange{background:#d97706!important}.red{background:#dc2626!important}.gray{background:#475569!important}.blue{background:#1583d8!important}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video{background:#000;min-height:280px;border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#fff;position:relative;z-index:1}.video img{width:100%;height:100%;min-height:280px;object-fit:contain;display:block;pointer-events:none!important}.label{font-weight:900;margin:8px 0;color:#7a2a19}.small{font-size:13px;color:#64748b;line-height:1.55}.badge{display:inline-block;border-radius:999px;padding:5px 10px;color:#fff;background:#64748b;font-weight:900}.ok{background:#16a34a}.cloud{background:#d97706}@media(max-width:720px){.grid{grid-template-columns:1fr}.video{min-height:220px}.video img{min-height:220px}.actions{display:block}.linkbtn,input[type=submit]{width:100%;text-align:center;margin:6px 0}}
-</style></head><body><div class="top">RT7 V4.8G 內網 / Railway 自動串流測試</div><div class="wrap">
-<div class="card"><b>這版是無 JavaScript 按鍵測試版</b><div class="small">修正 V4.8F 按鍵無反應問題：不依賴 onclick / addEventListener。按鈕改成普通連結與表單送出，所以不會被前端事件或 overlay 影響。</div></div>
-<form class="card" method="get" action="/rt7_auto_stream_test"><label><b>ESP32 IP</b></label><input name="ip" value="${ip}" autocomplete="off"><div class="actions"><input class="green" type="submit" name="mode" value="lan" formaction="/rt7_auto_stream_test"><input class="orange" type="submit" name="mode" value="cloud" formaction="/rt7_auto_stream_test"><input class="blue" type="submit" name="mode" value="both" formaction="/rt7_auto_stream_test"><a class="linkbtn red" href="/rt7_auto_stream_test?mode=idle&ip=${encodeURIComponent(ip)}">停止</a></div><div class="small">lan=內網直連 ESP32；cloud=Railway 雲端；both=同時比較。</div></form>
-<div class="card"><p>目前模式：<span class="badge ${mode==='lan'?'ok':mode==='cloud'?'cloud':''}">${mode.toUpperCase()}</span></p><div class="actions"><a class="linkbtn green" href="/rt7_auto_stream_test?mode=lan&ip=${encodeURIComponent(ip)}">1. 內網直連 ESP32</a><a class="linkbtn orange" href="/rt7_auto_stream_test?mode=cloud&ip=${encodeURIComponent(ip)}">2. Railway 雲端串流</a><a class="linkbtn blue" href="/rt7_auto_stream_test?mode=both&ip=${encodeURIComponent(ip)}">同時比較</a><a class="linkbtn gray" href="/api/rt7/camera/stream/state" target="_blank">Railway 串流狀態</a></div></div>
-<div class="grid"><div class="card"><div class="label">內網直連 ESP32 /api/camera/stream</div><div class="video">${showLan?`<img src="${lanUrl}" alt="LAN stream">`:'尚未開始'}</div><div class="small">${showLan?'正在讀：'+lanUrl:'按「內網直連 ESP32」測試。'}</div></div><div class="card"><div class="label">Railway 雲端 /api/rt7/camera/stream.mjpg</div><div class="video">${showCloud?`<img src="${cloudUrl}" alt="Cloud stream">`:'尚未開始'}</div><div class="small">${showCloud?'正在讀：'+cloudUrl:'按「Railway 雲端串流」測試。'}</div></div></div>
-<div class="card"><b>判讀</b><div class="small">內網順、雲端慢：ESP32 攝影機正常，雲端 relay 是瓶頸。這符合目前測試結果。產品版可採 Hybrid：在家自動內網直連，外網自動用 Railway 低 FPS。</div></div>
-</div></body></html>`);
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8F Auto LAN/Cloud Stream</title>
+<style>body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;margin:0;background:#f5f7fb;color:#17262a}.wrap{max-width:720px;margin:0 auto;padding:14px}.top{background:#0d2a30;color:#fff;padding:18px;text-align:center;font-weight:900}.card{background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0}.video{background:#000;aspect-ratio:4/3;border-radius:14px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#fff}.video img{width:100%;height:100%;object-fit:contain;pointer-events:none}.btn{width:100%;border:0;border-radius:12px;padding:14px;margin:6px 0;color:#fff;font-weight:900;font-size:18px;background:#0b84d8}.red{background:#dc2626}.green{background:#16a34a}.orange{background:#d97706}input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #9aa8b4;border-radius:10px;font-size:18px}.badge{display:inline-block;border-radius:999px;padding:5px 10px;color:#fff;background:#64748b;font-weight:900}.lan{background:#16a34a}.cloud{background:#d97706}.small{font-size:13px;color:#64748b;line-height:1.55}pre{white-space:pre-wrap;background:#0b1220;color:#d8f2ff;border-radius:12px;padding:10px;max-height:260px;overflow:auto}</style></head><body><div class="top">RT7 V4.8F 自動內網/雲端串流</div><div class="wrap">
+<div class="card"><b>ESP32 IP</b><input id="ip" value="192.168.0.179"><div class="small">在家同 Wi-Fi 會自動直連 ESP32；外網或失敗時自動切 Railway 雲端。</div></div>
+<div class="card"><button class="btn green" id="startBtn">開始影像（自動判斷）</button><button class="btn red" id="stopBtn">停止影像</button><p>目前模式：<span id="mode" class="badge">AUTO</span></p></div>
+<div class="video"><img id="img"><span id="empty">尚未開始</span></div>
+<div class="card"><b>說明</b><div class="small">LAN = 手機直接讀 ESP32 <code>/api/camera/stream</code>，流暢。CLOUD = Railway <code>/api/rt7/camera/stream.mjpg</code>，遠端可用但 FPS 較低。</div></div>
+<pre id="log">ready</pre></div><script>
+const $=id=>document.getElementById(id); let wanted=false;
+function log(s){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+s+'\n'+$('log').textContent.slice(0,3000)}
+async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
+function setMode(m){$('mode').textContent=m;$('mode').className='badge '+(m==='LAN'?'lan':m==='CLOUD'?'cloud':'')}
+function lanUrl(){return 'http://'+$('ip').value.trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'')+'/api/camera/stream'}
+function probe(url,ms){return new Promise(resolve=>{const im=new Image();let done=false;const fin=ok=>{if(done)return;done=true;try{im.src=''}catch(e){}resolve(ok)};im.onload=()=>fin(true);im.onerror=()=>fin(false);setTimeout(()=>fin(false),ms||2600);im.src=url+'?_probe='+Date.now();});}
+async function cloud(){await j('/api/rt7/camera/stream/start');$('empty').style.display='none';$('img').onerror=()=>log('Cloud MJPEG error');$('img').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();setMode('CLOUD');log('CLOUD mode: Railway remote stream');}
+async function lan(url){$('empty').style.display='none';$('img').onerror=()=>{log('LAN lost -> CLOUD fallback');cloud();};$('img').src=url+'?_lan='+Date.now();setMode('LAN');log('LAN mode: direct ESP32 stream '+url);}
+async function start(){wanted=true;setMode('AUTO');log('probe LAN...');const u=lanUrl();if(await probe(u,2600)) await lan(u); else await cloud();}
+async function stop(){wanted=false;$('img').removeAttribute('src');$('img').src='';$('empty').style.display='block';setMode('AUTO');await j('/api/rt7/camera/stream/stop');log('stopped')}
+$('startBtn').addEventListener('click',start);$('stopBtn').addEventListener('click',stop);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&wanted)start();});
+</script></body></html>`);
 });
-
 app.get('/api/rt7/stream/compare/state', (req, res) => {
   streamViewerPrune_();
   const dev = getCurrentDevice(req);
