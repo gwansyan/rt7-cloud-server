@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F6_INTERNAL_ERROR_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F7_INTERNAL_ERROR_FIX2';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -113,6 +113,63 @@ let doorbellState = {
   count: 0,
   last: null
 };
+
+// ---------- V4.8F7 restored shared runtime state ----------
+const SNAPSHOT_FILE = path.join(DATA_DIR, 'latest.jpg');
+const STREAM_FRAME_FILE = path.join(DATA_DIR, 'latest_stream_frame.jpg');
+let latestStreamFrame = null;
+let rt7MjpegCongestUntilMs = 0;
+const RT7_STREAM_FAST_MS = 100;
+const RT7_STREAM_STABLE_MS = 140;
+const RT7_STREAM_IDLE_MS = 1000;
+const RT7_VIEWER_ACTIVE_TTL_MS = 12000;
+const streamViewers = new Map();
+let liveStreamState = {
+  ok: true,
+  enabled: true,
+  transport: 'auto_lan_cloud',
+  fps_mode: 'idle',
+  adaptive_mode: 'idle_1fps',
+  desired_interval_ms: RT7_STREAM_IDLE_MS,
+  seq: 0,
+  bytes: 0,
+  time: null,
+  viewer_count: 0,
+  clients: 0
+};
+let cloudState = {
+  current_device_id: '#1',
+  ai_enabled: false,
+  plugins: { motion:true, face:true, doorbell:true, intercom:true },
+  last_snapshot: null,
+  last_vision: null
+};
+function getCurrentDevice(req) {
+  const devices = readDevices();
+  const qid = safeString(req?.query?.device_id || req?.query?.device || '').trim();
+  const id = qid || cloudState.current_device_id || '#1';
+  let dev = devices.find(d => d.id === id) || devices.find(d => d.id === '#1') || devices[0] || { id:'#1', name:'RT7 ESP32-S3-CAM', ip:'192.168.0.179' };
+  if (!dev.ip) dev = Object.assign({}, dev, { ip:'192.168.0.179' });
+  dev.base_url = /^https?:\/\//i.test(dev.ip) ? dev.ip.replace(/\/$/,'') : 'http://' + dev.ip;
+  return dev;
+}
+async function proxyToEsp(req, res, espPath, method='GET') {
+  const dev = getCurrentDevice(req);
+  const url = dev.base_url + espPath + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '');
+  try {
+    const opt = { method, headers: { 'Content-Type': req.headers['content-type'] || 'text/plain' } };
+    if (method !== 'GET' && method !== 'HEAD') opt.body = typeof req.body === 'string' ? req.body : (Buffer.isBuffer(req.body) ? req.body : JSON.stringify(req.body || {}));
+    const r = await fetch(url, opt);
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.status(r.status);
+    const ct = r.headers.get('content-type');
+    if (ct) res.setHeader('content-type', ct);
+    res.send(buf);
+  } catch (e) {
+    res.status(502).json({ ok:false, error:'ESP_PROXY_FAILED', url, message:String(e && e.message || e) });
+  }
+}
+
 
 function registerOrUpdateDevice(dev) {
   const devices = readDevices();

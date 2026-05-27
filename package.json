@@ -1,7 +1,7 @@
 {
-  "name": "rt7-cloud-server-v4-8f6-internal-error-fix",
-  "version": "4.8.6",
-  "description": "RT7 V4.8F6 Auto LAN/Cloud stream internal server error fix; no overlay mobile page.",
+  "name": "rt7-cloud-server-v4-8f7-internal-error-fix2",
+  "version": "4.8.7",
+  "description": "RT7 V4.8F7 auto LAN/cloud stream, fixes Internal Server Error and restores runtime state.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
