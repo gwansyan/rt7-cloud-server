@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7D_NATIVE_MJPEG_FALLBACK';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_7E_WS_UPLOAD_NATIVE_MJPEG_7FPS';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -360,7 +360,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div style="width:34px"></div></header>
 <div id="audioOverlay" class="audioOverlay"><div class="audioCard"><div class="audioIcon">🔔</div><div class="audioTitle">啟用門鈴提示音</div><div class="audioText">手機瀏覽器需要先點一下，才能在有人按門鈴時自動播放 dingdong 提示音。</div><button class="audioStart" onclick="forceUnlockAudio()">點一下啟用聲音</button><div class="audioSmall">啟用後會播放一次測試提示音</div></div></div>
 <div class="deviceBar"><select id="deviceSel"><option value="">讀取設備中...</option></select></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Live Stream<br><span class="small">ESP32 POST /api/rt7/camera/frame</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
+<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Live Stream<br><span class="small">ESP32 WebSocket upload，HTTP POST fallback</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="aiVoiceAssistant()" title="AI語音助理">🎙️</button></section>
 <section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="registerName()">＋</div>註冊</div><div class="act"><div id="aiVoiceCircle" class="circle" onclick="aiVoiceAssistant()">🎙️</div>AI語音助理</div></section>
@@ -537,14 +537,14 @@ async function startVideo(){
     img.onload=()=>{ try{$('emptyVideo').style.display='none';}catch(e){} };
     img.src='/api/rt7/camera/stream.mjpg?_native='+Date.now();
   }
-  setAnswer('Native MJPEG 串流已啟動：使用瀏覽器原生解碼，避免 WebSocket JPEG 黑畫面');
+  setAnswer('WS Upload + Native MJPEG 7FPS 串流已啟動：ESP32 用 WebSocket 上傳，手機用瀏覽器原生 MJPEG 解碼');
   startViewerHeartbeat();
 }
 async function stopVideo(){
   wantedVideo = false;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','0');
   await viewerPing('stop');
-  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('MJPEG 影像已停止顯示，ESP32 降為低 FPS 待機');
+  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('MJPEG 影像已停止顯示，ESP32 降為 1FPS 待機');
 }
 function startViewerHeartbeat(){
   if(viewerPingTimer) clearInterval(viewerPingTimer);
@@ -558,7 +558,7 @@ async function restoreVideo(reason){
     closeFrameWs();
     const img=$('stream');
     if(img) img.src='/api/rt7/camera/stream.mjpg?_restore='+Date.now();
-    setAnswer('回前景：Native MJPEG 影像串流自動恢復（'+reason+'）');
+    setAnswer('回前景：WS Upload + Native MJPEG 影像串流自動恢復（'+reason+'）');
   }
 }
 async function unlockWakeLock(){
@@ -1026,7 +1026,7 @@ const NODE_RED_MAPPING = [
   { group:'03 Device Manager', status:'done', nodered:'GET /api/rt7/device/state, POST /api/rt7/device/set, /rt7_device_manager', railway:'same API names retained; stored in data/rt7_devices.json', test:'save device IP/name and reload admin page' },
   { group:'04 Snapshot Bridge', status:'done-v4.2', nodered:'ESP32 /api/camera/snapshot via Node-RED local proxy', railway:'POST /api/rt7/camera/snapshot; POST /api/rt7/camera/snapshot_json; GET /api/rt7/camera/latest.jpg; GET /api/rt7/camera/state; GET /rt7_snapshot_bridge_test', test:'ESP32 actively uploads JPEG/base64; phone page refreshes latest image; clear endpoint works' },
   { group:'04B Original UI Snapshot', status:'done-v4.3', nodered:'Original phone UI camera block / Node-RED image refresh', railway:'GET /rt7_cloud_original_ui_doorbell now displays /api/rt7/camera/latest.jpg and auto-refreshes on snapshot WebSocket event', test:'Open original UI after ESP32 snapshot POST; verify image appears in black video area' },
-  { group:'04C Live Stream Bridge', status:'done-v4.6b-3fps', nodered:'Original Node-RED MJPEG / live camera view', railway:'POST /api/rt7/camera/frame; GET /api/rt7/camera/stream.mjpg; GET /api/rt7/camera/stream/state; /rt7_cloud_original_ui_doorbell uses MJPEG live stream', test:'ESP32 pushes about 3 FPS JPEG frames; phone UI shows smoother low-FPS live video; Snapshot remains fallback' },
+  { group:'04C Live Stream Bridge', status:'done-v4.7e-ws-upload-native-mjpeg-7fps', nodered:'Original Node-RED MJPEG / live camera view', railway:'ESP32 WebSocket binary JPEG upload to /ws; HTTP POST /api/rt7/camera/frame fallback; GET /api/rt7/camera/stream.mjpg native browser MJPEG output; /rt7_cloud_original_ui_doorbell uses native MJPEG live stream', test:'ESP32 targets about 7 FPS via WebSocket upload; phone UI uses native MJPEG for Android Chrome compatibility; Snapshot remains fallback' },
   { group:'05 Vision QA', status:'partial', nodered:'GET /api/rt7/phase9i/vision_qa', railway:'GET /api/rt7/phase9i/vision_qa uses latest uploaded snapshot + OpenAI if OPENAI_API_KEY exists', test:'Upload snapshot, ask question, verify answer' },
   { group:'06 Voice Vision Router', status:'partial', nodered:'POST /api/rt7/phase9j/voice_vision', railway:'POST /api/rt7/phase9j/voice_vision text-mode scaffold; audio upload reserved', test:'POST {text:"請問鏡頭看到什麼"}' },
   { group:'07 Door Open Queue', status:'done-v4.4', nodered:'GET /api/rt7/phase9l/door/open direct local ESP32 request', railway:'GET /api/rt7/phase9l/door/open queues command; ESP32 polls /api/rt7/device/commands', test:'GET door/open then GET device/commands' },
