@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8D_FORCE_REMOVE_BLOCK_LAYER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F_AUTO_LAN_CLOUD_STREAM';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -360,7 +360,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div style="width:34px"></div></header>
 <div id="audioOverlay" class="audioOverlay"><div class="audioCard"><div class="audioIcon">🔔</div><div class="audioTitle">啟用門鈴提示音</div><div class="audioText">手機瀏覽器需要先點一下，才能在有人按門鈴時自動播放 dingdong 提示音。</div><button class="audioStart" onclick="forceUnlockAudio()">點一下啟用聲音</button><div class="audioSmall">啟用後會播放一次測試提示音</div></div></div>
 <div class="deviceBar"><select id="deviceSel"><option value="">讀取設備中...</option></select></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">等待雲端 Live Stream<br><span class="small">ESP32 WebSocket upload，HTTP POST fallback</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div class="badge live">LIVE</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
+<section class="video"><div id="emptyVideo" class="emptyVideo">等待影像串流<br><span class="small">自動判斷：內網直連 / Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle">IDLE</div><div id="streamModeBadge" class="badge live">AUTO</div><div class="videoBtns"><div class="leftBtns"><button class="vbtn vblue" onclick="enableAi()">啟用 AI</button><button class="vbtn vred" onclick="disableAi()">關閉 AI</button></div><div class="rightBtns"><button class="vbtn vdark" onclick="startVideo()">開始影像</button><button class="vbtn vdark" onclick="stopVideo()">停止影像</button></div></div></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">雲端門鈴待機中</span></div><div class="door">門鈴：<span id="doorText">等待事件</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="unlockBtn" class="bigMic" onclick="aiVoiceAssistant()" title="AI語音助理">🎙️</button></section>
 <section class="actions"><div class="act"><div class="circle" onclick="manualDoor()">🚪</div>開門</div><div class="act"><div class="circle">👥</div>名單</div><div class="act"><div class="circle">◼</div>對講結束</div><div class="act"><div class="circle" onclick="registerName()">＋</div>註冊</div><div class="act"><div id="aiVoiceCircle" class="circle" onclick="aiVoiceAssistant()">🎙️</div>AI語音助理</div></section>
@@ -524,27 +524,73 @@ function wsFrameConnect(){
   frameWs.onclose=()=>{ if(wantedVideo && document.visibilityState==='visible'){ clearTimeout(frameWsRetry); frameWsRetry=setTimeout(wsFrameConnect,1200); } };
   frameWs.onerror=()=>{ try{frameWs.close();}catch(e){} };
 }
-async function startVideo(){
-  wantedVideo = true;
-  localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','1');
+function setStreamModeBadge_(txt, cls){
+  const b=$('streamModeBadge');
+  if(!b) return;
+  b.textContent=txt||'AUTO';
+  b.style.background = cls==='lan' ? '#16a34a' : (cls==='cloud' ? '#d97706' : '#ef2b24');
+}
+function lanStreamUrl_(){
+  const d=selectedDevice();
+  const ip=(d.ip||'').trim();
+  if(!ip) return '';
+  return 'http://'+ip.replace(/^https?:\/\//,'').replace(/\/.*$/,'')+'/api/camera/stream';
+}
+function probeLanStream_(url, ms){
+  return new Promise(resolve=>{
+    if(!url) return resolve(false);
+    const probe=new Image();
+    let done=false;
+    const finish=(ok)=>{ if(done) return; done=true; try{probe.src='';}catch(e){} resolve(!!ok); };
+    probe.onload=()=>finish(true);
+    probe.onerror=()=>finish(false);
+    setTimeout(()=>finish(false), ms||2600);
+    probe.src=url+'?_probe='+Date.now();
+  });
+}
+async function startCloudStream_(){
   await viewerPing(document.visibilityState==='visible'?'visible':'hidden');
-  closeFrameWs();
-  revokeLastFrameUrl_();
+  try{ await j('/api/rt7/camera/stream/start'); }catch(e){}
   const img=$('stream');
   $('emptyVideo').style.display='none';
   if(img){
-    img.onerror=()=>{ setAnswer('MJPEG 顯示失敗，改讀 latest.jpg'); img.src='/api/rt7/camera/latest.jpg?_fallback='+Date.now(); };
+    img.onerror=()=>{ setAnswer('雲端 MJPEG 顯示失敗，改讀 latest.jpg'); img.src='/api/rt7/camera/latest.jpg?_fallback='+Date.now(); };
     img.onload=()=>{ try{$('emptyVideo').style.display='none';}catch(e){} };
-    img.src='/api/rt7/camera/stream.mjpg?_native='+Date.now();
+    img.src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();
   }
-  setAnswer('WS Upload + Native MJPEG 10FPS_TEST 串流已啟動：ESP32 用 WebSocket 上傳，手機用瀏覽器原生 MJPEG 解碼');
+  setStreamModeBadge_('CLOUD','cloud');
+  setAnswer('雲端遠端影像：手機不在內網或內網直連失敗，改用 Railway 穩定串流');
+}
+async function startLanStream_(url){
+  try{ await viewerPing('stop'); }catch(e){}
+  const img=$('stream');
+  $('emptyVideo').style.display='none';
+  if(img){
+    img.onerror=async ()=>{ setAnswer('內網直連中斷，切換 Railway 雲端影像...'); await startCloudStream_(); };
+    img.onload=()=>{ try{$('emptyVideo').style.display='none';}catch(e){} };
+    img.src=url+'?_lan='+Date.now();
+  }
+  setStreamModeBadge_('LAN','lan');
+  setAnswer('內網直連影像：手機與 ESP32 在同網路，直接讀取 ESP32 串流，畫面較流暢');
+}
+async function startVideo(){
+  wantedVideo = true;
+  localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','1');
+  closeFrameWs();
+  revokeLastFrameUrl_();
+  setStreamModeBadge_('AUTO','cloud');
+  setAnswer('自動判斷影像路徑中：先測內網 ESP32，失敗才走 Railway 雲端...');
+  const lanUrl=lanStreamUrl_();
+  const ok=await probeLanStream_(lanUrl,2600);
+  if(ok){ await startLanStream_(lanUrl); }
+  else { await startCloudStream_(); }
   startViewerHeartbeat();
 }
 async function stopVideo(){
   wantedVideo = false;
   localStorage.setItem('RT7_CLOUD_WANTED_VIDEO','0');
   await viewerPing('stop');
-  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setAnswer('MJPEG 影像已停止顯示，ESP32 降為 1FPS 待機');
+  closeFrameWs(); revokeLastFrameUrl_(); $('stream').removeAttribute('src');$('stream').src='';$('emptyVideo').style.display='flex';setStreamModeBadge_('AUTO','cloud');setAnswer('影像已停止顯示；若使用雲端路徑，ESP32 降為 1FPS 待機');
 }
 function startViewerHeartbeat(){
   if(viewerPingTimer) clearInterval(viewerPingTimer);
@@ -557,8 +603,8 @@ async function restoreVideo(reason){
     $('emptyVideo').style.display='none';
     closeFrameWs();
     const img=$('stream');
-    if(img) img.src='/api/rt7/camera/stream.mjpg?_restore='+Date.now();
-    setAnswer('回前景：WS Upload + Native MJPEG 影像串流自動恢復（'+reason+'）');
+    if(img){ startVideo(); }
+    setAnswer('回前景：自動判斷並恢復內網/雲端影像（'+reason+'）');
   }
 }
 async function unlockWakeLock(){
@@ -1064,53 +1110,63 @@ app.get('/rt7_mapping', (req,res)=>{
 // Goal: keep product target no Node-RED / no Tailscale, but measure whether LAN
 // direct ESP32 MJPEG is smooth before comparing with cloud relay.
 // -----------------------------------------------------------------------------
-
-// -----------------------------------------------------------------------------
-// V4.8D Stream Compare Test: FORCE REMOVE BLOCK LAYER
-// No-JS link/form UI: avoids transparent overlay / select / inline onclick problems.
-// Query params drive the page: ?ip=192.168.0.179&mode=lan|cloud|both|stop
-// -----------------------------------------------------------------------------
 app.get('/rt7_stream_compare_test', (req, res) => {
-  const ip = safeString(req.query.ip || '192.168.0.179').replace(/^https?:\/\//,'').replace(/\/.*$/,'') || '192.168.0.179';
-  const mode = safeString(req.query.mode || '');
-  const lanUrl = `http://${ip}/api/camera/stream?_lan=${Date.now()}`;
-  const cloudUrl = `/api/rt7/camera/stream.mjpg?_cloud=${Date.now()}`;
-  const showLan = mode === 'lan' || mode === 'both';
-  const showCloud = mode === 'cloud' || mode === 'both';
-  const esc = (x) => String(x || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8D Compare</title>
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8 Stream Compare</title>
 <style>
-html,body{margin:0!important;padding:0!important;background:#f3f6f8!important;color:#17262a!important;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif!important;overflow:auto!important;touch-action:auto!important;pointer-events:auto!important}.top{background:#0d2a30;color:#fff;padding:16px;text-align:center;font-weight:900}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{position:relative!important;z-index:2!important;background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05);pointer-events:auto!important}.controls{position:relative!important;z-index:9999!important;pointer-events:auto!important}.btn,a.btn,button{display:inline-block;border:0;border-radius:12px;padding:12px 14px;margin:4px;color:#fff!important;font-weight:900;font-size:16px;text-decoration:none!important;position:relative!important;z-index:10000!important;pointer-events:auto!important;cursor:pointer!important}.blue{background:#1583d8}.green{background:#16a34a}.red{background:#dc2626}.gray{background:#475569}.orange{background:#d97706}input{font-size:18px;padding:12px;border:1px solid #9aa8b4;border-radius:10px;width:100%;box-sizing:border-box;margin:5px 0;position:relative!important;z-index:10000!important;pointer-events:auto!important;background:#fff!important}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video{position:relative!important;z-index:1!important;background:#000;min-height:260px;display:flex;align-items:center;justify-content:center;border-radius:12px;overflow:hidden;pointer-events:none!important}.video img{width:100%;height:100%;min-height:260px;object-fit:contain;pointer-events:none!important;position:relative!important;z-index:1!important}.empty{color:#fff;position:absolute;z-index:2;pointer-events:none}.label{font-weight:900;margin:8px 0;color:#7a2a19}.small{font-size:13px;color:#64748b;line-height:1.6}.ok{color:#16a34a;font-weight:900}.warn{color:#d97706;font-weight:900}pre{white-space:pre-wrap;background:#0b1220;color:#cbd5e1;border-radius:12px;padding:10px;max-height:260px;overflow:auto}body *::before,body *::after{pointer-events:none!important}@media(max-width:720px){.grid{grid-template-columns:1fr}.video{min-height:220px}.video img{min-height:220px}.btn,a.btn,button{font-size:15px;padding:11px 12px}}
-</style></head><body><div class="top">RT7 V4.8D 內網 / Railway 影像串流比較測試</div><div class="wrap">
-<div class="card"><b>測試目的</b><div class="small">不使用 Node-RED、不使用 Tailscale。先測手機與 ESP32 同 Wi‑Fi 時，直接讀 ESP32 <code>/api/camera/stream</code> 是否順暢；再比較 Railway 雲端轉發 <code>/api/rt7/camera/stream.mjpg</code>。</div></div>
-<div class="card controls"><form method="get" action="/rt7_stream_compare_test"><label><b>ESP32 IP</b></label><input name="ip" value="${esc(ip)}" autocomplete="off"><div><button class="green" type="submit" name="mode" value="lan">1. 內網直連 ESP32 串流</button><button class="blue" type="submit" name="mode" value="cloud">2. Railway 雲端串流</button><button class="orange" type="submit" name="mode" value="both">同時比較</button><a class="btn red" href="/rt7_stream_compare_test?ip=${encodeURIComponent(ip)}&mode=stop">停止</a><a class="btn gray" href="/api/rt7/camera/stream/state" target="_blank">狀態 JSON</a></div></form><div class="small">本版移除 select 與所有全頁 overlay；按鍵使用原生 form/link，不依賴 JavaScript。</div></div>
-<div class="grid"><div class="card"><div class="label">內網直連 ESP32 /api/camera/stream</div><div class="video">${showLan ? `<img src="${esc(lanUrl)}" alt="LAN stream">` : '<span class="empty">尚未開始</span>'}</div><div class="small">${showLan ? '讀取：'+esc(lanUrl) : '按「1. 內網直連 ESP32 串流」開始。'}</div></div><div class="card"><div class="label">Railway /api/rt7/camera/stream.mjpg</div><div class="video">${showCloud ? `<img src="${esc(cloudUrl)}" alt="Cloud stream">` : '<span class="empty">尚未開始</span>'}</div><div class="small">${showCloud ? '讀取：/api/rt7/camera/stream.mjpg' : '按「2. Railway 雲端串流」開始。'}</div></div></div>
-<div class="card"><b>判讀方式</b><div class="small">A. 內網直連順、Railway 慢：ESP32 攝影機正常，雲端 relay 是瓶頸。<br>B. 內網也慢：需回頭調 ESP32 camera frame size / jpeg quality / Wi‑Fi。<br>C. 內網不能開但 Railway 可開：手機不在同 Wi‑Fi 或瀏覽器擋 HTTP 私網影像。</div></div>
-<div class="card"><b>Debug</b><pre id="dbg">version=${SERVER_VERSION}\nmode=${esc(mode)}\nip=${esc(ip)}\n若按鍵仍不能按，代表不是本頁元素覆蓋，可能是瀏覽器翻譯/外掛/遠端控制浮層攔截。</pre></div>
+body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;margin:0;background:#f3f6f8;color:#17262a} .wrap{max-width:980px;margin:0 auto;padding:14px} .top{background:#0d2a30;color:#fff;padding:18px;text-align:center;font-weight:900} .card{background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0;box-shadow:0 2px 10px rgba(0,0,0,.05)} button{border:0;border-radius:12px;padding:12px 14px;margin:4px;color:#fff;font-weight:900;font-size:16px} .blue{background:#1583d8}.green{background:#16a34a}.red{background:#dc2626}.gray{background:#475569}.orange{background:#d97706} select,input{font-size:16px;padding:10px;border:1px solid #9aa8b4;border-radius:10px;width:100%;box-sizing:border-box;margin:5px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video{background:#000;min-height:260px;display:flex;align-items:center;justify-content:center;border-radius:12px;overflow:hidden}.video img{width:100%;height:100%;min-height:260px;object-fit:contain}.label{font-weight:900;margin:8px 0;color:#7a2a19}.small{font-size:13px;color:#64748b;line-height:1.6} pre{white-space:pre-wrap;background:#0b1220;color:#cbd5e1;border-radius:12px;padding:10px;max-height:260px;overflow:auto}.ok{color:#16a34a;font-weight:900}.warn{color:#d97706;font-weight:900}@media(max-width:720px){.grid{grid-template-columns:1fr}.video{min-height:220px}.video img{min-height:220px}}
+</style></head><body><div class="top">RT7 V4.8 內網 / 外網影像串流比較測試</div><div class="wrap">
+<div class="card"><b>測試目的</b><div class="small">不使用 Node-RED、不使用 Tailscale。先測手機與 ESP32 同 Wi-Fi 時，直接讀 ESP32 <code>/api/camera/stream</code> 是否順暢；再比較 Railway 雲端轉發 <code>/api/rt7/camera/stream.mjpg</code>。若內網順、外網慢，代表瓶頸在雲端轉發路徑，不是 ESP32 攝影機本身。</div></div>
+<div class="card"><label>選擇/輸入 ESP32 IP</label><select id="deviceSel"></select><input id="espIp" placeholder="例如 192.168.0.179"><div><button class="blue" onclick="loadDevices()">重新讀取設備</button><button class="green" onclick="saveIp()">套用 IP</button><button class="gray" onclick="loadState()">讀取狀態</button></div></div>
+<div class="card"><div><button class="orange" onclick="startLan()">1. 內網直連 ESP32 串流</button><button class="green" onclick="startCloud()">2. Railway 雲端串流</button><button class="blue" onclick="startBoth()">同時比較</button><button class="red" onclick="stopAll()">停止</button></div><div class="small">手機若不在同一 Wi-Fi，內網直連會失敗，這是正常。一般使用者外網仍走 Railway。</div></div>
+<div class="grid"><div class="card"><div class="label">內網直連 ESP32 /api/camera/stream</div><div class="video"><img id="lanImg"><span id="lanEmpty" style="color:#fff">尚未開始</span></div><div id="lanInfo" class="small"></div></div><div class="card"><div class="label">外網 / Railway /api/rt7/camera/stream.mjpg</div><div class="video"><img id="cloudImg"><span id="cloudEmpty" style="color:#fff">尚未開始</span></div><div id="cloudInfo" class="small"></div></div></div>
+<div class="card"><b>判讀方式</b><div class="small">A. 內網直連順、Railway 慢：ESP32 攝影機正常，雲端 relay 是瓶頸。<br>B. 內網也慢：需回頭調 ESP32 camera frame size / jpeg quality / Wi-Fi。<br>C. 內網不能開但 Railway 可開：手機不在同 Wi-Fi 或瀏覽器擋 HTTP 私網影像。</div></div>
+<div class="card"><b>狀態</b><pre id="log">ready</pre></div>
 </div><script>
-(function(){
-  function dbg(s){var e=document.getElementById('dbg'); if(e)e.textContent=s+'\n'+e.textContent;}
-  // 強制移除常見全頁 blocker，保留本頁內容。
-  function unblock(){
-    var badWords=/overlay|backdrop|modal|mask|block|loading|fullscreen|translate|goog|popup/i;
-    document.querySelectorAll('body *').forEach(function(el){
-      if(el.closest('.wrap') || el.classList.contains('top')) return;
-      var id=(el.id||''), cls=(el.className||'');
-      var st=getComputedStyle(el);
-      if((st.position==='fixed'||st.position==='absolute') && parseInt(st.zIndex||'0',10)>1000 && badWords.test(id+' '+cls)){
-        el.style.pointerEvents='none'; el.style.display='none'; el.style.zIndex='-1';
-      }
-    });
-  }
-  unblock(); setInterval(unblock, 1500);
-  document.addEventListener('click', function(ev){
-    var p=document.elementFromPoint(ev.clientX, ev.clientY);
-    dbg('click target='+(ev.target&&ev.target.tagName)+' top='+(p?(p.tagName+'#'+(p.id||'')+'.'+(p.className||'')):'none'));
-  }, true);
-})();
+function $(id){return document.getElementById(id)}
+function log(x){$('log').textContent=(typeof x==='string'?x:JSON.stringify(x,null,2))+'\n\n'+$('log').textContent.slice(0,4000)}
+async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
+let espIp='192.168.0.179';
+async function loadDevices(){const d=await j('/api/devices');const devs=d.devices||[];$('deviceSel').innerHTML=devs.map(x=>'<option value="'+(x.ip||'')+'">'+(x.id||'')+' / '+(x.name||'')+' / '+(x.ip||'')+'</option>').join(''); if(devs[0]&&devs[0].ip){espIp=devs[0].ip;$('espIp').value=espIp;} log(d)}
+function saveIp(){espIp=($('espIp').value||$('deviceSel').value||espIp).trim().replace(/^https?:\/\//,'').replace(/\/.*/,'');$('espIp').value=espIp;log('ESP32 IP = '+espIp)}
+$('deviceSel').addEventListener('change',()=>{if($('deviceSel').value){$('espIp').value=$('deviceSel').value;saveIp();}})
+function startLan(){saveIp();$('lanEmpty').style.display='none';$('lanImg').onerror=()=>{$('lanInfo').innerHTML='<span class="warn">內網直連失敗：請確認手機與 ESP32 同 Wi-Fi，或瀏覽器是否擋 HTTP 私網影像。</span>';};$('lanImg').onload=()=>{$('lanInfo').innerHTML='<span class="ok">內網直連已啟動。</span> 這一路徑不經 Railway。';};$('lanImg').src='http://'+espIp+'/api/camera/stream?_lan='+Date.now();$('lanInfo').textContent='連線中： http://'+espIp+'/api/camera/stream';}
+async function startCloud(){await j('/api/rt7/camera/stream/start');$('cloudEmpty').style.display='none';$('cloudImg').onerror=()=>{$('cloudInfo').innerHTML='<span class="warn">Railway MJPEG 載入失敗</span>';};$('cloudImg').onload=()=>{$('cloudInfo').innerHTML='<span class="ok">Railway 雲端串流已啟動。</span>';};$('cloudImg').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();$('cloudInfo').textContent='連線中：/api/rt7/camera/stream.mjpg';}
+function startBoth(){startLan();startCloud();}
+async function stopAll(){$('lanImg').removeAttribute('src');$('lanImg').src='';$('cloudImg').removeAttribute('src');$('cloudImg').src='';$('lanEmpty').style.display='block';$('cloudEmpty').style.display='block';await j('/api/rt7/camera/stream/stop');log('stopped')}
+async function loadState(){const s=await j('/api/rt7/camera/stream/state');log(s)}
+loadDevices().then(loadState);setInterval(loadState,5000);
 </script></body></html>`);
 });
 
+
+
+// -----------------------------------------------------------------------------
+// V4.8F Auto LAN/Cloud Stream Test page
+// Production idea: no Node-RED, no Tailscale.  Browser first tries LAN direct
+// ESP32 MJPEG, then falls back to Railway cloud MJPEG if LAN is unavailable.
+// -----------------------------------------------------------------------------
+app.get('/rt7_auto_stream_test', (req, res) => {
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V4.8F Auto LAN/Cloud Stream</title>
+<style>body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;margin:0;background:#f5f7fb;color:#17262a}.wrap{max-width:720px;margin:0 auto;padding:14px}.top{background:#0d2a30;color:#fff;padding:18px;text-align:center;font-weight:900}.card{background:#fff;border:1px solid #d7dee5;border-radius:14px;padding:14px;margin:12px 0}.video{background:#000;aspect-ratio:4/3;border-radius:14px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#fff}.video img{width:100%;height:100%;object-fit:contain;pointer-events:none}.btn{width:100%;border:0;border-radius:12px;padding:14px;margin:6px 0;color:#fff;font-weight:900;font-size:18px;background:#0b84d8}.red{background:#dc2626}.green{background:#16a34a}.orange{background:#d97706}input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #9aa8b4;border-radius:10px;font-size:18px}.badge{display:inline-block;border-radius:999px;padding:5px 10px;color:#fff;background:#64748b;font-weight:900}.lan{background:#16a34a}.cloud{background:#d97706}.small{font-size:13px;color:#64748b;line-height:1.55}pre{white-space:pre-wrap;background:#0b1220;color:#d8f2ff;border-radius:12px;padding:10px;max-height:260px;overflow:auto}</style></head><body><div class="top">RT7 V4.8F 自動內網/雲端串流</div><div class="wrap">
+<div class="card"><b>ESP32 IP</b><input id="ip" value="192.168.0.179"><div class="small">在家同 Wi-Fi 會自動直連 ESP32；外網或失敗時自動切 Railway 雲端。</div></div>
+<div class="card"><button class="btn green" id="startBtn">開始影像（自動判斷）</button><button class="btn red" id="stopBtn">停止影像</button><p>目前模式：<span id="mode" class="badge">AUTO</span></p></div>
+<div class="video"><img id="img"><span id="empty">尚未開始</span></div>
+<div class="card"><b>說明</b><div class="small">LAN = 手機直接讀 ESP32 <code>/api/camera/stream</code>，流暢。CLOUD = Railway <code>/api/rt7/camera/stream.mjpg</code>，遠端可用但 FPS 較低。</div></div>
+<pre id="log">ready</pre></div><script>
+const $=id=>document.getElementById(id); let wanted=false;
+function log(s){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+s+'\n'+$('log').textContent.slice(0,3000)}
+async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
+function setMode(m){$('mode').textContent=m;$('mode').className='badge '+(m==='LAN'?'lan':m==='CLOUD'?'cloud':'')}
+function lanUrl(){return 'http://'+$('ip').value.trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'')+'/api/camera/stream'}
+function probe(url,ms){return new Promise(resolve=>{const im=new Image();let done=false;const fin=ok=>{if(done)return;done=true;try{im.src=''}catch(e){}resolve(ok)};im.onload=()=>fin(true);im.onerror=()=>fin(false);setTimeout(()=>fin(false),ms||2600);im.src=url+'?_probe='+Date.now();});}
+async function cloud(){await j('/api/rt7/camera/stream/start');$('empty').style.display='none';$('img').onerror=()=>log('Cloud MJPEG error');$('img').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();setMode('CLOUD');log('CLOUD mode: Railway remote stream');}
+async function lan(url){$('empty').style.display='none';$('img').onerror=()=>{log('LAN lost -> CLOUD fallback');cloud();};$('img').src=url+'?_lan='+Date.now();setMode('LAN');log('LAN mode: direct ESP32 stream '+url);}
+async function start(){wanted=true;setMode('AUTO');log('probe LAN...');const u=lanUrl();if(await probe(u,2600)) await lan(u); else await cloud();}
+async function stop(){wanted=false;$('img').removeAttribute('src');$('img').src='';$('empty').style.display='block';setMode('AUTO');await j('/api/rt7/camera/stream/stop');log('stopped')}
+$('startBtn').addEventListener('click',start);$('stopBtn').addEventListener('click',stop);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&wanted)start();});
+</script></body></html>`);
+});
 app.get('/api/rt7/stream/compare/state', (req, res) => {
   streamViewerPrune_();
   const dev = getCurrentDevice(req);
