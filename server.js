@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0A_CLOUD_STREAM_KEEPALIVE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0B_CLOUD_TFT_PREVIEW_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -251,7 +251,7 @@ app.get('/api/rt7/system/status', (req, res) => {
     ok: true,
     version: SERVER_VERSION,
     product: 'NO_NODERED_NO_TAILSCALE',
-    cleanup: 'V5.0A_CLOUD_STREAM_KEEPALIVE_FIX',
+    cleanup: 'V5.0B_CLOUD_STREAM_KEEPALIVE_FIX',
     stable_base: 'V4.8F11/V4.9A',
     time: nowIso(),
     railway: { ok: true, port: process.env.PORT || 3000 },
@@ -470,7 +470,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.0A</title>
+<title>RT7 Cloud Original UI V5.0B</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -719,7 +719,7 @@ app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
   let lastSeq = -1;
   let lastSentMs = 0;
 
-  // V5.0A: Cloud MJPEG keepalive. Railway / mobile browsers may pause a long
+  // V5.0B: Cloud MJPEG keepalive. Railway / mobile browsers may pause a long
   // multipart response if no boundary is written while ESP32 reconnects WS/HTTP.
   // Send the newest frame when seq changes, and repeat the last frame every
   // ~700ms as keepalive so the external stream does not appear to stop.
