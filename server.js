@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0B_CLOUD_TFT_PREVIEW_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0C_CLOUD_MJPEG_STABLE_RELAY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -712,56 +712,78 @@ app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
     'Connection':'keep-alive',
     'Pragma':'no-cache',
     'Expires':'0',
-    'X-Accel-Buffering':'no'
+    'X-Accel-Buffering':'no',
+    'X-RT7-Relay':'stable-5fps-repeat-latest-frame'
   });
   liveStreamState.clients = (liveStreamState.clients || 0) + 1;
   liveStreamState.cloud_mjpeg_clients = liveStreamState.clients;
+  liveStreamState.cloud_relay_mode = 'stable_5fps_repeat_latest';
+  liveStreamState.cloud_relay_interval_ms = 200;
+
+  let lastFrame = null;
   let lastSeq = -1;
-  let lastSentMs = 0;
+  let sent = 0;
+  let busy = false;
+  let closed = false;
 
-  // V5.0B: Cloud MJPEG keepalive. Railway / mobile browsers may pause a long
-  // multipart response if no boundary is written while ESP32 reconnects WS/HTTP.
-  // Send the newest frame when seq changes, and repeat the last frame every
-  // ~700ms as keepalive so the external stream does not appear to stop.
-  const sendFrame = () => {
+  // V5.0C: Stable Cloud MJPEG relay.
+  // The external phone viewer must not depend on ESP32 frame timing. Railway sends
+  // a constant 5 FPS multipart MJPEG stream. If ESP32 briefly misses WS/HTTP upload,
+  // repeat the most recent JPEG instead of letting the browser wait and appear frozen.
+  const readFallbackFrame = () => {
     try {
-      let frame = latestStreamFrame;
-      if (!frame && fs.existsSync(STREAM_FRAME_FILE)) frame = fs.readFileSync(STREAM_FRAME_FILE);
-      if (!frame && fs.existsSync(SNAPSHOT_FILE)) frame = fs.readFileSync(SNAPSHOT_FILE);
-      if (!frame) return;
+      if (latestStreamFrame && Buffer.isBuffer(latestStreamFrame) && latestStreamFrame.length > 16) return latestStreamFrame;
+      if (fs.existsSync(STREAM_FRAME_FILE)) return fs.readFileSync(STREAM_FRAME_FILE);
+      if (fs.existsSync(SNAPSHOT_FILE)) return fs.readFileSync(SNAPSHOT_FILE);
+    } catch (_) {}
+    return null;
+  };
 
+  const writeOneFrame = () => {
+    if (closed || busy || res.destroyed || res.writableEnded) return;
+    try {
       const now = Date.now();
       const seq = liveStreamState.seq || 0;
-      const isNew = seq !== lastSeq;
-      const keepaliveDue = (now - lastSentMs) >= 700;
-      if (!isNew && !keepaliveDue) return;
-
-      lastSeq = seq;
-      lastSentMs = now;
-      const ok1 = res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\nX-RT7-Keepalive: ${isNew ? 0 : 1}\r\n\r\n`);
-      const ok2 = res.write(frame);
-      const ok3 = res.write('\r\n');
-      if (!ok1 || !ok2 || !ok3) {
-        rt7MjpegCongestUntilMs = now + 5000;
-        liveStreamState.congested_count = (liveStreamState.congested_count || 0) + 1;
-        liveStreamState.adaptive_mode = 'fallback_7fps';
-        liveStreamState.desired_interval_ms = RT7_STREAM_STABLE_MS;
-      } else if (Date.now() > rt7MjpegCongestUntilMs) {
-        liveStreamState.adaptive_mode = 'target_10fps_keepalive';
-        liveStreamState.desired_interval_ms = RT7_STREAM_FAST_MS;
+      let frame = readFallbackFrame();
+      if (frame && frame.length > 16) {
+        lastFrame = Buffer.from(frame);
+        lastSeq = seq;
+      } else if (lastFrame) {
+        frame = lastFrame;
+      } else {
+        return;
       }
-      if (!isNew) liveStreamState.cloud_keepalive_count = (liveStreamState.cloud_keepalive_count || 0) + 1;
+
+      const repeated = (seq === lastSeq && frame === lastFrame) || (lastFrame && frame.length === lastFrame.length && seq === lastSeq);
+      const head = `--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\nX-RT7-Repeat: ${repeated ? 1 : 0}\r\nX-RT7-Relay-Mode: stable_5fps\r\n\r\n`;
+      busy = true;
+      const ok = res.write(head) && res.write(frame) && res.write('\r\n');
+      sent++;
+      liveStreamState.cloud_mjpeg_sent = (liveStreamState.cloud_mjpeg_sent || 0) + 1;
+      liveStreamState.cloud_mjpeg_last_sent_ms = now;
+      liveStreamState.cloud_mjpeg_last_seq = seq;
+      liveStreamState.cloud_mjpeg_last_repeat = repeated ? 1 : 0;
+      if (!ok) {
+        liveStreamState.cloud_mjpeg_backpressure = (liveStreamState.cloud_mjpeg_backpressure || 0) + 1;
+        res.once('drain', ()=>{ busy=false; });
+      } else {
+        busy = false;
+      }
     } catch (e) {
+      closed = true;
       clearInterval(timer);
-      try { res.end(); } catch(_){}
+      try { res.end(); } catch(_){ }
     }
   };
-  sendFrame();
-  const timer = setInterval(sendFrame, 60);
+
+  writeOneFrame();
+  const timer = setInterval(writeOneFrame, 200); // fixed 5 FPS cloud output
   req.on('close', ()=>{
+    closed = true;
     clearInterval(timer);
     liveStreamState.clients = Math.max(0, (liveStreamState.clients || 1)-1);
     liveStreamState.cloud_mjpeg_clients = liveStreamState.clients;
+    liveStreamState.cloud_mjpeg_last_client_frames = sent;
   });
 });
 
