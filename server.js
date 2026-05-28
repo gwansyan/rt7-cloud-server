@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_8F11_AI_VOICE_PTT_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_9_PRODUCT_STABLE_NO_NODERED_NO_TAILSCALE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -237,6 +237,32 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, version: SERVER_VERSION, time: nowIso() }));
+
+// V4.9 product system status: one endpoint for user support and maintenance.
+app.get('/api/rt7/system/status', (req, res) => {
+  let devices = [];
+  try { devices = readDevices(); } catch (_) {}
+  let snapshot = null;
+  try { snapshot = getSnapshotMeta_ ? getSnapshotMeta_() : null; } catch (_) {}
+  let events = [];
+  try { events = readEvents(10); } catch (_) {}
+  streamViewerPrune_ && streamViewerPrune_();
+  res.json({
+    ok: true,
+    version: SERVER_VERSION,
+    product: 'NO_NODERED_NO_TAILSCALE',
+    time: nowIso(),
+    railway: { ok: true, port: process.env.PORT || 3000 },
+    dependencies: { nodered: false, tailscale: false },
+    devices,
+    current_device: cloudState.current_device_id || '#1',
+    ai_enabled: !!cloudState.ai_enabled,
+    doorbell: doorbellState,
+    stream: liveStreamState,
+    snapshot,
+    latest_events: events
+  });
+});
 
 // ---------- Doorbell API: keep legacy Node-RED endpoint compatible ----------
 function handleDoorbell(req, res, endpointName) {
