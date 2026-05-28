@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_9F_RESTORE_STREAM_STABLE_BASE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_9H_LAN_STREAM_KEEPALIVE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -505,7 +505,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   document.addEventListener('click', tryUnlockAudioSilently, {once:true, passive:true});
   function stopVideo(){ if(img){ img.removeAttribute('src'); } if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='等待影像串流<span class="small">自動判斷：內網直連 / Railway 雲端</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
   function cloud(){ if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img) img.src='/api/rt7/camera/stream.mjpg?_='+Date.now(); setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
-  function lan(){ if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img) img.src='http://'+ip+'/api/camera/stream?_='+Date.now(); setAnswer('內網直連影像模式'); setDebug('lan stream '+ip); }
+  function lan(){ if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ var retryTimer=null; img.onerror=function(){ setDebug('LAN 串流中斷，2 秒後自動重連'); clearTimeout(retryTimer); retryTimer=setTimeout(function(){ img.src='http://'+ip+'/api/camera/stream?_lan_retry='+Date.now(); },2000); }; img.src='http://'+ip+'/api/camera/stream?_='+Date.now(); } setAnswer('內網直連影像模式'); setDebug('lan stream '+ip); }
   function startAuto(){ setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先測內網，失敗切雲端'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done)return; done=true; cloud(); },1800); probe.onload=function(){ if(done)return; done=true; clearTimeout(t); lan(); }; probe.onerror=function(){ if(done)return; done=true; clearTimeout(t); cloud(); }; probe.src='http://'+ip+'/api/camera/stream?_probe='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
