@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_9_PRODUCT_STABLE_NO_NODERED_NO_TAILSCALE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V4_9A_STABLE_CLEANUP';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -238,7 +238,7 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, version: SERVER_VERSION, time: nowIso() }));
 
-// V4.9 product system status: one endpoint for user support and maintenance.
+// V4.9A product system status: one endpoint for user support and maintenance.
 app.get('/api/rt7/system/status', (req, res) => {
   let devices = [];
   try { devices = readDevices(); } catch (_) {}
@@ -251,6 +251,8 @@ app.get('/api/rt7/system/status', (req, res) => {
     ok: true,
     version: SERVER_VERSION,
     product: 'NO_NODERED_NO_TAILSCALE',
+    cleanup: 'V4.9AA_STABLE_CLEANUP',
+    stable_base: 'V4.8F11/V4.9A',
     time: nowIso(),
     railway: { ok: true, port: process.env.PORT || 3000 },
     dependencies: { nodered: false, tailscale: false },
