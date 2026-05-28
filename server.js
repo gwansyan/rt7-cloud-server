@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0_SHARED_FRAME_PIPELINE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0A_CLOUD_STREAM_KEEPALIVE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -251,7 +251,7 @@ app.get('/api/rt7/system/status', (req, res) => {
     ok: true,
     version: SERVER_VERSION,
     product: 'NO_NODERED_NO_TAILSCALE',
-    cleanup: 'V4.9AA_STABLE_CLEANUP',
+    cleanup: 'V5.0A_CLOUD_STREAM_KEEPALIVE_FIX',
     stable_base: 'V4.8F11/V4.9A',
     time: nowIso(),
     railway: { ok: true, port: process.env.PORT || 3000 },
@@ -470,7 +470,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V4.9U</title>
+<title>RT7 Cloud Original UI V5.0A</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -659,7 +659,7 @@ function acceptWsStreamFrame_(buf, ws) {
   fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
   const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'ws_frame', device_id:safeString(ws?.rt7DeviceId || '#1'), ip:safeString(ws?._socket?.remoteAddress || ''), url:'/api/rt7/camera/latest.jpg' };
   cloudState.last_snapshot = meta;
-  liveStreamState = Object.assign({}, liveStreamState, { ok:true, transport:'ws_frame', seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/ws' });
+  liveStreamState = Object.assign({}, liveStreamState, { ok:true, transport:'ws_frame', seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/ws', last_frame_ms:Date.now() });
   broadcastBinaryToViewers(latestStreamFrame);
   broadcast('stream_frame', liveStreamState);
   return true;
@@ -676,7 +676,7 @@ function acceptStreamFrame_(req, res) {
   fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
   const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'live_frame', device_id:safeString(req.query.device_id || req.headers['x-rt7-device-id'] || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
   cloudState.last_snapshot = meta;
-  liveStreamState = Object.assign({}, liveStreamState, { ok:true, transport:'http_frame_relay', seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/api/rt7/camera/stream.mjpg' });
+  liveStreamState = Object.assign({}, liveStreamState, { ok:true, transport:'http_frame_relay', seq:(liveStreamState.seq||0)+1, bytes:buf.length, time:meta.time, device_id:meta.device_id, ip:meta.ip, last_url:'/api/rt7/camera/stream.mjpg', last_frame_ms:Date.now() });
   // V4.7C: IMPORTANT FIX. If ESP32 falls back to HTTP POST frames, still relay
   // the JPEG bytes to WebSocket viewers. Previous V4.7A/B only updated cache and
   // sent JSON metadata, so phone showed "WS connected" but received no binary JPEG.
@@ -706,37 +706,63 @@ app.get('/api/rt7/camera/viewer/ping', (req,res)=>{
   res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, viewers:n});
 });
 app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
-  res.writeHead(200, { 'Content-Type':'multipart/x-mixed-replace; boundary=rt7frame', 'Cache-Control':'no-cache, no-store, must-revalidate, private', 'Connection':'keep-alive', 'Pragma':'no-cache', 'Expires':'0', 'X-Accel-Buffering':'no' });
+  res.writeHead(200, {
+    'Content-Type':'multipart/x-mixed-replace; boundary=rt7frame',
+    'Cache-Control':'no-cache, no-store, must-revalidate, private',
+    'Connection':'keep-alive',
+    'Pragma':'no-cache',
+    'Expires':'0',
+    'X-Accel-Buffering':'no'
+  });
   liveStreamState.clients = (liveStreamState.clients || 0) + 1;
+  liveStreamState.cloud_mjpeg_clients = liveStreamState.clients;
   let lastSeq = -1;
+  let lastSentMs = 0;
+
+  // V5.0A: Cloud MJPEG keepalive. Railway / mobile browsers may pause a long
+  // multipart response if no boundary is written while ESP32 reconnects WS/HTTP.
+  // Send the newest frame when seq changes, and repeat the last frame every
+  // ~700ms as keepalive so the external stream does not appear to stop.
   const sendFrame = () => {
     try {
       let frame = latestStreamFrame;
       if (!frame && fs.existsSync(STREAM_FRAME_FILE)) frame = fs.readFileSync(STREAM_FRAME_FILE);
       if (!frame && fs.existsSync(SNAPSHOT_FILE)) frame = fs.readFileSync(SNAPSHOT_FILE);
       if (!frame) return;
+
+      const now = Date.now();
       const seq = liveStreamState.seq || 0;
-      if (seq === lastSeq) return;
+      const isNew = seq !== lastSeq;
+      const keepaliveDue = (now - lastSentMs) >= 700;
+      if (!isNew && !keepaliveDue) return;
+
       lastSeq = seq;
-      // V4.7G: drop-old-frame MJPEG. If this viewer's socket is congested,
-      // do not build a backlog; mark adaptive fallback and let ESP32 slow to ~7 FPS.
-      const ok1 = res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\n\r\n`);
+      lastSentMs = now;
+      const ok1 = res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-Seq: ${seq}\r\nX-RT7-Keepalive: ${isNew ? 0 : 1}\r\n\r\n`);
       const ok2 = res.write(frame);
       const ok3 = res.write('\r\n');
       if (!ok1 || !ok2 || !ok3) {
-        rt7MjpegCongestUntilMs = Date.now() + 5000;
+        rt7MjpegCongestUntilMs = now + 5000;
         liveStreamState.congested_count = (liveStreamState.congested_count || 0) + 1;
         liveStreamState.adaptive_mode = 'fallback_7fps';
         liveStreamState.desired_interval_ms = RT7_STREAM_STABLE_MS;
       } else if (Date.now() > rt7MjpegCongestUntilMs) {
-        liveStreamState.adaptive_mode = 'target_10fps';
+        liveStreamState.adaptive_mode = 'target_10fps_keepalive';
         liveStreamState.desired_interval_ms = RT7_STREAM_FAST_MS;
       }
-    } catch (e) { clearInterval(timer); try { res.end(); } catch(_){} }
+      if (!isNew) liveStreamState.cloud_keepalive_count = (liveStreamState.cloud_keepalive_count || 0) + 1;
+    } catch (e) {
+      clearInterval(timer);
+      try { res.end(); } catch(_){}
+    }
   };
   sendFrame();
-  const timer = setInterval(sendFrame, 45); // V4.7G: check often, but send only newest seq; no queue
-  req.on('close', ()=>{ clearInterval(timer); liveStreamState.clients = Math.max(0, (liveStreamState.clients || 1)-1); });
+  const timer = setInterval(sendFrame, 60);
+  req.on('close', ()=>{
+    clearInterval(timer);
+    liveStreamState.clients = Math.max(0, (liveStreamState.clients || 1)-1);
+    liveStreamState.cloud_mjpeg_clients = liveStreamState.clients;
+  });
 });
 
 app.get('/api/rt7/camera/latest.jpg', (req,res)=>{ ensureDataDir(); if (!fs.existsSync(SNAPSHOT_FILE)) return res.status(404).json({ok:false,error:'NO_SNAPSHOT'}); res.type('image/jpeg').send(fs.readFileSync(SNAPSHOT_FILE)); });
