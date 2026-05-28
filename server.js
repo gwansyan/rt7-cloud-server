@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0E_DOORBELL_INLINE_DOOR_MSG';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0F_AI_VOICE_ONE_SHOT_UI_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -470,7 +470,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.0E</title>
+<title>RT7 Cloud Original UI V5.0F</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -515,8 +515,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
   bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio);
-  bind('btnAiOn', function(){ ai=true; document.getElementById('aiBadge').textContent='AI_ENABLE'; document.getElementById('aiBadge').classList.add('aiOn'); document.getElementById('btnAiVoice').classList.add('aiActive'); setAnswer('AI 已啟用'); setDebug('ai on'); });
-  bind('btnAiOff', function(){ ai=false; document.getElementById('aiBadge').textContent='IDLE'; document.getElementById('aiBadge').classList.remove('aiOn'); document.getElementById('btnAiVoice').classList.remove('aiActive'); setAnswer('AI 已關閉'); setDebug('ai off'); });
+  bind('btnAiOn', function(){ setAiUi(true,'AI 已啟用'); setDebug('ai on'); });
+  bind('btnAiOff', function(){ setAiUi(false,'AI 已關閉'); setDebug('ai off'); });
   bind('btnOpenDoor', async function(){
     setAnswer('開門命令送出中...');
     if(currentStreamMode==='LAN'){
@@ -534,8 +534,33 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
-  async function routeVoiceQuestion(text){ text=(text||'').trim(); if(!text){ setAnswer('沒有收到語音內容，請再按一次 AI語音助理後說話'); setDebug('voice empty'); return; } setAnswer('你說：'+text+'，AI 分析中...'); setDebug('voice question: '+text); try{ var r=await j('/api/rt7/phase9j/voice_vision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,mode:'auto'})}); var ans=r.answer||r.error||'AI 無回應'; setAnswer(ans); speakAnswer(ans); setDebug('voice_vision ok'); }catch(e){ setAnswer('AI語音助理失敗：'+e.message); setDebug('voice_vision failed'); } }
-  function startVoiceAsk(){ ai=true; document.getElementById('aiBadge').textContent='AI_ENABLE'; document.getElementById('aiBadge').classList.add('aiOn'); document.getElementById('btnAiVoice').classList.add('aiActive'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容，例如：門口有人嗎？','門口有人嗎？')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話，例如：門口有人嗎？'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','門口有人嗎？')||''; routeVoiceQuestion(t2); } }
+  function setAiUi(on, msg){
+    ai=!!on;
+    var b=document.getElementById('aiBadge');
+    var v=document.getElementById('btnAiVoice');
+    if(b){ b.textContent=ai?'AI_ENABLE':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
+    if(v){ if(ai)v.classList.add('aiActive'); else v.classList.remove('aiActive'); }
+    if(msg) setAnswer(msg);
+  }
+  async function routeVoiceQuestion(text){
+    text=(text||'').trim();
+    if(!text){ setAiUi(false,'沒有收到語音內容，請再按一次 AI語音助理後說話'); setDebug('voice empty'); return; }
+    setAnswer('你說：'+text+'，AI 分析中...');
+    setDebug('voice question: '+text);
+    try{
+      var r=await j('/api/rt7/phase9j/voice_vision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,mode:'auto'})});
+      var ans=r.answer||r.error||'AI 無回應';
+      setAnswer(ans);
+      speakAnswer(ans);
+      setDebug('voice_vision ok');
+    }catch(e){
+      setAnswer('AI語音助理失敗：'+e.message);
+      setDebug('voice_vision failed');
+    }finally{
+      setAiUi(false);
+    }
+  }
+  function startVoiceAsk(){ setAiUi(true,'請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAiUi(false,'語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnVoice', startVoiceAsk); bind('btnAiVoice', startVoiceAsk);
   bind('btnEndTalk', function(){ setAnswer('對講已結束'); setDebug('talk end'); });
   var lastCount=null;
