@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1I_INTERCOM_BUTTON_ROUTE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1J_INTERCOM_DIRECT_BUTTON_TEST_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -489,7 +489,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按住中間麥克風對講</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">短按麥克風測試對講</div></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
@@ -533,6 +533,24 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
+  // V5.1J: Direct intercom button test. Use the exact same proven 8081 image-beacon mechanism as 開門,
+  // but add ic=test so ESP32 logs [INTERCOM][TEST] and does NOT open the door.
+  var rt7IntercomBeaconKeep=[];
+  function intercomDirectButtonTest(label){
+    setAnswer('對講測試訊號送出中...');
+    setDebug('intercom direct test '+label);
+    try{
+      var beacon=new Image();
+      rt7IntercomBeaconKeep.push(beacon);
+      if(rt7IntercomBeaconKeep.length>12) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-12);
+      beacon.onload=function(){ setDebug('intercom test beacon loaded '+label); };
+      beacon.onerror=function(){ setDebug('intercom test beacon sent/error ok '+label); };
+      beacon.src='http://'+ip+':8081/api/door/open_fast?ic=test&_ic_label='+encodeURIComponent(label)+'&_door='+Date.now();
+      setAnswer('對講測試');
+    }catch(e){ setAnswer('對講測試失敗：'+e.message); setDebug('intercom direct failed '+e.message); }
+  }
+  bind('btnVoice', function(){ intercomDirectButtonTest('bigMic_click'); });
+  bind('btnEndTalk', function(){ intercomDirectButtonTest('lowerTalk_click'); });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     ai=!!on;
@@ -697,7 +715,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   window.addEventListener('mouseup',function(){ if(talking)intercomUp(); }); window.addEventListener('pageshow',function(){ resumeAudioForIntercom('pageshow'); }); document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') resumeAudioForIntercom('visible'); });
   bind('btnAiVoice', startVoiceAsk); // V5.1A: btnVoice is intercom PTT, do not bind to AI voice
-  bindIntercomPtt();
+  // V5.1J: complex PTT disabled for route test; direct click bind above is used.
+  // bindIntercomPtt();
   var lastCount=null;
   async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; showDoorbellInline(); } } }catch(e){} setTimeout(pollDoor,2500); }
   pollDoor();
