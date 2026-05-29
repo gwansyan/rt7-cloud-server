@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1C_INTERCOM_IMAGE_BEACON_PCM_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1D_INTERCOM_FAST_PTT_BEGIN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -601,7 +601,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(currentStreamMode==='LAN'){
         // PCM is sent as short GET chunks to 8081 so it reaches ESP32 while MJPEG occupies port 80.
         // Body is hex-only, so it is safe in the query string. Keep chunks <= about 2KB URL.
-        var p=u.replace('/api/ind_full/audio/phone_pcm_hex','/api/audio/phone_pcm_hex_get');
+        var p='/api/intercom/pcm';
         if(lanBeaconBusy>lanBeaconMax){ return {ok:true,drop:true,source:'lan_beacon'}; }
         sendLanBeacon(p,label||'phone_pcm','&hex='+body);
         return {ok:true,source:'lan_beacon'};
@@ -623,8 +623,35 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function pollEspAudio(){ if(!espPolling||talking)return; var r=await apiGetAudio('/api/ind_full/audio/esp_pcm_hex?ms=60','esp_pcm'); if(r&&r.ok&&r.hex) playPcm16Hex(r.hex); }
   async function startEspRx(){ await ensurePhonePlay(); espPolling=true; intercomOn=true; await apiGetAudio('/api/ind_full/audio/esp_begin','esp_begin'); if(espTimer)clearInterval(espTimer); espTimer=setInterval(pollEspAudio,120); setDebug('esp rx polling on'); }
   async function stopEspRx(){ espPolling=false; if(espTimer)clearInterval(espTimer); espTimer=null; await apiGetAudio('/api/ind_full/audio/esp_end','esp_end'); setDebug('esp rx polling off'); }
-  async function intercomDown(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(talking)return; talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0; var b=document.getElementById('btnVoice'); if(b){b.classList.add('talking'); try{b.setPointerCapture&&ev&&ev.pointerId!=null&&b.setPointerCapture(ev.pointerId);}catch(_){}} var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking'); setAnswer('對講中：請說話'); setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN image-beacon 8081':'cloudProxy')); try{ await ensurePhoneMic(); await startEspRx(); await apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin'); }catch(e){ talking=false; if(b)b.classList.remove('talking'); if(ebtn)ebtn.classList.remove('talking'); setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed'); } }
-  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
+  async function intercomDown(ev){
+    if(ev){ev.preventDefault();ev.stopPropagation();}
+    if(talking)return;
+    talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0;
+    var b=document.getElementById('btnVoice');
+    if(b){b.classList.add('talking'); try{b.setPointerCapture&&ev&&ev.pointerId!=null&&b.setPointerCapture(ev.pointerId);}catch(_){}}
+    var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking');
+    setAnswer('對講中：請說話');
+    setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN 8081 immediate begin':'cloudProxy'));
+    // V5.1D: send BEGIN immediately on pointerdown. Do not wait for getUserMedia/Speech/UI work.
+    // This verifies the 8081 path in Serial and makes PTT feel instant.
+    try{
+      if(currentStreamMode==='LAN'){
+        sendLanBeacon('/api/intercom/ping','intercom_ping','');
+        sendLanBeacon('/api/intercom/phone_begin','phone_begin_fast','');
+        sendLanBeacon('/api/audio/phone_begin','phone_begin_compat','');
+      }else{
+        apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin');
+      }
+    }catch(_){ }
+    try{
+      await ensurePhoneMic();
+      await startEspRx();
+    }catch(e){
+      talking=false; if(b)b.classList.remove('talking'); if(ebtn)ebtn.classList.remove('talking');
+      setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed');
+    }
+  }
+  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); if(currentStreamMode==='LAN'){ sendLanBeacon('/api/intercom/phone_end','phone_end_fast',''); sendLanBeacon('/api/audio/phone_end','phone_end_compat',''); } else { await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); } setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
   function bindIntercomPtt(){
     // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
     var b=document.getElementById('btnVoice');
