@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1N_INTERCOM_PHONE_MIC_ORIGINAL_CLEAN_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1P_INTERCOM_PHONE_MIC_ORIGINAL_BATCH_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -533,10 +533,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1N: Intercom Phone Mic PCM - original RT7 clean/natural mic path.
-  // Fix: V5.1M microphone packets were all-zero on some Android Chrome sessions.
-  // This version recreates mic stream on every PHONE_BEGIN, uses original RT7 clean/downsample flow,
-  // adds RMS/peak diagnostics, and auto-restarts once with a fallback constraint if input remains silent.
+  // V5.1P: Intercom Phone Mic PCM - original RT7 batching + no giant serial spam.
+  // Fix: V5.1N still sent 640B/40ms and all-zero chunks, causing tick/tock audio.
+  // This version uses original RT7 cleaner/batching: 1280B per ~40ms, skips digital-zero frames, and avoids request flooding.
   var rt7IntercomBeaconKeep=[];
   var rt7IntercomBeginOn=false;
   var rt7MicStream=null, rt7MicCtx=null, rt7MicSource=null, rt7MicProc=null;
@@ -545,7 +544,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7MicFrameCount=0, rt7MicZeroFrames=0, rt7MicRestarted=false, rt7MicBeginMs=0, rt7MicLastDiagMs=0;
   // Keep 640-byte GET chunks because 8081 image beacon is the proven LAN path.
   // Audio cleaning follows original RT7 settings more closely.
-  var RT7_MIC_GAIN=0.92, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=640, RT7_MIC_MAX_BYTES=640, RT7_MIC_MIN_POST_MS=38;
+  var RT7_MIC_GAIN=0.76, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=1280, RT7_MIC_MAX_BYTES=1280, RT7_MIC_MIN_POST_MS=38;
   function sendIntercomBeacon(ic,label,extra){
     try{
       var beacon=new Image();
@@ -667,12 +666,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
         rt7MicLastDiagMs=now;
         setDebug('mic rms='+st.rms.toFixed(5)+' peak='+st.peak.toFixed(5)+' sr='+Math.round(rt7MicCtx.sampleRate)+' zero='+rt7MicZeroFrames);
       }
-      if(!rt7MicRestarted && (now-rt7MicBeginMs)>1200 && rt7MicZeroFrames>18){
+      if(!rt7MicRestarted && (now-rt7MicBeginMs)>900 && rt7MicZeroFrames>12){
         rt7MicRestarted=true;
-        setDebug('mic looks silent, restart fallback constraints');
+        setDebug('mic digital-zero, restart fallback constraints');
         rt7EnsurePhoneMic(true).catch(function(err){ setDebug('mic fallback failed '+(err.message||err)); });
         return;
       }
+      // V5.1P: Do not feed true digital-zero chunks to ESP32 speaker.
+      // V5.1N logs showed long runs of 0000 PCM; these create underflow/click artifacts.
+      if(st.peak < 0.00005) return;
       var cleaned=rt7CleanMicFrame(raw);
       var ds=rt7DownsampleTo16k(cleaned, rt7MicCtx.sampleRate);
       if(ds.length) rt7MicQueueBytes(rt7FloatToPcm16Bytes(ds));
