@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1G_INTERCOM_SHORT_TAP_BEGIN_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1H_INTERCOM_BUTTON_TEST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -470,7 +470,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.1A</title>
+<title>RT7 Cloud Original UI V5.1H</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -489,7 +489,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按住中間麥克風對講</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下中間麥克風測試對講</div></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
@@ -561,136 +561,39 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
   }
   function startVoiceAsk(){ setAiUi(true,'請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAiUi(false,'語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
-  // V5.1 Restore Phone Intercom: phone mic -> ESP32 speaker, ESP32 mic -> phone playback.
-  var phoneMicStream=null, phoneMicCtx=null, phoneMicSource=null, phoneMicProc=null;
-  var phoneAudioCtx=null, phoneAudioNextTime=0, talking=false, intercomOn=false, sendBusy=false, sendQueue=[], txBytes=[];
-  var espPolling=false, espTimer=null, hpLastX=0, hpLastY=0, lastPostMs=0;
-  var MIC_GAIN=0.76, HP_A=0.995, POST_MIN_MS=60, TARGET_BYTES=1024, MAX_BYTES=1024;
-  var lanBeaconSeq=0, lanBeaconBusy=0, lanBeaconMax=3; var lanBeaconKeep=[];
+  // V5.1H Intercom Button Test only.
+  // Purpose: verify the mobile button really sends a request to ESP32:8081.
+  // No microphone, no PCM, no recording in this version.
+  window.__rt7IntercomTestBeacons = window.__rt7IntercomTestBeacons || [];
   function intercomLanBase(){ var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179'); return 'http://'+dip+':8081'; }
-  function isLanDirectMode(){
-    var bt=''; try{ bt=(document.getElementById('streamBadge')||{}).textContent||''; }catch(e){}
-    return true; // V5.1G: force LAN 8081 for intercom PTT because door-open 8081 path is proven reachable
+  function sendIntercomButtonTest(reason){
+    var url = intercomLanBase() + '/api/intercom/test?_ic_test=' + Date.now() + '&reason=' + encodeURIComponent(reason||'click');
+    var im = new Image();
+    window.__rt7IntercomTestBeacons.push(im);
+    if(window.__rt7IntercomTestBeacons.length > 20) window.__rt7IntercomTestBeacons.shift();
+    im.onload = function(){ setDebug('intercom test loaded'); };
+    im.onerror = function(){ setDebug('intercom test sent/error'); };
+    im.src = url;
+    setAnswer('對講測試訊號已送出');
+    setDebug('INTERCOM TEST -> ' + url);
   }
-  function intercomPath(path){
-    // V5.1B: LAN mode uses ESP32 port 8081 directly. Railway cannot proxy to private 192.168.x.x,
-    // and port 80 is occupied by /api/camera/stream while LAN video is running.
-    if(isLanDirectMode()) return intercomLanBase()+path.replace('/api/ind_full','/api');
-    return path;
-  }
-  function lanBeaconUrl(path, extra){
-    var ip=(dev&&dev.ip)?dev.ip:(window.rt7EspIp||'192.168.0.179');
-    var q=(extra||'');
-    if(q && q.charAt(0)==='&') q='?'+q.substring(1);
-    else if(q && q.charAt(0)!=='?') q='?'+q;
-    var sep=q ? '&' : '?';
-    return 'http://'+ip+':8081'+path+q+sep+'_='+(Date.now())+'&seq='+(++lanBeaconSeq);
-  }
-  function sendLanBeacon(path, label, extra){
-    // V5.1G: keep Image objects alive; Android Chrome may cancel local images if the object is GC'ed during long-press.
-    try{
-      var img=new Image();
-      lanBeaconBusy++;
-      lanBeaconKeep.push(img);
-      if(lanBeaconKeep.length>24) lanBeaconKeep.splice(0, lanBeaconKeep.length-24);
-      img.onload=img.onerror=function(){ lanBeaconBusy=Math.max(0,lanBeaconBusy-1); setTimeout(function(){ var i=lanBeaconKeep.indexOf(img); if(i>=0) lanBeaconKeep.splice(i,1); }, 1800); };
-      var url=lanBeaconUrl(path, extra||'');
-      setDebug('LAN beacon '+(label||'')+' -> '+url.replace(/hex=[^&]+/,'hex=...'));
-      img.src=url;
-      return {ok:true,source:'lan_beacon',label:label||''};
-    }catch(e){ setDebug((label||'lan beacon')+' failed '+e.message); return {ok:false,error:e.message}; }
-  }
-  async function apiGetAudio(u,label){
-    try{
-      if(isLanDirectMode()){
-        var p=u.replace('/api/ind_full','/api');
-        sendLanBeacon(p,label||'audio_get','');
-        return {ok:true,source:'lan_beacon'};
-      }
-      var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{cache:'no-store',mode:'same-origin'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}
-    }catch(e){ setDebug((label||'audio')+' failed '+e.message); return {ok:false,error:e.message}; }
-  }
-  async function apiPostAudio(u,body,label){
-    try{
-      if(isLanDirectMode()){
-        // PCM is sent as short GET chunks to 8081 so it reaches ESP32 while MJPEG occupies port 80.
-        // Body is hex-only, so it is safe in the query string. Keep chunks <= about 2KB URL.
-        var p='/api/door/open_fast';
-        if(lanBeaconBusy>lanBeaconMax){ return {ok:true,drop:true,source:'lan_beacon'}; }
-        sendLanBeacon(p,label||'phone_pcm','&ic=pcm&hex='+body);
-        return {ok:true,source:'lan_beacon'};
-      }
-      var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store',mode:'same-origin'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}
-    }catch(e){ setDebug((label||'audio post')+' failed '+e.message); return {ok:false,error:e.message}; }
-  }
-  async function resumeAudioForIntercom(reason){ try{ if(phoneAudioCtx&&phoneAudioCtx.state!=='running') await phoneAudioCtx.resume(); }catch(e){} try{ if(phoneMicCtx&&phoneMicCtx.state!=='running') await phoneMicCtx.resume(); }catch(e){} }
-  function cleanMicFrame(input){ var out=new Float32Array(input.length); var fadeN=Math.min(32,input.length); for(var i=0;i<input.length;i++){ var x=input[i]; var y=x-hpLastX+HP_A*hpLastY; hpLastX=x; hpLastY=y; y*=MIC_GAIN; if(y>0.98)y=0.98; if(y<-0.98)y=-0.98; if(i<fadeN)y*=i/fadeN; if(input.length-i<fadeN)y*=(input.length-i)/fadeN; out[i]=y; } return out; }
-  function downsampleTo16k(input,inRate){ if(inRate===16000)return input; var ratio=inRate/16000, len=Math.floor(input.length/ratio), out=new Float32Array(len); for(var i=0;i<len;i++){ var a=Math.floor(i*ratio), b=Math.min(Math.floor((i+1)*ratio),input.length), sum=0,c=0; for(var j=a;j<b;j++){sum+=input[j];c++;} out[i]=c?sum/c:0; } return out; }
-  function floatToPcm16Bytes(f32){ var bytes=new Uint8Array(f32.length*2); for(var i=0;i<f32.length;i++){ var s=Math.max(-1,Math.min(1,f32[i])); var v=Math.round(s<0?s*0x8000:s*0x7fff); bytes[i*2]=v&255; bytes[i*2+1]=(v>>8)&255; } return bytes; }
-  function bytesToHex(bytes){ var hex=''; for(var i=0;i<bytes.length;i++)hex+=bytes[i].toString(16).padStart(2,'0'); return hex; }
-  function enqueueTx(bytes){ for(var i=0;i<bytes.length;i++)txBytes.push(bytes[i]); var now=performance.now(); if(txBytes.length>=TARGET_BYTES&&(now-lastPostMs)>=POST_MIN_MS){ var n=Math.min(MAX_BYTES,txBytes.length); n-=n%2; var chunk=txBytes.splice(0,n); sendQueue.push(bytesToHex(chunk)); lastPostMs=now; if(sendQueue.length>2)sendQueue.splice(0,sendQueue.length-2); flushTxQueue(); } }
-  async function flushTxQueue(){ if(sendBusy)return; sendBusy=true; while(sendQueue.length){ await apiPostAudio('/api/ind_full/audio/phone_pcm_hex', sendQueue.shift(), 'phone_pcm'); } sendBusy=false; }
-  function flushTxTail(){ while(txBytes.length>0){ if(txBytes.length%2)txBytes.push(0); var n=Math.min(MAX_BYTES,txBytes.length); n-=n%2; var chunk=txBytes.splice(0,n); sendQueue.push(bytesToHex(chunk)); if(sendQueue.length>2)sendQueue.splice(0,sendQueue.length-2); } flushTxQueue(); }
-  function fastIntercomBeginBurst(tag){
-    // Same endpoint as working door open, but with ic parameter so ESP32 does not open the door.
-    sendLanBeacon('/api/door/open_fast','ic_ping_'+tag,'ic=ping');
-    sendLanBeacon('/api/door/open_fast','ic_begin_'+tag,'ic=begin');
-    setTimeout(function(){ sendLanBeacon('/api/door/open_fast','ic_begin2_'+tag,'ic=begin'); }, 180);
-  }
-
-  async function ensurePhoneMic(){ if(phoneMicStream&&phoneMicCtx)return true; phoneMicStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:{ideal:true},noiseSuppression:{ideal:false},autoGainControl:{ideal:false},channelCount:{ideal:1},sampleRate:{ideal:48000}},video:false}); phoneMicCtx=new (window.AudioContext||window.webkitAudioContext)(); phoneMicSource=phoneMicCtx.createMediaStreamSource(phoneMicStream); phoneMicProc=phoneMicCtx.createScriptProcessor(2048,1,1); phoneMicProc.onaudioprocess=function(e){ if(!talking)return; var raw=e.inputBuffer.getChannelData(0); var cleaned=cleanMicFrame(raw); var ds=downsampleTo16k(cleaned, phoneMicCtx.sampleRate); enqueueTx(floatToPcm16Bytes(ds)); }; phoneMicSource.connect(phoneMicProc); phoneMicProc.connect(phoneMicCtx.destination); await resumeAudioForIntercom('mic'); setDebug('intercom mic ready sr='+phoneMicCtx.sampleRate); return true; }
-  async function ensurePhonePlay(){ if(!phoneAudioCtx){ phoneAudioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000}); phoneAudioNextTime=phoneAudioCtx.currentTime+0.08; } await resumeAudioForIntercom('play'); return true; }
-  function playPcm16Hex(hex){ if(!phoneAudioCtx||!hex)return; var n=Math.floor(hex.length/4); if(n<=0)return; var buf=phoneAudioCtx.createBuffer(1,n,16000), ch=buf.getChannelData(0); for(var i=0;i<n;i++){ var lo=parseInt(hex.substr(i*4,2),16), hi=parseInt(hex.substr(i*4+2,2),16); var v=(hi<<8)|lo; if(v>=32768)v-=65536; ch[i]=v/32768; } var src=phoneAudioCtx.createBufferSource(); src.buffer=buf; src.connect(phoneAudioCtx.destination); var now=phoneAudioCtx.currentTime; if(phoneAudioNextTime<now+0.02) phoneAudioNextTime=now+0.06; src.start(phoneAudioNextTime); phoneAudioNextTime+=buf.duration; }
-  async function pollEspAudio(){ if(!espPolling||talking)return; var r=await apiGetAudio('/api/ind_full/audio/esp_pcm_hex?ms=60','esp_pcm'); if(r&&r.ok&&r.hex) playPcm16Hex(r.hex); }
-  async function startEspRx(){ await ensurePhonePlay(); espPolling=true; intercomOn=true; await apiGetAudio('/api/ind_full/audio/esp_begin','esp_begin'); if(espTimer)clearInterval(espTimer); espTimer=setInterval(pollEspAudio,120); setDebug('esp rx polling on'); }
-  async function stopEspRx(){ espPolling=false; if(espTimer)clearInterval(espTimer); espTimer=null; await apiGetAudio('/api/ind_full/audio/esp_end','esp_end'); setDebug('esp rx polling off'); }
-  async function intercomDown(ev){
-    if(ev){ev.preventDefault();ev.stopPropagation();}
-    if(talking)return;
-    talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0;
-    var b=document.getElementById('btnVoice');
-    if(b){b.classList.add('talking'); try{b.setPointerCapture&&ev&&ev.pointerId!=null&&b.setPointerCapture(ev.pointerId);}catch(_){}}
-    var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking');
-    setAnswer('對講中：請說話');
-    setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN 8081 immediate begin':'cloudProxy'));
-    // V5.1D: send BEGIN immediately on pointerdown. Do not wait for getUserMedia/Speech/UI work.
-    // This verifies the 8081 path in Serial and makes PTT feel instant.
-    try{ fastIntercomBeginBurst('down'); }catch(_){ }
-    try{
-      await ensurePhoneMic();
-      await startEspRx();
-    }catch(e){
-      talking=false; if(b)b.classList.remove('talking'); if(ebtn)ebtn.classList.remove('talking');
-      setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed');
-    }
-  }
-  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); if(isLanDirectMode()){ sendLanBeacon('/api/door/open_fast','phone_end_fast','ic=end'); } else { await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); } setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
-  function bindIntercomPtt(){
-    // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
+  function bindIntercomButtonTest(){
     var b=document.getElementById('btnVoice');
     if(b){
-      // V5.1G: send a tiny begin burst in capture phase before mic permission / long-press logic.
-      b.addEventListener('pointerdown',function(ev){ try{ fastIntercomBeginBurst('pdcap'); }catch(e){} },true);
-      b.addEventListener('touchstart',function(ev){ try{ fastIntercomBeginBurst('tscap'); }catch(e){} },{passive:true,capture:true});
-      b.addEventListener('click',function(ev){ try{ fastIntercomBeginBurst('click'); setAnswer('對講已送出測試訊號，請長按說話'); }catch(e){} },true);
-      b.addEventListener('pointerdown',intercomDown,false);
-      b.addEventListener('pointerup',intercomUp,false);
-      b.addEventListener('pointercancel',intercomUp,false);
-      b.addEventListener('pointerleave',intercomUp,false);
-      b.addEventListener('touchstart',intercomDown,{passive:false});
-      b.addEventListener('touchend',intercomUp,{passive:false});
-      b.addEventListener('mousedown',intercomDown,false);
-      b.addEventListener('mouseup',intercomUp,false);
-      b.addEventListener('contextmenu',function(ev){ev.preventDefault();},false);
+      b.style.touchAction='manipulation';
+      b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); sendIntercomButtonTest('btnVoice_click'); }, false);
+      b.addEventListener('pointerdown', function(ev){ try{ b.classList.add('talking'); }catch(_){} }, false);
+      b.addEventListener('pointerup', function(ev){ try{ b.classList.remove('talking'); }catch(_){} }, false);
+      b.addEventListener('pointercancel', function(ev){ try{ b.classList.remove('talking'); }catch(_){} }, false);
+      b.addEventListener('contextmenu', function(ev){ ev.preventDefault(); }, false);
     }
     var end=document.getElementById('btnEndTalk');
     if(end){
-      end.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation(); if(talking) intercomUp(ev); else { stopEspRx(); setAnswer('對講已結束'); }},false);
+      end.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); sendIntercomButtonTest('btnEndTalk_click'); }, false);
     }
   }
-  window.addEventListener('mouseup',function(){ if(talking)intercomUp(); }); window.addEventListener('pageshow',function(){ resumeAudioForIntercom('pageshow'); }); document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') resumeAudioForIntercom('visible'); });
-  bind('btnAiVoice', startVoiceAsk); // V5.1A: btnVoice is intercom PTT, do not bind to AI voice
-  bindIntercomPtt();
+  bind('btnAiVoice', startVoiceAsk);
+  bindIntercomButtonTest();
   var lastCount=null;
   async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; showDoorbellInline(); } } }catch(e){} setTimeout(pollDoor,2500); }
   pollDoor();
