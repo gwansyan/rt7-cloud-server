@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1A_INTERCOM_CENTER_MIC_TOUCH_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1B_INTERCOM_LAN_8081_DIRECT_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -480,7 +480,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22)}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
-.micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
+.micZone{text-align:center;padding:18px 0 8px}.bigMic{touch-action:none;-webkit-user-select:none;user-select:none;width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
 .actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.bigMic.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 5px rgba(239,68,68,.16)}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
@@ -565,9 +565,16 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var phoneMicStream=null, phoneMicCtx=null, phoneMicSource=null, phoneMicProc=null;
   var phoneAudioCtx=null, phoneAudioNextTime=0, talking=false, intercomOn=false, sendBusy=false, sendQueue=[], txBytes=[];
   var espPolling=false, espTimer=null, hpLastX=0, hpLastY=0, lastPostMs=0;
-  var MIC_GAIN=0.76, HP_A=0.995, POST_MIN_MS=75, TARGET_BYTES=4092, MAX_BYTES=4092;
-  async function apiGetAudio(u,label){ try{ var r=await fetch(u+(u.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{cache:'no-store'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }catch(e){ setDebug((label||'audio')+' failed '+e.message); return {ok:false,error:e.message}; } }
-  async function apiPostAudio(u,body,label){ try{ var r=await fetch(u+(u.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }catch(e){ setDebug((label||'audio post')+' failed '+e.message); return {ok:false,error:e.message}; } }
+  var MIC_GAIN=0.76, HP_A=0.995, POST_MIN_MS=60, TARGET_BYTES=1024, MAX_BYTES=1024;
+  function intercomLanBase(){ var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179'; return 'http://'+ip+':8081'; }
+  function intercomPath(path){
+    // V5.1B: LAN mode uses ESP32 port 8081 directly. Railway cannot proxy to private 192.168.x.x,
+    // and port 80 is occupied by /api/camera/stream while LAN video is running.
+    if(currentStreamMode==='LAN') return intercomLanBase()+path.replace('/api/ind_full','/api');
+    return path;
+  }
+  async function apiGetAudio(u,label){ try{ var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{cache:'no-store',mode:(url.indexOf('http://')===0?'cors':'same-origin')}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }catch(e){ setDebug((label||'audio')+' failed '+e.message); return {ok:false,error:e.message}; } }
+  async function apiPostAudio(u,body,label){ try{ var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store',mode:(url.indexOf('http://')===0?'cors':'same-origin')}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }catch(e){ setDebug((label||'audio post')+' failed '+e.message); return {ok:false,error:e.message}; } }
   async function resumeAudioForIntercom(reason){ try{ if(phoneAudioCtx&&phoneAudioCtx.state!=='running') await phoneAudioCtx.resume(); }catch(e){} try{ if(phoneMicCtx&&phoneMicCtx.state!=='running') await phoneMicCtx.resume(); }catch(e){} }
   function cleanMicFrame(input){ var out=new Float32Array(input.length); var fadeN=Math.min(32,input.length); for(var i=0;i<input.length;i++){ var x=input[i]; var y=x-hpLastX+HP_A*hpLastY; hpLastX=x; hpLastY=y; y*=MIC_GAIN; if(y>0.98)y=0.98; if(y<-0.98)y=-0.98; if(i<fadeN)y*=i/fadeN; if(input.length-i<fadeN)y*=(input.length-i)/fadeN; out[i]=y; } return out; }
   function downsampleTo16k(input,inRate){ if(inRate===16000)return input; var ratio=inRate/16000, len=Math.floor(input.length/ratio), out=new Float32Array(len); for(var i=0;i<len;i++){ var a=Math.floor(i*ratio), b=Math.min(Math.floor((i+1)*ratio),input.length), sum=0,c=0; for(var j=a;j<b;j++){sum+=input[j];c++;} out[i]=c?sum/c:0; } return out; }
@@ -582,7 +589,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function pollEspAudio(){ if(!espPolling||talking)return; var r=await apiGetAudio('/api/ind_full/audio/esp_pcm_hex?ms=60','esp_pcm'); if(r&&r.ok&&r.hex) playPcm16Hex(r.hex); }
   async function startEspRx(){ await ensurePhonePlay(); espPolling=true; intercomOn=true; await apiGetAudio('/api/ind_full/audio/esp_begin','esp_begin'); if(espTimer)clearInterval(espTimer); espTimer=setInterval(pollEspAudio,120); setDebug('esp rx polling on'); }
   async function stopEspRx(){ espPolling=false; if(espTimer)clearInterval(espTimer); espTimer=null; await apiGetAudio('/api/ind_full/audio/esp_end','esp_end'); setDebug('esp rx polling off'); }
-  async function intercomDown(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(talking)return; try{ await ensurePhoneMic(); await startEspRx(); await apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin'); talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0; var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking'); setAnswer('對講中：請按住中間麥克風說話'); setDebug('PHONE_TX start'); }catch(e){ setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed'); } }
+  async function intercomDown(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(talking)return; talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0; var b=document.getElementById('btnVoice'); if(b){b.classList.add('talking'); try{b.setPointerCapture&&ev&&ev.pointerId!=null&&b.setPointerCapture(ev.pointerId);}catch(_){}} var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking'); setAnswer('對講中：請說話'); setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN8081':'cloudProxy')); try{ await ensurePhoneMic(); await startEspRx(); await apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin'); }catch(e){ talking=false; if(b)b.classList.remove('talking'); if(ebtn)ebtn.classList.remove('talking'); setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed'); } }
   async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
   function bindIntercomPtt(){
     // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
@@ -594,6 +601,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       b.addEventListener('pointerleave',intercomUp,false);
       b.addEventListener('touchstart',intercomDown,{passive:false});
       b.addEventListener('touchend',intercomUp,{passive:false});
+      b.addEventListener('mousedown',intercomDown,false);
+      b.addEventListener('mouseup',intercomUp,false);
       b.addEventListener('contextmenu',function(ev){ev.preventDefault();},false);
     }
     var end=document.getElementById('btnEndTalk');
