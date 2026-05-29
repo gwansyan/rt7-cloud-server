@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1R_INTERCOM_PCM_PACER_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1S_RINGBUFFER_BYPASS';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -533,7 +533,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1R: Intercom Phone Mic PCM pacer fix - 640B / 20ms pacing.
+  // V5.1S: Intercom Phone Mic PCM pacer fix - 640B / 20ms pacing.
   // Fix: V5.1Q paused cloud stream; remaining stutter is PCM pacing jitter.
   // This version uses fixed 640B / ~20ms pacing, like the original clean RT7 intercom path.
   var rt7IntercomBeaconKeep=[];
