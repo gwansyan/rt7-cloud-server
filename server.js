@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1E_INTERCOM_DOORPATH_BEACON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1F_INTERCOM_PTT_LAN_MODE_FORCE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -568,27 +568,37 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var MIC_GAIN=0.76, HP_A=0.995, POST_MIN_MS=60, TARGET_BYTES=1024, MAX_BYTES=1024;
   var lanBeaconSeq=0, lanBeaconBusy=0, lanBeaconMax=3;
   function intercomLanBase(){ var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179'; return 'http://'+ip+':8081'; }
+  function isLanDirectMode(){
+    var bt=''; try{ bt=(document.getElementById('streamBadge')||{}).textContent||''; }catch(e){}
+    return currentStreamMode==='LAN' || bt.indexOf('LAN')>=0 || ((dev&&dev.ip)||'').indexOf('192.168.')===0;
+  }
   function intercomPath(path){
     // V5.1B: LAN mode uses ESP32 port 8081 directly. Railway cannot proxy to private 192.168.x.x,
     // and port 80 is occupied by /api/camera/stream while LAN video is running.
-    if(currentStreamMode==='LAN') return intercomLanBase()+path.replace('/api/ind_full','/api');
+    if(isLanDirectMode()) return intercomLanBase()+path.replace('/api/ind_full','/api');
     return path;
   }
-  function lanBeaconUrl(path, extra){ var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179'; return 'http://'+ip+':8081'+path+(path.indexOf('?')>=0?'&':'?')+'_='+Date.now()+(extra||''); }
+  function lanBeaconUrl(path, extra){
+    var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179';
+    var q=(extra||'');
+    if(q && q.charAt(0)==='&') q='?'+q.substring(1);
+    else if(q && q.charAt(0)!=='?') q='?'+q;
+    var sep=q ? '&' : '?';
+    return 'http://'+ip+':8081'+path+q+sep+'_='+(Date.now())+'&seq='+(++lanBeaconSeq);
+  }
   function sendLanBeacon(path, label, extra){
-    // Android Chrome on HTTPS pages can block fetch() to http://192.168.x.x as active mixed content.
-    // Image GET is allowed in the same situation, so LAN intercom uses image beacons just like the fast door-open path.
+    // Use exactly the same image-beacon mechanism as the proven fast door-open.
     try{
       var img=new Image();
       lanBeaconBusy++;
       img.onload=img.onerror=function(){ lanBeaconBusy=Math.max(0,lanBeaconBusy-1); };
-      img.src=lanBeaconUrl(path, extra||'')+'&seq='+(++lanBeaconSeq);
+      img.src=lanBeaconUrl(path, extra||'');
       return {ok:true,source:'lan_beacon',label:label||''};
     }catch(e){ setDebug((label||'lan beacon')+' failed '+e.message); return {ok:false,error:e.message}; }
   }
   async function apiGetAudio(u,label){
     try{
-      if(currentStreamMode==='LAN'){
+      if(isLanDirectMode()){
         var p=u.replace('/api/ind_full','/api');
         sendLanBeacon(p,label||'audio_get','');
         return {ok:true,source:'lan_beacon'};
@@ -598,7 +608,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   async function apiPostAudio(u,body,label){
     try{
-      if(currentStreamMode==='LAN'){
+      if(isLanDirectMode()){
         // PCM is sent as short GET chunks to 8081 so it reaches ESP32 while MJPEG occupies port 80.
         // Body is hex-only, so it is safe in the query string. Keep chunks <= about 2KB URL.
         var p='/api/door/open_fast';
@@ -635,11 +645,13 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     // V5.1D: send BEGIN immediately on pointerdown. Do not wait for getUserMedia/Speech/UI work.
     // This verifies the 8081 path in Serial and makes PTT feel instant.
     try{
-      if(currentStreamMode==='LAN'){
-        // V5.1E: Use the same proven 8081 path as fast door-open, but with ic=... query.
-        // Some Android in-app browsers ignore non-image LAN paths while streaming; /api/door/open_fast already works.
-        sendLanBeacon('/api/door/open_fast','intercom_ping','&ic=ping');
-        sendLanBeacon('/api/door/open_fast','phone_begin_fast','&ic=begin');
+      if(isLanDirectMode()){
+        // V5.1F: force LAN 8081 when badge/IP indicates LAN, not only currentStreamMode.
+        // Send begin several times because Android in-app browsers may drop the first image request during long-press.
+        sendLanBeacon('/api/door/open_fast','intercom_ping','ic=ping');
+        sendLanBeacon('/api/door/open_fast','phone_begin_fast','ic=begin');
+        setTimeout(function(){ sendLanBeacon('/api/door/open_fast','phone_begin_fast2','ic=begin'); },120);
+        setTimeout(function(){ sendLanBeacon('/api/door/open_fast','intercom_ping2','ic=ping'); },260);
       }else{
         apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin');
       }
@@ -652,7 +664,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed');
     }
   }
-  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); if(currentStreamMode==='LAN'){ sendLanBeacon('/api/door/open_fast','phone_end_fast','&ic=end'); } else { await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); } setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
+  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); if(isLanDirectMode()){ sendLanBeacon('/api/door/open_fast','phone_end_fast','ic=end'); } else { await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); } setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
   function bindIntercomPtt(){
     // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
     var b=document.getElementById('btnVoice');
