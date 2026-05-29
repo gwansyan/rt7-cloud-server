@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1S_RINGBUFFER_BYPASS';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1T_INTERCOM_RAW_PCM_POST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -533,18 +533,18 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1S: Intercom Phone Mic PCM pacer fix - 640B / 20ms pacing.
-  // Fix: V5.1Q paused cloud stream; remaining stutter is PCM pacing jitter.
-  // This version uses fixed 640B / ~20ms pacing, like the original clean RT7 intercom path.
+  // V5.1T: Intercom RAW PCM POST.
+  // Fix: V5.1S still used GET ?hex=..., causing URL parsing overhead and delayed choppy audio.
+  // This version posts binary PCM16 directly to ESP32 8081 /api/intercom/pcm_raw.
   var rt7IntercomBeaconKeep=[];
   var rt7IntercomBeginOn=false;
   var rt7MicStream=null, rt7MicCtx=null, rt7MicSource=null, rt7MicProc=null;
   var rt7MicTxBytes=[], rt7MicSendBusy=false, rt7MicSendQueue=[];
   var rt7MicPacerTimer=null, rt7MicLastPostMs=0, rt7MicHpX=0, rt7MicHpY=0;
   var rt7MicFrameCount=0, rt7MicZeroFrames=0, rt7MicRestarted=false, rt7MicBeginMs=0, rt7MicLastDiagMs=0;
-  // Keep 640-byte GET chunks because 8081 image beacon is the proven LAN path.
-  // Audio cleaning follows original RT7 settings more closely.
+  // Keep 640-byte / 20ms chunks, but send as RAW binary POST instead of hex GET.
   var RT7_MIC_GAIN=0.76, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=640, RT7_MIC_MAX_BYTES=640, RT7_MIC_PACER_MS=20;
+  var rt7RawPostOk=false, rt7RawPostFailCount=0;
   function sendIntercomBeacon(ic,label,extra){
     try{
       var beacon=new Image();
@@ -557,6 +557,20 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       beacon.src=url;
       return true;
     }catch(e){ setAnswer('對講 '+ic+' 失敗：'+e.message); setDebug('intercom '+ic+' failed '+e.message); return false; }
+  }
+  async function rt7PostRawPcm(bytes,label){
+    var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179');
+    var url='http://'+dip+':8081/api/intercom/pcm_raw?ic=pcm_raw&_ic_label='+encodeURIComponent(label||'raw_pcm')+'&_door='+Date.now();
+    try{
+      var u8=(bytes instanceof Uint8Array)?bytes:new Uint8Array(bytes);
+      var r=await fetch(url,{method:'POST',mode:'cors',cache:'no-store',headers:{'Content-Type':'application/octet-stream'},body:u8});
+      rt7RawPostOk=true;
+      return r.ok;
+    }catch(e){
+      rt7RawPostFailCount++;
+      if(rt7RawPostFailCount<=3) setDebug('RAW PCM POST failed, fallback hex beacon: '+(e.message||e));
+      return false;
+    }
   }
   function rt7BytesToHex(bytes){ var hex=''; for(var i=0;i<bytes.length;i++) hex+=bytes[i].toString(16).padStart(2,'0'); return hex; }
   function rt7FloatToPcm16Bytes(f32){
@@ -618,7 +632,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var n=RT7_MIC_TARGET_BYTES;
     var chunk=rt7MicTxBytes.splice(0,n);
     if(rt7ChunkIsSilent(chunk)) return;
-    rt7MicSendQueue.push(rt7BytesToHex(chunk));
+    rt7MicSendQueue.push(new Uint8Array(chunk));
     // Queue should stay near 0/1. Drop oldest packets to keep live low latency.
     if(rt7MicSendQueue.length>3) rt7MicSendQueue.splice(0,rt7MicSendQueue.length-3);
     rt7MicFlushQueue();
@@ -626,7 +640,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function rt7MicStartPacer(){
     if(rt7MicPacerTimer) clearInterval(rt7MicPacerTimer);
     rt7MicPacerTimer=setInterval(rt7MicPacerTick, RT7_MIC_PACER_MS);
-    setDebug('mic pacer on '+RT7_MIC_TARGET_BYTES+'B/'+RT7_MIC_PACER_MS+'ms');
+    setDebug('mic RAW POST pacer on '+RT7_MIC_TARGET_BYTES+'B/'+RT7_MIC_PACER_MS+'ms');
   }
   function rt7MicStopPacer(){
     if(rt7MicPacerTimer){ clearInterval(rt7MicPacerTimer); rt7MicPacerTimer=null; }
@@ -636,7 +650,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7MicTxBytes.length>=160){
       var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2;
       var chunk=rt7MicTxBytes.splice(0,n);
-      if(!rt7ChunkIsSilent(chunk)) rt7MicSendQueue.push(rt7BytesToHex(chunk));
+      if(!rt7ChunkIsSilent(chunk)) rt7MicSendQueue.push(new Uint8Array(chunk));
     }
     rt7MicTxBytes=[];
     rt7MicFlushQueue();
@@ -646,9 +660,13 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     rt7MicSendBusy=true;
     (function pump(){
       if(!rt7MicSendQueue.length){ rt7MicSendBusy=false; return; }
-      var hex=rt7MicSendQueue.shift();
-      sendIntercomBeacon('pcm','mic_pcm','&hex='+hex);
-      setTimeout(pump, 3);
+      var chunk=rt7MicSendQueue.shift();
+      rt7PostRawPcm(chunk,'mic_raw').then(function(ok){
+        // If Android/Chrome blocks active mixed-content POST from the HTTPS page, keep a fallback
+        // so the user can still verify the old path. Successful V5.1T logs should show PCM_RAW.
+        if(!ok){ sendIntercomBeacon('pcm','mic_pcm_fallback','&hex='+rt7BytesToHex(chunk)); }
+        setTimeout(pump, ok?1:3);
+      });
     })();
   }
   function rt7StopPhoneMic(){
@@ -711,7 +729,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7MicTxBytes=[]; rt7MicSendQueue=[]; rt7MicLastPostMs=0; rt7MicHpX=0; rt7MicHpY=0;
       rt7MicFrameCount=0; rt7MicZeroFrames=0; rt7MicRestarted=false; rt7MicBeginMs=performance.now(); rt7MicLastDiagMs=0; rt7MicStartPacer();
       setAnswer('對講開始：請說話');
-      setDebug('INTERCOM BEGIN + PHONE_MIC_ORIGINAL_CLEAN '+label);
+      setDebug('INTERCOM BEGIN + RAW_PCM_POST '+label);
       sendIntercomBeacon('begin', label||'begin');
       setTimeout(function(){ sendIntercomBeacon('ping','mic_pre_ping'); }, 80);
       var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking');
