@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1F_INTERCOM_PTT_LAN_MODE_FORCE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1G_INTERCOM_SHORT_TAP_BEGIN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -566,11 +566,11 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var phoneAudioCtx=null, phoneAudioNextTime=0, talking=false, intercomOn=false, sendBusy=false, sendQueue=[], txBytes=[];
   var espPolling=false, espTimer=null, hpLastX=0, hpLastY=0, lastPostMs=0;
   var MIC_GAIN=0.76, HP_A=0.995, POST_MIN_MS=60, TARGET_BYTES=1024, MAX_BYTES=1024;
-  var lanBeaconSeq=0, lanBeaconBusy=0, lanBeaconMax=3;
-  function intercomLanBase(){ var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179'; return 'http://'+ip+':8081'; }
+  var lanBeaconSeq=0, lanBeaconBusy=0, lanBeaconMax=3; var lanBeaconKeep=[];
+  function intercomLanBase(){ var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179'); return 'http://'+dip+':8081'; }
   function isLanDirectMode(){
     var bt=''; try{ bt=(document.getElementById('streamBadge')||{}).textContent||''; }catch(e){}
-    return currentStreamMode==='LAN' || bt.indexOf('LAN')>=0 || ((dev&&dev.ip)||'').indexOf('192.168.')===0;
+    return true; // V5.1G: force LAN 8081 for intercom PTT because door-open 8081 path is proven reachable
   }
   function intercomPath(path){
     // V5.1B: LAN mode uses ESP32 port 8081 directly. Railway cannot proxy to private 192.168.x.x,
@@ -579,7 +579,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     return path;
   }
   function lanBeaconUrl(path, extra){
-    var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179';
+    var ip=(dev&&dev.ip)?dev.ip:(window.rt7EspIp||'192.168.0.179');
     var q=(extra||'');
     if(q && q.charAt(0)==='&') q='?'+q.substring(1);
     else if(q && q.charAt(0)!=='?') q='?'+q;
@@ -587,12 +587,16 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     return 'http://'+ip+':8081'+path+q+sep+'_='+(Date.now())+'&seq='+(++lanBeaconSeq);
   }
   function sendLanBeacon(path, label, extra){
-    // Use exactly the same image-beacon mechanism as the proven fast door-open.
+    // V5.1G: keep Image objects alive; Android Chrome may cancel local images if the object is GC'ed during long-press.
     try{
       var img=new Image();
       lanBeaconBusy++;
-      img.onload=img.onerror=function(){ lanBeaconBusy=Math.max(0,lanBeaconBusy-1); };
-      img.src=lanBeaconUrl(path, extra||'');
+      lanBeaconKeep.push(img);
+      if(lanBeaconKeep.length>24) lanBeaconKeep.splice(0, lanBeaconKeep.length-24);
+      img.onload=img.onerror=function(){ lanBeaconBusy=Math.max(0,lanBeaconBusy-1); setTimeout(function(){ var i=lanBeaconKeep.indexOf(img); if(i>=0) lanBeaconKeep.splice(i,1); }, 1800); };
+      var url=lanBeaconUrl(path, extra||'');
+      setDebug('LAN beacon '+(label||'')+' -> '+url.replace(/hex=[^&]+/,'hex=...'));
+      img.src=url;
       return {ok:true,source:'lan_beacon',label:label||''};
     }catch(e){ setDebug((label||'lan beacon')+' failed '+e.message); return {ok:false,error:e.message}; }
   }
@@ -627,6 +631,13 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function enqueueTx(bytes){ for(var i=0;i<bytes.length;i++)txBytes.push(bytes[i]); var now=performance.now(); if(txBytes.length>=TARGET_BYTES&&(now-lastPostMs)>=POST_MIN_MS){ var n=Math.min(MAX_BYTES,txBytes.length); n-=n%2; var chunk=txBytes.splice(0,n); sendQueue.push(bytesToHex(chunk)); lastPostMs=now; if(sendQueue.length>2)sendQueue.splice(0,sendQueue.length-2); flushTxQueue(); } }
   async function flushTxQueue(){ if(sendBusy)return; sendBusy=true; while(sendQueue.length){ await apiPostAudio('/api/ind_full/audio/phone_pcm_hex', sendQueue.shift(), 'phone_pcm'); } sendBusy=false; }
   function flushTxTail(){ while(txBytes.length>0){ if(txBytes.length%2)txBytes.push(0); var n=Math.min(MAX_BYTES,txBytes.length); n-=n%2; var chunk=txBytes.splice(0,n); sendQueue.push(bytesToHex(chunk)); if(sendQueue.length>2)sendQueue.splice(0,sendQueue.length-2); } flushTxQueue(); }
+  function fastIntercomBeginBurst(tag){
+    // Same endpoint as working door open, but with ic parameter so ESP32 does not open the door.
+    sendLanBeacon('/api/door/open_fast','ic_ping_'+tag,'ic=ping');
+    sendLanBeacon('/api/door/open_fast','ic_begin_'+tag,'ic=begin');
+    setTimeout(function(){ sendLanBeacon('/api/door/open_fast','ic_begin2_'+tag,'ic=begin'); }, 180);
+  }
+
   async function ensurePhoneMic(){ if(phoneMicStream&&phoneMicCtx)return true; phoneMicStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:{ideal:true},noiseSuppression:{ideal:false},autoGainControl:{ideal:false},channelCount:{ideal:1},sampleRate:{ideal:48000}},video:false}); phoneMicCtx=new (window.AudioContext||window.webkitAudioContext)(); phoneMicSource=phoneMicCtx.createMediaStreamSource(phoneMicStream); phoneMicProc=phoneMicCtx.createScriptProcessor(2048,1,1); phoneMicProc.onaudioprocess=function(e){ if(!talking)return; var raw=e.inputBuffer.getChannelData(0); var cleaned=cleanMicFrame(raw); var ds=downsampleTo16k(cleaned, phoneMicCtx.sampleRate); enqueueTx(floatToPcm16Bytes(ds)); }; phoneMicSource.connect(phoneMicProc); phoneMicProc.connect(phoneMicCtx.destination); await resumeAudioForIntercom('mic'); setDebug('intercom mic ready sr='+phoneMicCtx.sampleRate); return true; }
   async function ensurePhonePlay(){ if(!phoneAudioCtx){ phoneAudioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000}); phoneAudioNextTime=phoneAudioCtx.currentTime+0.08; } await resumeAudioForIntercom('play'); return true; }
   function playPcm16Hex(hex){ if(!phoneAudioCtx||!hex)return; var n=Math.floor(hex.length/4); if(n<=0)return; var buf=phoneAudioCtx.createBuffer(1,n,16000), ch=buf.getChannelData(0); for(var i=0;i<n;i++){ var lo=parseInt(hex.substr(i*4,2),16), hi=parseInt(hex.substr(i*4+2,2),16); var v=(hi<<8)|lo; if(v>=32768)v-=65536; ch[i]=v/32768; } var src=phoneAudioCtx.createBufferSource(); src.buffer=buf; src.connect(phoneAudioCtx.destination); var now=phoneAudioCtx.currentTime; if(phoneAudioNextTime<now+0.02) phoneAudioNextTime=now+0.06; src.start(phoneAudioNextTime); phoneAudioNextTime+=buf.duration; }
@@ -644,18 +655,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN 8081 immediate begin':'cloudProxy'));
     // V5.1D: send BEGIN immediately on pointerdown. Do not wait for getUserMedia/Speech/UI work.
     // This verifies the 8081 path in Serial and makes PTT feel instant.
-    try{
-      if(isLanDirectMode()){
-        // V5.1F: force LAN 8081 when badge/IP indicates LAN, not only currentStreamMode.
-        // Send begin several times because Android in-app browsers may drop the first image request during long-press.
-        sendLanBeacon('/api/door/open_fast','intercom_ping','ic=ping');
-        sendLanBeacon('/api/door/open_fast','phone_begin_fast','ic=begin');
-        setTimeout(function(){ sendLanBeacon('/api/door/open_fast','phone_begin_fast2','ic=begin'); },120);
-        setTimeout(function(){ sendLanBeacon('/api/door/open_fast','intercom_ping2','ic=ping'); },260);
-      }else{
-        apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin');
-      }
-    }catch(_){ }
+    try{ fastIntercomBeginBurst('down'); }catch(_){ }
     try{
       await ensurePhoneMic();
       await startEspRx();
@@ -669,6 +669,10 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
     var b=document.getElementById('btnVoice');
     if(b){
+      // V5.1G: send a tiny begin burst in capture phase before mic permission / long-press logic.
+      b.addEventListener('pointerdown',function(ev){ try{ fastIntercomBeginBurst('pdcap'); }catch(e){} },true);
+      b.addEventListener('touchstart',function(ev){ try{ fastIntercomBeginBurst('tscap'); }catch(e){} },{passive:true,capture:true});
+      b.addEventListener('click',function(ev){ try{ fastIntercomBeginBurst('click'); setAnswer('對講已送出測試訊號，請長按說話'); }catch(e){} },true);
       b.addEventListener('pointerdown',intercomDown,false);
       b.addEventListener('pointerup',intercomUp,false);
       b.addEventListener('pointercancel',intercomUp,false);
