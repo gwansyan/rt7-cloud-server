@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1J_INTERCOM_DIRECT_BUTTON_TEST_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1K_INTERCOM_BEGIN_END_ONLY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -533,24 +533,40 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1J: Direct intercom button test. Use the exact same proven 8081 image-beacon mechanism as 開門,
-  // but add ic=test so ESP32 logs [INTERCOM][TEST] and does NOT open the door.
+  // V5.1K: Intercom BEGIN/END only test. Use the proven 8081 image-beacon path.
+  // First click sends ic=begin. Second click (or lower 對講結束) sends ic=end.
   var rt7IntercomBeaconKeep=[];
-  function intercomDirectButtonTest(label){
-    setAnswer('對講測試訊號送出中...');
-    setDebug('intercom direct test '+label);
+  var rt7IntercomBeginOn=false;
+  function sendIntercomBeacon(ic,label){
     try{
       var beacon=new Image();
       rt7IntercomBeaconKeep.push(beacon);
-      if(rt7IntercomBeaconKeep.length>12) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-12);
-      beacon.onload=function(){ setDebug('intercom test beacon loaded '+label); };
-      beacon.onerror=function(){ setDebug('intercom test beacon sent/error ok '+label); };
-      beacon.src='http://'+ip+':8081/api/door/open_fast?ic=test&_ic_label='+encodeURIComponent(label)+'&_door='+Date.now();
-      setAnswer('對講測試');
-    }catch(e){ setAnswer('對講測試失敗：'+e.message); setDebug('intercom direct failed '+e.message); }
+      if(rt7IntercomBeaconKeep.length>16) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-16);
+      beacon.onload=function(){ setDebug('intercom '+ic+' beacon loaded '+label); };
+      beacon.onerror=function(){ setDebug('intercom '+ic+' beacon sent/error ok '+label); };
+      beacon.src='http://'+ip+':8081/api/door/open_fast?ic='+encodeURIComponent(ic)+'&_ic_label='+encodeURIComponent(label||'')+'&_door='+Date.now();
+      return true;
+    }catch(e){ setAnswer('對講 '+ic+' 失敗：'+e.message); setDebug('intercom '+ic+' failed '+e.message); return false; }
   }
-  bind('btnVoice', function(){ intercomDirectButtonTest('bigMic_click'); });
-  bind('btnEndTalk', function(){ intercomDirectButtonTest('lowerTalk_click'); });
+  function intercomBeginEndToggle(label){
+    if(!rt7IntercomBeginOn){
+      rt7IntercomBeginOn=true;
+      setAnswer('對講開始');
+      setDebug('INTERCOM BEGIN '+label);
+      sendIntercomBeacon('begin', label||'begin');
+      var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking');
+      var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking');
+    }else{
+      rt7IntercomBeginOn=false;
+      setAnswer('對講結束');
+      setDebug('INTERCOM END '+label);
+      sendIntercomBeacon('end', label||'end');
+      var b2=document.getElementById('btnVoice'); if(b2)b2.classList.remove('talking');
+      var e2=document.getElementById('btnEndTalk'); if(e2)e2.classList.remove('talking');
+    }
+  }
+  bind('btnVoice', function(){ intercomBeginEndToggle('bigMic_click'); });
+  bind('btnEndTalk', function(){ if(rt7IntercomBeginOn) intercomBeginEndToggle('lowerTalk_end'); else { setAnswer('對講尚未開始'); setDebug('intercom end ignored'); } });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     ai=!!on;
