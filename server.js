@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1L_INTERCOM_PCM_FIRST_TEST';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1M_INTERCOM_PHONE_MIC_PCM';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -533,16 +533,19 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1L: Intercom PCM first test. Use proven 8081 image-beacon path.
-  // First click sends PHONE_BEGIN and fixed 1kHz PCM tone chunks. Second click sends PHONE_END.
+  // V5.1M: Intercom Phone Mic PCM. Use proven 8081 image-beacon path.
+  // First click starts PHONE_BEGIN + real phone microphone PCM. Second click sends PHONE_END.
   var rt7IntercomBeaconKeep=[];
   var rt7IntercomBeginOn=false;
-  var rt7PcmTestSeq=0;
+  var rt7MicStream=null, rt7MicCtx=null, rt7MicSource=null, rt7MicProc=null;
+  var rt7MicTxBytes=[], rt7MicSendBusy=false, rt7MicSendQueue=[];
+  var rt7MicLastPostMs=0, rt7MicHpX=0, rt7MicHpY=0;
+  var RT7_MIC_GAIN=0.78, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=640, RT7_MIC_MAX_BYTES=640, RT7_MIC_MIN_POST_MS=35;
   function sendIntercomBeacon(ic,label,extra){
     try{
       var beacon=new Image();
       rt7IntercomBeaconKeep.push(beacon);
-      if(rt7IntercomBeaconKeep.length>32) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-32);
+      if(rt7IntercomBeaconKeep.length>48) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-48);
       beacon.onload=function(){ setDebug('intercom '+ic+' beacon loaded '+label); };
       beacon.onerror=function(){ setDebug('intercom '+ic+' beacon sent/error ok '+label); };
       var url='http://'+ip+':8081/api/door/open_fast?ic='+encodeURIComponent(ic)+'&_ic_label='+encodeURIComponent(label||'')+'&_door='+Date.now();
@@ -551,44 +554,67 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       return true;
     }catch(e){ setAnswer('對講 '+ic+' 失敗：'+e.message); setDebug('intercom '+ic+' failed '+e.message); return false; }
   }
-  function makeToneHexChunk(ms, freq, amp){
-    var sr=16000, n=Math.floor(sr*ms/1000), hex='';
-    for(var i=0;i<n;i++){
-      var fade=1;
-      if(i<80) fade=i/80;
-      if(n-i<80) fade=(n-i)/80;
-      var v=Math.round(Math.sin(2*Math.PI*freq*i/sr)*(amp||9000)*fade);
-      if(v<0) v+=65536;
-      hex += (v&255).toString(16).padStart(2,'0') + ((v>>8)&255).toString(16).padStart(2,'0');
-    }
-    return hex;
-  }
-  function sendPcmToneTest(label){
-    // URL length safe: 50ms @16kHz = 1600 bytes = 3200 hex, still usually OK on LAN.
-    // Use 40ms chunks for Android/ESP32 stability.
-    var chunks=10; // 10*40ms = 400ms tone
-    setDebug('PCM_TEST schedule '+label);
-    for(var k=0;k<chunks;k++){
-      (function(idx){
-        setTimeout(function(){
-          var hex=makeToneHexChunk(40, 1000, 9000);
-          sendIntercomBeacon('pcm','pcm_test_'+(++rt7PcmTestSeq)+'_'+idx,'&hex='+hex);
-        }, 160 + idx*70);
-      })(k);
+  function rt7BytesToHex(bytes){ var hex=''; for(var i=0;i<bytes.length;i++) hex+=bytes[i].toString(16).padStart(2,'0'); return hex; }
+  function rt7FloatToPcm16Bytes(f32){ var bytes=new Uint8Array(f32.length*2); for(var i=0;i<f32.length;i++){ var v=Math.max(-1,Math.min(1,f32[i])); var s=Math.round(v<0?v*0x8000:v*0x7fff); bytes[i*2]=s&255; bytes[i*2+1]=(s>>8)&255; } return bytes; }
+  function rt7DownsampleTo16k(input,inRate){ if(inRate===16000)return input; var ratio=inRate/16000, len=Math.floor(input.length/ratio), out=new Float32Array(len); for(var i=0;i<len;i++){ var a=Math.floor(i*ratio), b=Math.min(Math.floor((i+1)*ratio),input.length), sum=0,c=0; for(var j=a;j<b;j++){sum+=input[j];c++;} out[i]=c?sum/c:0; } return out; }
+  function rt7CleanMicFrame(input){ var out=new Float32Array(input.length); var fadeN=Math.min(16,input.length); for(var i=0;i<input.length;i++){ var x=input[i]; var y=x-rt7MicHpX+RT7_HP_A*rt7MicHpY; rt7MicHpX=x; rt7MicHpY=y; y*=RT7_MIC_GAIN; if(y>0.98)y=0.98; if(y<-0.98)y=-0.98; if(i<fadeN)y*=i/fadeN; if(input.length-i<fadeN)y*=(input.length-i)/fadeN; out[i]=y; } return out; }
+  function rt7MicQueueBytes(bytes){
+    for(var i=0;i<bytes.length;i++) rt7MicTxBytes.push(bytes[i]);
+    var now=performance.now();
+    if(rt7MicTxBytes.length>=RT7_MIC_TARGET_BYTES && (now-rt7MicLastPostMs)>=RT7_MIC_MIN_POST_MS){
+      var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2;
+      var chunk=rt7MicTxBytes.splice(0,n);
+      rt7MicSendQueue.push(rt7BytesToHex(chunk));
+      rt7MicLastPostMs=now;
+      if(rt7MicSendQueue.length>4) rt7MicSendQueue.splice(0,rt7MicSendQueue.length-4);
+      rt7MicFlushQueue();
     }
   }
-  function intercomBeginEndToggle(label){
+  function rt7MicFlushTail(){ while(rt7MicTxBytes.length>0){ if(rt7MicTxBytes.length%2)rt7MicTxBytes.push(0); var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2; var chunk=rt7MicTxBytes.splice(0,n); rt7MicSendQueue.push(rt7BytesToHex(chunk)); if(rt7MicSendQueue.length>4)rt7MicSendQueue.splice(0,rt7MicSendQueue.length-4); } rt7MicFlushQueue(); }
+  function rt7MicFlushQueue(){
+    if(rt7MicSendBusy)return;
+    rt7MicSendBusy=true;
+    (function pump(){
+      if(!rt7MicSendQueue.length){ rt7MicSendBusy=false; return; }
+      var hex=rt7MicSendQueue.shift();
+      sendIntercomBeacon('pcm','mic_pcm','&hex='+hex);
+      setTimeout(pump, 12);
+    })();
+  }
+  async function rt7EnsurePhoneMic(){
+    if(rt7MicStream&&rt7MicCtx)return true;
+    rt7MicStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:{ideal:true},noiseSuppression:{ideal:false},autoGainControl:{ideal:false},channelCount:{ideal:1},sampleRate:{ideal:48000}},video:false});
+    rt7MicCtx=new (window.AudioContext||window.webkitAudioContext)();
+    rt7MicSource=rt7MicCtx.createMediaStreamSource(rt7MicStream);
+    rt7MicProc=rt7MicCtx.createScriptProcessor(2048,1,1);
+    rt7MicProc.onaudioprocess=function(e){
+      if(!rt7IntercomBeginOn)return;
+      var raw=e.inputBuffer.getChannelData(0);
+      var cleaned=rt7CleanMicFrame(raw);
+      var ds=rt7DownsampleTo16k(cleaned, rt7MicCtx.sampleRate);
+      rt7MicQueueBytes(rt7FloatToPcm16Bytes(ds));
+    };
+    rt7MicSource.connect(rt7MicProc);
+    // Keep processor alive but mute monitor path to avoid echo.
+    rt7MicProc.connect(rt7MicCtx.destination);
+    if(rt7MicCtx.state!=='running') await rt7MicCtx.resume();
+    setDebug('phone mic ready sr='+rt7MicCtx.sampleRate);
+    return true;
+  }
+  async function intercomBeginEndToggle(label){
     if(!rt7IntercomBeginOn){
       rt7IntercomBeginOn=true;
-      setAnswer('對講開始：播放測試音');
-      setDebug('INTERCOM BEGIN + PCM_TEST '+label);
+      rt7MicTxBytes=[]; rt7MicSendQueue=[]; rt7MicLastPostMs=0; rt7MicHpX=0; rt7MicHpY=0;
+      setAnswer('對講開始：請說話');
+      setDebug('INTERCOM BEGIN + PHONE_MIC '+label);
       sendIntercomBeacon('begin', label||'begin');
-      setTimeout(function(){ sendIntercomBeacon('ping','pcm_pre_ping'); }, 80);
-      sendPcmToneTest(label||'begin');
+      setTimeout(function(){ sendIntercomBeacon('ping','mic_pre_ping'); }, 80);
       var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking');
       var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking');
+      try{ await rt7EnsurePhoneMic(); }catch(e2){ setAnswer('手機麥克風啟用失敗：'+(e2.message||e2)); setDebug('mic start failed '+(e2.message||e2)); rt7IntercomBeginOn=false; sendIntercomBeacon('end','mic_start_failed'); if(b)b.classList.remove('talking'); if(e)e.classList.remove('talking'); }
     }else{
       rt7IntercomBeginOn=false;
+      rt7MicFlushTail();
       setAnswer('對講結束');
       setDebug('INTERCOM END '+label);
       sendIntercomBeacon('end', label||'end');
