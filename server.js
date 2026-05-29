@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1K_INTERCOM_BEGIN_END_ONLY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1L_INTERCOM_PCM_FIRST_TEST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -489,7 +489,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">短按麥克風測試對講</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">短按麥克風播放對講測試音</div></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
@@ -533,27 +533,58 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1K: Intercom BEGIN/END only test. Use the proven 8081 image-beacon path.
-  // First click sends ic=begin. Second click (or lower 對講結束) sends ic=end.
+  // V5.1L: Intercom PCM first test. Use proven 8081 image-beacon path.
+  // First click sends PHONE_BEGIN and fixed 1kHz PCM tone chunks. Second click sends PHONE_END.
   var rt7IntercomBeaconKeep=[];
   var rt7IntercomBeginOn=false;
-  function sendIntercomBeacon(ic,label){
+  var rt7PcmTestSeq=0;
+  function sendIntercomBeacon(ic,label,extra){
     try{
       var beacon=new Image();
       rt7IntercomBeaconKeep.push(beacon);
-      if(rt7IntercomBeaconKeep.length>16) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-16);
+      if(rt7IntercomBeaconKeep.length>32) rt7IntercomBeaconKeep.splice(0, rt7IntercomBeaconKeep.length-32);
       beacon.onload=function(){ setDebug('intercom '+ic+' beacon loaded '+label); };
       beacon.onerror=function(){ setDebug('intercom '+ic+' beacon sent/error ok '+label); };
-      beacon.src='http://'+ip+':8081/api/door/open_fast?ic='+encodeURIComponent(ic)+'&_ic_label='+encodeURIComponent(label||'')+'&_door='+Date.now();
+      var url='http://'+ip+':8081/api/door/open_fast?ic='+encodeURIComponent(ic)+'&_ic_label='+encodeURIComponent(label||'')+'&_door='+Date.now();
+      if(extra) url += extra;
+      beacon.src=url;
       return true;
     }catch(e){ setAnswer('對講 '+ic+' 失敗：'+e.message); setDebug('intercom '+ic+' failed '+e.message); return false; }
+  }
+  function makeToneHexChunk(ms, freq, amp){
+    var sr=16000, n=Math.floor(sr*ms/1000), hex='';
+    for(var i=0;i<n;i++){
+      var fade=1;
+      if(i<80) fade=i/80;
+      if(n-i<80) fade=(n-i)/80;
+      var v=Math.round(Math.sin(2*Math.PI*freq*i/sr)*(amp||9000)*fade);
+      if(v<0) v+=65536;
+      hex += (v&255).toString(16).padStart(2,'0') + ((v>>8)&255).toString(16).padStart(2,'0');
+    }
+    return hex;
+  }
+  function sendPcmToneTest(label){
+    // URL length safe: 50ms @16kHz = 1600 bytes = 3200 hex, still usually OK on LAN.
+    // Use 40ms chunks for Android/ESP32 stability.
+    var chunks=10; // 10*40ms = 400ms tone
+    setDebug('PCM_TEST schedule '+label);
+    for(var k=0;k<chunks;k++){
+      (function(idx){
+        setTimeout(function(){
+          var hex=makeToneHexChunk(40, 1000, 9000);
+          sendIntercomBeacon('pcm','pcm_test_'+(++rt7PcmTestSeq)+'_'+idx,'&hex='+hex);
+        }, 160 + idx*70);
+      })(k);
+    }
   }
   function intercomBeginEndToggle(label){
     if(!rt7IntercomBeginOn){
       rt7IntercomBeginOn=true;
-      setAnswer('對講開始');
-      setDebug('INTERCOM BEGIN '+label);
+      setAnswer('對講開始：播放測試音');
+      setDebug('INTERCOM BEGIN + PCM_TEST '+label);
       sendIntercomBeacon('begin', label||'begin');
+      setTimeout(function(){ sendIntercomBeacon('ping','pcm_pre_ping'); }, 80);
+      sendPcmToneTest(label||'begin');
       var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking');
       var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking');
     }else{
