@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1U_INTERCOM_LAN_LOCAL_AUDIO_PAGE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1V_INTERCOM_PROFILER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -470,7 +470,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.1U</title>
+<title>RT7 Cloud Original UI V5.1A</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -489,7 +489,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">點選開啟 ESP32 內網對講頁</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">短按麥克風播放對講測試音</div></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
@@ -533,18 +533,19 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1T: Intercom RAW PCM POST.
-  // Fix: V5.1S still used GET ?hex=..., causing URL parsing overhead and delayed choppy audio.
-  // This version posts binary PCM16 directly to ESP32 8081 /api/intercom/pcm_raw.
+  // V5.1P: Intercom Phone Mic PCM - original RT7 batching + no giant serial spam.
+  // Fix: V5.1N still sent 640B/40ms and all-zero chunks, causing tick/tock audio.
+  // This version uses original RT7 cleaner/batching: 1280B per ~40ms, skips digital-zero frames, and avoids request flooding.
   var rt7IntercomBeaconKeep=[];
   var rt7IntercomBeginOn=false;
   var rt7MicStream=null, rt7MicCtx=null, rt7MicSource=null, rt7MicProc=null;
   var rt7MicTxBytes=[], rt7MicSendBusy=false, rt7MicSendQueue=[];
-  var rt7MicPacerTimer=null, rt7MicLastPostMs=0, rt7MicHpX=0, rt7MicHpY=0;
+  var rt7MicLastPostMs=0, rt7MicHpX=0, rt7MicHpY=0;
   var rt7MicFrameCount=0, rt7MicZeroFrames=0, rt7MicRestarted=false, rt7MicBeginMs=0, rt7MicLastDiagMs=0;
-  // Keep 640-byte / 20ms chunks, but send as RAW binary POST instead of hex GET.
-  var RT7_MIC_GAIN=0.76, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=640, RT7_MIC_MAX_BYTES=640, RT7_MIC_PACER_MS=20;
-  var rt7RawPostOk=false, rt7RawPostFailCount=0;
+  var rt7ProfSeq=0, rt7ProfFirstRawMs=0, rt7ProfFirstPcmMs=0, rt7ProfFirstSendMs=0, rt7ProfLastSendMs=0, rt7ProfSent=0;
+  // Keep 640-byte GET chunks because 8081 image beacon is the proven LAN path.
+  // Audio cleaning follows original RT7 settings more closely.
+  var RT7_MIC_GAIN=0.76, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=1280, RT7_MIC_MAX_BYTES=1280, RT7_MIC_MIN_POST_MS=38;
   function sendIntercomBeacon(ic,label,extra){
     try{
       var beacon=new Image();
@@ -557,39 +558,6 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       beacon.src=url;
       return true;
     }catch(e){ setAnswer('對講 '+ic+' 失敗：'+e.message); setDebug('intercom '+ic+' failed '+e.message); return false; }
-  }
-
-  // V5.1U: Cloud page no longer streams phone mic PCM from HTTPS page.
-  // It opens the ESP32 LAN local audio page, so audio can use local WS/binary PCM like the original RT7 flow.
-  function openLanIntercomPage(label){
-    try{
-      var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179');
-      dip=String(dip||'192.168.0.179').replace(/^https?:\/\//,'').replace(/\/$/,'');
-      var url='http://'+dip+':8081/rt7_intercom_local?from=cloud&label='+encodeURIComponent(label||'cloud_mic')+'&ts='+Date.now();
-      setAnswer('開啟內網對講頁');
-      setDebug('open LAN local intercom page '+url);
-      // Use location.href instead of window.open to avoid Android popup blocking.
-      window.location.href=url;
-      return true;
-    }catch(e){
-      setAnswer('開啟內網對講頁失敗：'+(e.message||e));
-      return false;
-    }
-  }
-
-  async function rt7PostRawPcm(bytes,label){
-    var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179');
-    var url='http://'+dip+':8081/api/intercom/pcm_raw?ic=pcm_raw&_ic_label='+encodeURIComponent(label||'raw_pcm')+'&_door='+Date.now();
-    try{
-      var u8=(bytes instanceof Uint8Array)?bytes:new Uint8Array(bytes);
-      var r=await fetch(url,{method:'POST',mode:'cors',cache:'no-store',headers:{'Content-Type':'application/octet-stream'},body:u8});
-      rt7RawPostOk=true;
-      return r.ok;
-    }catch(e){
-      rt7RawPostFailCount++;
-      if(rt7RawPostFailCount<=3) setDebug('RAW PCM POST failed, fallback hex beacon: '+(e.message||e));
-      return false;
-    }
   }
   function rt7BytesToHex(bytes){ var hex=''; for(var i=0;i<bytes.length;i++) hex+=bytes[i].toString(16).padStart(2,'0'); return hex; }
   function rt7FloatToPcm16Bytes(f32){
@@ -637,41 +605,24 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   function rt7MicQueueBytes(bytes){
     for(var i=0;i<bytes.length;i++) rt7MicTxBytes.push(bytes[i]);
-    // Keep a small buffer only. If Android delivers bursts, drop oldest audio rather than building latency.
-    var maxBuf=RT7_MIC_TARGET_BYTES*8;
-    if(rt7MicTxBytes.length>maxBuf) rt7MicTxBytes.splice(0, rt7MicTxBytes.length-maxBuf);
-  }
-  function rt7ChunkIsSilent(chunk){
-    for(var i=0;i<chunk.length;i++){ if(chunk[i]!==0) return false; }
-    return true;
-  }
-  function rt7MicPacerTick(){
-    if(!rt7IntercomBeginOn) return;
-    if(rt7MicTxBytes.length < RT7_MIC_TARGET_BYTES) return;
-    var n=RT7_MIC_TARGET_BYTES;
-    var chunk=rt7MicTxBytes.splice(0,n);
-    if(rt7ChunkIsSilent(chunk)) return;
-    rt7MicSendQueue.push(new Uint8Array(chunk));
-    // Queue should stay near 0/1. Drop oldest packets to keep live low latency.
-    if(rt7MicSendQueue.length>3) rt7MicSendQueue.splice(0,rt7MicSendQueue.length-3);
-    rt7MicFlushQueue();
-  }
-  function rt7MicStartPacer(){
-    if(rt7MicPacerTimer) clearInterval(rt7MicPacerTimer);
-    rt7MicPacerTimer=setInterval(rt7MicPacerTick, RT7_MIC_PACER_MS);
-    setDebug('mic RAW POST pacer on '+RT7_MIC_TARGET_BYTES+'B/'+RT7_MIC_PACER_MS+'ms');
-  }
-  function rt7MicStopPacer(){
-    if(rt7MicPacerTimer){ clearInterval(rt7MicPacerTimer); rt7MicPacerTimer=null; }
-  }
-  function rt7MicFlushTail(){
-    // Do not dump a large tail at end; it creates delayed echo. Send at most one last short live packet.
-    if(rt7MicTxBytes.length>=160){
+    var now=performance.now();
+    if(rt7MicTxBytes.length>=RT7_MIC_TARGET_BYTES && (now-rt7MicLastPostMs)>=RT7_MIC_MIN_POST_MS){
       var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2;
       var chunk=rt7MicTxBytes.splice(0,n);
-      if(!rt7ChunkIsSilent(chunk)) rt7MicSendQueue.push(new Uint8Array(chunk));
+      rt7MicSendQueue.push({hex:rt7BytesToHex(chunk), seq:++rt7ProfSeq, tEnq:Math.round(now-rt7MicBeginMs)});
+      rt7MicLastPostMs=now;
+      if(rt7MicSendQueue.length>4) rt7MicSendQueue.splice(0,rt7MicSendQueue.length-4);
+      rt7MicFlushQueue();
     }
-    rt7MicTxBytes=[];
+  }
+  function rt7MicFlushTail(){
+    while(rt7MicTxBytes.length>0){
+      if(rt7MicTxBytes.length%2)rt7MicTxBytes.push(0);
+      var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2;
+      var chunk=rt7MicTxBytes.splice(0,n);
+      rt7MicSendQueue.push({hex:rt7BytesToHex(chunk), seq:++rt7ProfSeq, tEnq:Math.round(performance.now()-rt7MicBeginMs)});
+      if(rt7MicSendQueue.length>4)rt7MicSendQueue.splice(0,rt7MicSendQueue.length-4);
+    }
     rt7MicFlushQueue();
   }
   function rt7MicFlushQueue(){
@@ -679,13 +630,14 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     rt7MicSendBusy=true;
     (function pump(){
       if(!rt7MicSendQueue.length){ rt7MicSendBusy=false; return; }
-      var chunk=rt7MicSendQueue.shift();
-      rt7PostRawPcm(chunk,'mic_raw').then(function(ok){
-        // If Android/Chrome blocks active mixed-content POST from the HTTPS page, keep a fallback
-        // so the user can still verify the old path. Successful V5.1T logs should show PCM_RAW.
-        if(!ok){ sendIntercomBeacon('pcm','mic_pcm_fallback','&hex='+rt7BytesToHex(chunk)); }
-        setTimeout(pump, ok?1:3);
-      });
+      var item=rt7MicSendQueue.shift();
+      var now=performance.now();
+      if(!rt7ProfFirstSendMs) rt7ProfFirstSendMs=now;
+      rt7ProfLastSendMs=now; rt7ProfSent++;
+      var dt=rt7ProfSent<=3 || (rt7ProfSent%20===0) ? '&pseq='+item.seq+'&tenq='+item.tEnq+'&tsend='+Math.round(now-rt7MicBeginMs) : '&pseq='+item.seq;
+      sendIntercomBeacon('pcm','mic_pcm',dt+'&hex='+item.hex);
+      if(rt7ProfSent<=3 || (rt7ProfSent%20===0)) setDebug('[PROF][PHONE] sent='+rt7ProfSent+' seq='+item.seq+' tEnq='+item.tEnq+' tSend='+Math.round(now-rt7MicBeginMs)+' q='+rt7MicSendQueue.length);
+      setTimeout(pump, 10);
     })();
   }
   function rt7StopPhoneMic(){
@@ -715,6 +667,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7MicFrameCount++;
       var st=rt7MicStats(raw);
       var now=performance.now();
+      if(!rt7ProfFirstRawMs){ rt7ProfFirstRawMs=now; setDebug('[PROF][PHONE] first_raw_ms='+Math.round(now-rt7MicBeginMs)+' rms='+st.rms.toFixed(5)+' peak='+st.peak.toFixed(5)); }
       if(st.peak<0.00015) rt7MicZeroFrames++; else rt7MicZeroFrames=0;
       if(now-rt7MicLastDiagMs>900){
         rt7MicLastDiagMs=now;
@@ -731,7 +684,10 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(st.peak < 0.00005) return;
       var cleaned=rt7CleanMicFrame(raw);
       var ds=rt7DownsampleTo16k(cleaned, rt7MicCtx.sampleRate);
-      if(ds.length) rt7MicQueueBytes(rt7FloatToPcm16Bytes(ds));
+      if(ds.length){
+        if(!rt7ProfFirstPcmMs){ rt7ProfFirstPcmMs=performance.now(); setDebug('[PROF][PHONE] first_pcm_ms='+Math.round(rt7ProfFirstPcmMs-rt7MicBeginMs)+' samples='+ds.length+' sr='+Math.round(rt7MicCtx.sampleRate)); }
+        rt7MicQueueBytes(rt7FloatToPcm16Bytes(ds));
+      }
     };
     rt7MicSource.connect(rt7MicProc);
     // Keep processor alive; ScriptProcessor output is unused.
@@ -746,9 +702,10 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(!rt7IntercomBeginOn){
       rt7IntercomBeginOn=true;
       rt7MicTxBytes=[]; rt7MicSendQueue=[]; rt7MicLastPostMs=0; rt7MicHpX=0; rt7MicHpY=0;
-      rt7MicFrameCount=0; rt7MicZeroFrames=0; rt7MicRestarted=false; rt7MicBeginMs=performance.now(); rt7MicLastDiagMs=0; rt7MicStartPacer();
+      rt7MicFrameCount=0; rt7MicZeroFrames=0; rt7MicRestarted=false; rt7MicBeginMs=performance.now(); rt7MicLastDiagMs=0;
+      rt7ProfSeq=0; rt7ProfFirstRawMs=0; rt7ProfFirstPcmMs=0; rt7ProfFirstSendMs=0; rt7ProfLastSendMs=0; rt7ProfSent=0;
       setAnswer('對講開始：請說話');
-      setDebug('INTERCOM BEGIN + RAW_PCM_POST '+label);
+      setDebug('[PROF][PHONE] INTERCOM_BEGIN '+label);
       sendIntercomBeacon('begin', label||'begin');
       setTimeout(function(){ sendIntercomBeacon('ping','mic_pre_ping'); }, 80);
       var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking');
@@ -762,15 +719,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7IntercomBeginOn=false;
       rt7MicFlushTail();
       setAnswer('對講結束');
-      setDebug('INTERCOM END '+label);
+      setDebug('[PROF][PHONE] INTERCOM_END sent='+rt7ProfSent+' lastSendMs='+(rt7ProfLastSendMs?Math.round(rt7ProfLastSendMs-rt7MicBeginMs):-1)+' '+label);
       sendIntercomBeacon('end', label||'end');
       var b2=document.getElementById('btnVoice'); if(b2)b2.classList.remove('talking');
       var e2=document.getElementById('btnEndTalk'); if(e2)e2.classList.remove('talking');
-      rt7MicStopPacer(); setTimeout(rt7StopPhoneMic, 250);
+      setTimeout(rt7StopPhoneMic, 250);
     }
   }
-  bind('btnVoice', function(){ openLanIntercomPage('bigMic_click'); });
-  bind('btnEndTalk', function(){ openLanIntercomPage('lowerTalk_click'); });
+  bind('btnVoice', function(){ intercomBeginEndToggle('bigMic_click'); });
+  bind('btnEndTalk', function(){ if(rt7IntercomBeginOn) intercomBeginEndToggle('lowerTalk_end'); else { setAnswer('對講尚未開始'); setDebug('intercom end ignored'); } });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     ai=!!on;
@@ -917,7 +874,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       // V5.1G: send a tiny begin burst in capture phase before mic permission / long-press logic.
       b.addEventListener('pointerdown',function(ev){ try{ fastIntercomBeginBurst('pdcap'); }catch(e){} },true);
       b.addEventListener('touchstart',function(ev){ try{ fastIntercomBeginBurst('tscap'); }catch(e){} },{passive:true,capture:true});
-      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); openLanIntercomPage('bigMic_click'); }catch(e){} },true);
+      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); fastIntercomButtonTest('bigMic_click'); }catch(e){} },true);
       b.addEventListener('pointerdown',intercomDown,false);
       b.addEventListener('pointerup',intercomUp,false);
       b.addEventListener('pointercancel',intercomUp,false);
@@ -1432,17 +1389,6 @@ async function voiceText(){const t=prompt('輸入要測試的語音文字','請�
 function ws(){try{const w=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');w.onmessage=e=>{try{const m=JSON.parse(e.data); if(['doorbell','snapshot','command'].includes(m.type)){log(m); if(m.type==='doorbell'){loadState(false);ding()} if(m.type==='snapshot')refreshSnap();}}catch(_){}};w.onclose=()=>setTimeout(ws,3000)}catch(e){}}
 loadDevices().then(()=>{refreshSnap();loadState(true)});setInterval(()=>loadState(false),2500);ws();
 </script>`));
-});
-
-
-// V5.1U LAN local intercom jump page. The actual audio page must be served by ESP32 at :8081.
-app.get('/rt7_intercom_lan_local_audio_page', (req,res)=>{
-  const dev=getCurrentDevice(req);
-  const ip=safeString(req.query.ip||dev.ip||'192.168.0.179').replace(/^https?:\/\//,'').replace(/\/$/,'');
-  const url='http://'+ip+':8081/rt7_intercom_local?from=railway&ts='+Date.now();
-  res.type('html').send(htmlShell('RT7 V5.1U LAN 對講頁', `${baseCss}
-<header class="top"><h1>RT7 V5.1U LAN 對講</h1><p>開啟 ESP32 本機音訊頁</p></header>
-<main class="wrap"><section class="card"><h2>內網對講</h2><p>手機需與 ESP32 在同一個 Wi-Fi / LAN。點下方按鈕會離開 Railway 雲端頁，改開 ESP32 本機對講頁。</p><p><code>${url}</code></p><a class="btn green" href="${url}">開啟內網對講頁</a><a class="btn gray" href="/rt7_cloud_original_ui_doorbell?ip=${ip}">返回雲端手機頁</a></section></main>`));
 });
 app.get('/rt7_independent_full_video_intercom', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_nodered'));
 app.get('/rt7_face_guard', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_nodered'));
