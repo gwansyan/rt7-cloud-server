@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1Q_INTERCOM_EXCLUSIVE_MODE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1R_INTERCOM_PCM_PACER_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -533,18 +533,18 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
-  // V5.1P: Intercom Phone Mic PCM - original RT7 batching + no giant serial spam.
-  // Fix: V5.1N still sent 640B/40ms and all-zero chunks, causing tick/tock audio.
-  // This version uses original RT7 cleaner/batching: 1280B per ~40ms, skips digital-zero frames, and avoids request flooding.
+  // V5.1R: Intercom Phone Mic PCM pacer fix - 640B / 20ms pacing.
+  // Fix: V5.1Q paused cloud stream; remaining stutter is PCM pacing jitter.
+  // This version uses fixed 640B / ~20ms pacing, like the original clean RT7 intercom path.
   var rt7IntercomBeaconKeep=[];
   var rt7IntercomBeginOn=false;
   var rt7MicStream=null, rt7MicCtx=null, rt7MicSource=null, rt7MicProc=null;
   var rt7MicTxBytes=[], rt7MicSendBusy=false, rt7MicSendQueue=[];
-  var rt7MicLastPostMs=0, rt7MicHpX=0, rt7MicHpY=0;
+  var rt7MicPacerTimer=null, rt7MicLastPostMs=0, rt7MicHpX=0, rt7MicHpY=0;
   var rt7MicFrameCount=0, rt7MicZeroFrames=0, rt7MicRestarted=false, rt7MicBeginMs=0, rt7MicLastDiagMs=0;
   // Keep 640-byte GET chunks because 8081 image beacon is the proven LAN path.
   // Audio cleaning follows original RT7 settings more closely.
-  var RT7_MIC_GAIN=0.76, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=1280, RT7_MIC_MAX_BYTES=1280, RT7_MIC_MIN_POST_MS=38;
+  var RT7_MIC_GAIN=0.76, RT7_HP_A=0.995, RT7_MIC_TARGET_BYTES=640, RT7_MIC_MAX_BYTES=640, RT7_MIC_PACER_MS=20;
   function sendIntercomBeacon(ic,label,extra){
     try{
       var beacon=new Image();
@@ -604,24 +604,41 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   function rt7MicQueueBytes(bytes){
     for(var i=0;i<bytes.length;i++) rt7MicTxBytes.push(bytes[i]);
-    var now=performance.now();
-    if(rt7MicTxBytes.length>=RT7_MIC_TARGET_BYTES && (now-rt7MicLastPostMs)>=RT7_MIC_MIN_POST_MS){
-      var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2;
-      var chunk=rt7MicTxBytes.splice(0,n);
-      rt7MicSendQueue.push(rt7BytesToHex(chunk));
-      rt7MicLastPostMs=now;
-      if(rt7MicSendQueue.length>4) rt7MicSendQueue.splice(0,rt7MicSendQueue.length-4);
-      rt7MicFlushQueue();
-    }
+    // Keep a small buffer only. If Android delivers bursts, drop oldest audio rather than building latency.
+    var maxBuf=RT7_MIC_TARGET_BYTES*8;
+    if(rt7MicTxBytes.length>maxBuf) rt7MicTxBytes.splice(0, rt7MicTxBytes.length-maxBuf);
+  }
+  function rt7ChunkIsSilent(chunk){
+    for(var i=0;i<chunk.length;i++){ if(chunk[i]!==0) return false; }
+    return true;
+  }
+  function rt7MicPacerTick(){
+    if(!rt7IntercomBeginOn) return;
+    if(rt7MicTxBytes.length < RT7_MIC_TARGET_BYTES) return;
+    var n=RT7_MIC_TARGET_BYTES;
+    var chunk=rt7MicTxBytes.splice(0,n);
+    if(rt7ChunkIsSilent(chunk)) return;
+    rt7MicSendQueue.push(rt7BytesToHex(chunk));
+    // Queue should stay near 0/1. Drop oldest packets to keep live low latency.
+    if(rt7MicSendQueue.length>3) rt7MicSendQueue.splice(0,rt7MicSendQueue.length-3);
+    rt7MicFlushQueue();
+  }
+  function rt7MicStartPacer(){
+    if(rt7MicPacerTimer) clearInterval(rt7MicPacerTimer);
+    rt7MicPacerTimer=setInterval(rt7MicPacerTick, RT7_MIC_PACER_MS);
+    setDebug('mic pacer on '+RT7_MIC_TARGET_BYTES+'B/'+RT7_MIC_PACER_MS+'ms');
+  }
+  function rt7MicStopPacer(){
+    if(rt7MicPacerTimer){ clearInterval(rt7MicPacerTimer); rt7MicPacerTimer=null; }
   }
   function rt7MicFlushTail(){
-    while(rt7MicTxBytes.length>0){
-      if(rt7MicTxBytes.length%2)rt7MicTxBytes.push(0);
+    // Do not dump a large tail at end; it creates delayed echo. Send at most one last short live packet.
+    if(rt7MicTxBytes.length>=160){
       var n=Math.min(RT7_MIC_MAX_BYTES,rt7MicTxBytes.length); n-=n%2;
       var chunk=rt7MicTxBytes.splice(0,n);
-      rt7MicSendQueue.push(rt7BytesToHex(chunk));
-      if(rt7MicSendQueue.length>4)rt7MicSendQueue.splice(0,rt7MicSendQueue.length-4);
+      if(!rt7ChunkIsSilent(chunk)) rt7MicSendQueue.push(rt7BytesToHex(chunk));
     }
+    rt7MicTxBytes=[];
     rt7MicFlushQueue();
   }
   function rt7MicFlushQueue(){
@@ -631,7 +648,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(!rt7MicSendQueue.length){ rt7MicSendBusy=false; return; }
       var hex=rt7MicSendQueue.shift();
       sendIntercomBeacon('pcm','mic_pcm','&hex='+hex);
-      setTimeout(pump, 10);
+      setTimeout(pump, 3);
     })();
   }
   function rt7StopPhoneMic(){
@@ -692,7 +709,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(!rt7IntercomBeginOn){
       rt7IntercomBeginOn=true;
       rt7MicTxBytes=[]; rt7MicSendQueue=[]; rt7MicLastPostMs=0; rt7MicHpX=0; rt7MicHpY=0;
-      rt7MicFrameCount=0; rt7MicZeroFrames=0; rt7MicRestarted=false; rt7MicBeginMs=performance.now(); rt7MicLastDiagMs=0;
+      rt7MicFrameCount=0; rt7MicZeroFrames=0; rt7MicRestarted=false; rt7MicBeginMs=performance.now(); rt7MicLastDiagMs=0; rt7MicStartPacer();
       setAnswer('對講開始：請說話');
       setDebug('INTERCOM BEGIN + PHONE_MIC_ORIGINAL_CLEAN '+label);
       sendIntercomBeacon('begin', label||'begin');
@@ -712,7 +729,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       sendIntercomBeacon('end', label||'end');
       var b2=document.getElementById('btnVoice'); if(b2)b2.classList.remove('talking');
       var e2=document.getElementById('btnEndTalk'); if(e2)e2.classList.remove('talking');
-      setTimeout(rt7StopPhoneMic, 250);
+      rt7MicStopPacer(); setTimeout(rt7StopPhoneMic, 250);
     }
   }
   bind('btnVoice', function(){ intercomBeginEndToggle('bigMic_click'); });
