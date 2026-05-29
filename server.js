@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1B_INTERCOM_LAN_8081_DIRECT_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1C_INTERCOM_IMAGE_BEACON_PCM_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -566,6 +566,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var phoneAudioCtx=null, phoneAudioNextTime=0, talking=false, intercomOn=false, sendBusy=false, sendQueue=[], txBytes=[];
   var espPolling=false, espTimer=null, hpLastX=0, hpLastY=0, lastPostMs=0;
   var MIC_GAIN=0.76, HP_A=0.995, POST_MIN_MS=60, TARGET_BYTES=1024, MAX_BYTES=1024;
+  var lanBeaconSeq=0, lanBeaconBusy=0, lanBeaconMax=3;
   function intercomLanBase(){ var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179'; return 'http://'+ip+':8081'; }
   function intercomPath(path){
     // V5.1B: LAN mode uses ESP32 port 8081 directly. Railway cannot proxy to private 192.168.x.x,
@@ -573,8 +574,41 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(currentStreamMode==='LAN') return intercomLanBase()+path.replace('/api/ind_full','/api');
     return path;
   }
-  async function apiGetAudio(u,label){ try{ var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{cache:'no-store',mode:(url.indexOf('http://')===0?'cors':'same-origin')}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }catch(e){ setDebug((label||'audio')+' failed '+e.message); return {ok:false,error:e.message}; } }
-  async function apiPostAudio(u,body,label){ try{ var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store',mode:(url.indexOf('http://')===0?'cors':'same-origin')}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }catch(e){ setDebug((label||'audio post')+' failed '+e.message); return {ok:false,error:e.message}; } }
+  function lanBeaconUrl(path, extra){ var ip=(dev&&dev.ip)?dev.ip:'192.168.0.179'; return 'http://'+ip+':8081'+path+(path.indexOf('?')>=0?'&':'?')+'_='+Date.now()+(extra||''); }
+  function sendLanBeacon(path, label, extra){
+    // Android Chrome on HTTPS pages can block fetch() to http://192.168.x.x as active mixed content.
+    // Image GET is allowed in the same situation, so LAN intercom uses image beacons just like the fast door-open path.
+    try{
+      var img=new Image();
+      lanBeaconBusy++;
+      img.onload=img.onerror=function(){ lanBeaconBusy=Math.max(0,lanBeaconBusy-1); };
+      img.src=lanBeaconUrl(path, extra||'')+'&seq='+(++lanBeaconSeq);
+      return {ok:true,source:'lan_beacon',label:label||''};
+    }catch(e){ setDebug((label||'lan beacon')+' failed '+e.message); return {ok:false,error:e.message}; }
+  }
+  async function apiGetAudio(u,label){
+    try{
+      if(currentStreamMode==='LAN'){
+        var p=u.replace('/api/ind_full','/api');
+        sendLanBeacon(p,label||'audio_get','');
+        return {ok:true,source:'lan_beacon'};
+      }
+      var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{cache:'no-store',mode:'same-origin'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}
+    }catch(e){ setDebug((label||'audio')+' failed '+e.message); return {ok:false,error:e.message}; }
+  }
+  async function apiPostAudio(u,body,label){
+    try{
+      if(currentStreamMode==='LAN'){
+        // PCM is sent as short GET chunks to 8081 so it reaches ESP32 while MJPEG occupies port 80.
+        // Body is hex-only, so it is safe in the query string. Keep chunks <= about 2KB URL.
+        var p=u.replace('/api/ind_full/audio/phone_pcm_hex','/api/audio/phone_pcm_hex_get');
+        if(lanBeaconBusy>lanBeaconMax){ return {ok:true,drop:true,source:'lan_beacon'}; }
+        sendLanBeacon(p,label||'phone_pcm','&hex='+body);
+        return {ok:true,source:'lan_beacon'};
+      }
+      var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store',mode:'same-origin'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}
+    }catch(e){ setDebug((label||'audio post')+' failed '+e.message); return {ok:false,error:e.message}; }
+  }
   async function resumeAudioForIntercom(reason){ try{ if(phoneAudioCtx&&phoneAudioCtx.state!=='running') await phoneAudioCtx.resume(); }catch(e){} try{ if(phoneMicCtx&&phoneMicCtx.state!=='running') await phoneMicCtx.resume(); }catch(e){} }
   function cleanMicFrame(input){ var out=new Float32Array(input.length); var fadeN=Math.min(32,input.length); for(var i=0;i<input.length;i++){ var x=input[i]; var y=x-hpLastX+HP_A*hpLastY; hpLastX=x; hpLastY=y; y*=MIC_GAIN; if(y>0.98)y=0.98; if(y<-0.98)y=-0.98; if(i<fadeN)y*=i/fadeN; if(input.length-i<fadeN)y*=(input.length-i)/fadeN; out[i]=y; } return out; }
   function downsampleTo16k(input,inRate){ if(inRate===16000)return input; var ratio=inRate/16000, len=Math.floor(input.length/ratio), out=new Float32Array(len); for(var i=0;i<len;i++){ var a=Math.floor(i*ratio), b=Math.min(Math.floor((i+1)*ratio),input.length), sum=0,c=0; for(var j=a;j<b;j++){sum+=input[j];c++;} out[i]=c?sum/c:0; } return out; }
@@ -589,7 +623,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function pollEspAudio(){ if(!espPolling||talking)return; var r=await apiGetAudio('/api/ind_full/audio/esp_pcm_hex?ms=60','esp_pcm'); if(r&&r.ok&&r.hex) playPcm16Hex(r.hex); }
   async function startEspRx(){ await ensurePhonePlay(); espPolling=true; intercomOn=true; await apiGetAudio('/api/ind_full/audio/esp_begin','esp_begin'); if(espTimer)clearInterval(espTimer); espTimer=setInterval(pollEspAudio,120); setDebug('esp rx polling on'); }
   async function stopEspRx(){ espPolling=false; if(espTimer)clearInterval(espTimer); espTimer=null; await apiGetAudio('/api/ind_full/audio/esp_end','esp_end'); setDebug('esp rx polling off'); }
-  async function intercomDown(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(talking)return; talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0; var b=document.getElementById('btnVoice'); if(b){b.classList.add('talking'); try{b.setPointerCapture&&ev&&ev.pointerId!=null&&b.setPointerCapture(ev.pointerId);}catch(_){}} var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking'); setAnswer('對講中：請說話'); setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN8081':'cloudProxy')); try{ await ensurePhoneMic(); await startEspRx(); await apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin'); }catch(e){ talking=false; if(b)b.classList.remove('talking'); if(ebtn)ebtn.classList.remove('talking'); setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed'); } }
+  async function intercomDown(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(talking)return; talking=true; txBytes=[]; sendQueue=[]; hpLastX=0; hpLastY=0; var b=document.getElementById('btnVoice'); if(b){b.classList.add('talking'); try{b.setPointerCapture&&ev&&ev.pointerId!=null&&b.setPointerCapture(ev.pointerId);}catch(_){}} var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.add('talking'); setAnswer('對講中：請說話'); setDebug('PHONE_TX start '+(currentStreamMode==='LAN'?'LAN image-beacon 8081':'cloudProxy')); try{ await ensurePhoneMic(); await startEspRx(); await apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin'); }catch(e){ talking=false; if(b)b.classList.remove('talking'); if(ebtn)ebtn.classList.remove('talking'); setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed'); } }
   async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
   function bindIntercomPtt(){
     // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
