@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1T_INTERCOM_RAW_PCM_POST';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1U_INTERCOM_LAN_LOCAL_AUDIO_PAGE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -470,7 +470,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.1A</title>
+<title>RT7 Cloud Original UI V5.1U</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -489,7 +489,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">短按麥克風播放對講測試音</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">點選開啟 ESP32 內網對講頁</div></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
@@ -558,6 +558,25 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       return true;
     }catch(e){ setAnswer('對講 '+ic+' 失敗：'+e.message); setDebug('intercom '+ic+' failed '+e.message); return false; }
   }
+
+  // V5.1U: Cloud page no longer streams phone mic PCM from HTTPS page.
+  // It opens the ESP32 LAN local audio page, so audio can use local WS/binary PCM like the original RT7 flow.
+  function openLanIntercomPage(label){
+    try{
+      var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179');
+      dip=String(dip||'192.168.0.179').replace(/^https?:\/\//,'').replace(/\/$/,'');
+      var url='http://'+dip+':8081/rt7_intercom_local?from=cloud&label='+encodeURIComponent(label||'cloud_mic')+'&ts='+Date.now();
+      setAnswer('開啟內網對講頁');
+      setDebug('open LAN local intercom page '+url);
+      // Use location.href instead of window.open to avoid Android popup blocking.
+      window.location.href=url;
+      return true;
+    }catch(e){
+      setAnswer('開啟內網對講頁失敗：'+(e.message||e));
+      return false;
+    }
+  }
+
   async function rt7PostRawPcm(bytes,label){
     var dip=(dev&&dev.ip)?dev.ip:(ip||'192.168.0.179');
     var url='http://'+dip+':8081/api/intercom/pcm_raw?ic=pcm_raw&_ic_label='+encodeURIComponent(label||'raw_pcm')+'&_door='+Date.now();
@@ -750,8 +769,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7MicStopPacer(); setTimeout(rt7StopPhoneMic, 250);
     }
   }
-  bind('btnVoice', function(){ intercomBeginEndToggle('bigMic_click'); });
-  bind('btnEndTalk', function(){ if(rt7IntercomBeginOn) intercomBeginEndToggle('lowerTalk_end'); else { setAnswer('對講尚未開始'); setDebug('intercom end ignored'); } });
+  bind('btnVoice', function(){ openLanIntercomPage('bigMic_click'); });
+  bind('btnEndTalk', function(){ openLanIntercomPage('lowerTalk_click'); });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     ai=!!on;
@@ -898,7 +917,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       // V5.1G: send a tiny begin burst in capture phase before mic permission / long-press logic.
       b.addEventListener('pointerdown',function(ev){ try{ fastIntercomBeginBurst('pdcap'); }catch(e){} },true);
       b.addEventListener('touchstart',function(ev){ try{ fastIntercomBeginBurst('tscap'); }catch(e){} },{passive:true,capture:true});
-      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); fastIntercomButtonTest('bigMic_click'); }catch(e){} },true);
+      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); openLanIntercomPage('bigMic_click'); }catch(e){} },true);
       b.addEventListener('pointerdown',intercomDown,false);
       b.addEventListener('pointerup',intercomUp,false);
       b.addEventListener('pointercancel',intercomUp,false);
@@ -1413,6 +1432,17 @@ async function voiceText(){const t=prompt('輸入要測試的語音文字','請�
 function ws(){try{const w=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');w.onmessage=e=>{try{const m=JSON.parse(e.data); if(['doorbell','snapshot','command'].includes(m.type)){log(m); if(m.type==='doorbell'){loadState(false);ding()} if(m.type==='snapshot')refreshSnap();}}catch(_){}};w.onclose=()=>setTimeout(ws,3000)}catch(e){}}
 loadDevices().then(()=>{refreshSnap();loadState(true)});setInterval(()=>loadState(false),2500);ws();
 </script>`));
+});
+
+
+// V5.1U LAN local intercom jump page. The actual audio page must be served by ESP32 at :8081.
+app.get('/rt7_intercom_lan_local_audio_page', (req,res)=>{
+  const dev=getCurrentDevice(req);
+  const ip=safeString(req.query.ip||dev.ip||'192.168.0.179').replace(/^https?:\/\//,'').replace(/\/$/,'');
+  const url='http://'+ip+':8081/rt7_intercom_local?from=railway&ts='+Date.now();
+  res.type('html').send(htmlShell('RT7 V5.1U LAN 對講頁', `${baseCss}
+<header class="top"><h1>RT7 V5.1U LAN 對講</h1><p>開啟 ESP32 本機音訊頁</p></header>
+<main class="wrap"><section class="card"><h2>內網對講</h2><p>手機需與 ESP32 在同一個 Wi-Fi / LAN。點下方按鈕會離開 Railway 雲端頁，改開 ESP32 本機對講頁。</p><p><code>${url}</code></p><a class="btn green" href="${url}">開啟內網對講頁</a><a class="btn gray" href="/rt7_cloud_original_ui_doorbell?ip=${ip}">返回雲端手機頁</a></section></main>`));
 });
 app.get('/rt7_independent_full_video_intercom', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_nodered'));
 app.get('/rt7_face_guard', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_nodered'));
