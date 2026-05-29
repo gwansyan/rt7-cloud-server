@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1D_INTERCOM_FAST_PTT_BEGIN_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_1E_INTERCOM_DOORPATH_BEACON_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -601,9 +601,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(currentStreamMode==='LAN'){
         // PCM is sent as short GET chunks to 8081 so it reaches ESP32 while MJPEG occupies port 80.
         // Body is hex-only, so it is safe in the query string. Keep chunks <= about 2KB URL.
-        var p='/api/intercom/pcm';
+        var p='/api/door/open_fast';
         if(lanBeaconBusy>lanBeaconMax){ return {ok:true,drop:true,source:'lan_beacon'}; }
-        sendLanBeacon(p,label||'phone_pcm','&hex='+body);
+        sendLanBeacon(p,label||'phone_pcm','&ic=pcm&hex='+body);
         return {ok:true,source:'lan_beacon'};
       }
       var url=intercomPath(u); var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),{method:'POST',headers:{'Content-Type':'text/plain'},body:body,cache:'no-store',mode:'same-origin'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}
@@ -636,9 +636,10 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     // This verifies the 8081 path in Serial and makes PTT feel instant.
     try{
       if(currentStreamMode==='LAN'){
-        sendLanBeacon('/api/intercom/ping','intercom_ping','');
-        sendLanBeacon('/api/intercom/phone_begin','phone_begin_fast','');
-        sendLanBeacon('/api/audio/phone_begin','phone_begin_compat','');
+        // V5.1E: Use the same proven 8081 path as fast door-open, but with ic=... query.
+        // Some Android in-app browsers ignore non-image LAN paths while streaming; /api/door/open_fast already works.
+        sendLanBeacon('/api/door/open_fast','intercom_ping','&ic=ping');
+        sendLanBeacon('/api/door/open_fast','phone_begin_fast','&ic=begin');
       }else{
         apiGetAudio('/api/ind_full/audio/phone_begin','phone_begin');
       }
@@ -651,7 +652,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer('手機麥克風啟用失敗：'+e.message); setDebug('intercom start failed');
     }
   }
-  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); if(currentStreamMode==='LAN'){ sendLanBeacon('/api/intercom/phone_end','phone_end_fast',''); sendLanBeacon('/api/audio/phone_end','phone_end_compat',''); } else { await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); } setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
+  async function intercomUp(ev){ if(ev){ev.preventDefault();ev.stopPropagation();} if(!talking)return; talking=false; flushTxTail(); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); var ebtn=document.getElementById('btnEndTalk'); if(ebtn)ebtn.classList.remove('talking'); if(currentStreamMode==='LAN'){ sendLanBeacon('/api/door/open_fast','phone_end_fast','&ic=end'); } else { await apiGetAudio('/api/ind_full/audio/phone_end','phone_end'); } setAnswer('對講已結束'); setDebug('PHONE_TX stop'); }
   function bindIntercomPtt(){
     // V5.1A: 中間大麥克風才是對講 PTT；下方「對講結束」保留為停止/復位。
     var b=document.getElementById('btnVoice');
