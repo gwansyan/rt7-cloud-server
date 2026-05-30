@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D6_INTERCOM_COMMAND_FILTER_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D7_INTERCOM_BEGIN_END_QUEUE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -537,18 +537,20 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
   // V5.2D2: fetch probe. UI event is proven; now verify phone -> Railway route. No WS, no PCM.
+  var rt7IntercomQueueOn=false;
   function rt7UiDebugClick(label){
     try{
       label=label||'unknown';
-      var msg='FETCH PROBE SEND '+label+' '+new Date().toLocaleTimeString('zh-TW');
-      setAnswer('對講 Begin Fetch 送出中'); setDebug(msg);
+      var next = rt7IntercomQueueOn ? 'end' : 'begin';
+      var msg='INTERCOM '+next.toUpperCase()+' SEND '+label+' '+new Date().toLocaleTimeString('zh-TW');
+      setAnswer(next==='begin'?'對講 BEGIN 送出中':'對講 END 送出中'); setDebug(msg);
       var b=document.getElementById('btnVoice'); if(b){ b.classList.add('talking'); setTimeout(function(){try{b.classList.remove('talking')}catch(_){}},500); }
       var e=document.getElementById('btnEndTalk'); if(e){ e.classList.add('talking'); setTimeout(function(){try{e.classList.remove('talking')}catch(_){}},500); }
       try{ if(navigator.vibrate) navigator.vibrate(40); }catch(_){}
-      fetch('/api/intercom/begin?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
+      fetch('/api/intercom/'+next+'?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
         .then(function(r){ return r.text().then(function(t){ return {ok:r.ok,status:r.status,raw:t}; }); })
-        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; var line='BEGIN FETCH OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer('Begin Queue OK：等待 ESP32 輪詢'); setDebug(line); })
-        .catch(function(err){ var line='BEGIN FETCH FAIL '+label+' '+(err.message||err); setAnswer('Begin Fetch 失敗'); setDebug(line); alert(line); });
+        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; if(x.ok){ rt7IntercomQueueOn = (next==='begin'); } var line='INTERCOM '+next.toUpperCase()+' OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer(next==='begin'?'Begin Queue OK：等待 ESP32 輪詢':'End Queue OK：等待 ESP32 輪詢'); setDebug(line); })
+        .catch(function(err){ var line='INTERCOM '+next.toUpperCase()+' FAIL '+label+' '+(err.message||err); setAnswer('對講 '+next+' 失敗'); setDebug(line); alert(line); });
     }catch(err){ alert('FETCH PROBE handler error: '+(err.message||err)); }
     return false;
   }
@@ -1656,14 +1658,38 @@ app.get('/api/intercom/begin', (req,res)=>{
     requested_device_id:requestedDeviceId,
     endpoint:'api_intercom_begin',
     label,
-    message:'INTERCOM_BEGIN_D6_FILTER_FIX: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
+    message:'INTERCOM_BEGIN_D7_BEGIN_END_QUEUE: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
   });
   rt7IntercomBeginFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomBeginFetchState.count, command_id: cmd.id, device_id: deviceId };
-  console.log('[INTERCOM_BEGIN_TO_ESP32][D6] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
+  console.log('[INTERCOM_BEGIN_TO_ESP32][D7] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
   appendEvent({ type:'intercom_begin_to_esp32', label, command_id:cmd.id, device_id:deviceId, count:rt7IntercomBeginFetchState.count, ip:rt7IntercomBeginFetchState.last.ip });
   res.json({ ok:true, type:'intercom_begin_to_esp32', route:'intercom_begin', label, command:cmd, count:rt7IntercomBeginFetchState.count, version:SERVER_VERSION, time:nowIso() });
 });
 app.get('/api/intercom/begin/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, state:rt7IntercomBeginFetchState, pending:pendingCommands }));
+
+// V5.2D7: phone -> Railway -> ESP32 command queue intercom_end.
+const rt7IntercomEndFetchState = { count:0, last:null };
+app.get('/api/intercom/end', (req,res)=>{
+  const label = safeString(req.query.label || 'end_to_esp32');
+  const dev = getCurrentDevice(req);
+  const requestedDeviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
+  const deviceId = normalizeDoorCommandDeviceId_(requestedDeviceId);
+  rt7IntercomEndFetchState.count++;
+  const cmd = queueCommand({
+    command:'intercom_end',
+    action:'intercom_end',
+    device_id:deviceId,
+    requested_device_id:requestedDeviceId,
+    endpoint:'api_intercom_end',
+    label,
+    message:'INTERCOM_END_D7_BEGIN_END_QUEUE: 雲端對講 END 已排入佇列，等待 ESP32 輪詢'
+  });
+  rt7IntercomEndFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomEndFetchState.count, command_id: cmd.id, device_id: deviceId };
+  console.log('[INTERCOM_END_TO_ESP32][D7] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomEndFetchState.count+' ip='+rt7IntercomEndFetchState.last.ip);
+  appendEvent({ type:'intercom_end_to_esp32', label, command_id:cmd.id, device_id:deviceId, count:rt7IntercomEndFetchState.count, ip:rt7IntercomEndFetchState.last.ip });
+  res.json({ ok:true, type:'intercom_end_to_esp32', route:'intercom_end', label, command:cmd, count:rt7IntercomEndFetchState.count, version:SERVER_VERSION, time:nowIso() });
+});
+app.get('/api/intercom/end/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, state:rt7IntercomEndFetchState, pending:pendingCommands }));
 
 // V5.2D2 compatibility: phone -> Railway fetch probe. This does NOT touch ESP32/WS/PCM.
 const rt7IntercomFetchProbeState = { count:0, last:null };
