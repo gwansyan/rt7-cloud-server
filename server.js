@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D7_INTERCOM_BEGIN_END_QUEUE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D8_WS_PCM_RELAY_FIRST_TEST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -492,7 +492,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.2D3 Begin Fetch</title>
+<title>RT7 Cloud Original UI V5.2D8 WS PCM Relay First Test</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -512,7 +512,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講" onclick="rt7UiDebugClick('bigMic_inline_click');return false;" ontouchstart="rt7UiDebugClick('bigMic_inline_touch');return false;" onpointerdown="rt7UiDebugClick('bigMic_inline_pointer');return false;">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">D5：等待對講 Begin Command Trace</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">D8：Begin/End Queue + WS PCM Relay Test</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -542,16 +542,43 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{
       label=label||'unknown';
       var next = rt7IntercomQueueOn ? 'end' : 'begin';
-      var msg='INTERCOM '+next.toUpperCase()+' SEND '+label+' '+new Date().toLocaleTimeString('zh-TW');
-      setAnswer(next==='begin'?'對講 BEGIN 送出中':'對講 END 送出中'); setDebug(msg);
-      var b=document.getElementById('btnVoice'); if(b){ b.classList.add('talking'); setTimeout(function(){try{b.classList.remove('talking')}catch(_){}},500); }
-      var e=document.getElementById('btnEndTalk'); if(e){ e.classList.add('talking'); setTimeout(function(){try{e.classList.remove('talking')}catch(_){}},500); }
+      var msg='INTERCOM '+next.toUpperCase()+' + WS_PCM '+label+' '+new Date().toLocaleTimeString('zh-TW');
+      setAnswer(next==='begin'?'對講 BEGIN 送出中，並啟動 WS PCM':'對講 END 送出中，並停止 WS PCM');
+      setDebug(msg);
       try{ if(navigator.vibrate) navigator.vibrate(40); }catch(_){}
+      var b=document.getElementById('btnVoice');
+      var e=document.getElementById('btnEndTalk');
+      if(b) b.classList.add('talking');
+      if(e) e.classList.add('talking');
+
+      // D8: keep the proven cloud command queue for ESP32 BEGIN/END,
+      // and also start the WS binary PCM phone microphone stream.
+      if(next==='begin'){
+        // Start WS mic immediately; ESP32 will also receive intercom_begin via queue.
+        try{
+          if(!rt7WsIcOn) rt7WsIntercomToggle(label+'_ws_pcm');
+          else setDebug('[D8][WS_PCM] already on');
+        }catch(wsErr){ setDebug('[D8][WS_PCM] start failed '+(wsErr.message||wsErr)); }
+      }else{
+        try{
+          if(rt7WsIcOn) rt7WsIntercomStop(label+'_ws_pcm_end');
+        }catch(wsErr2){ setDebug('[D8][WS_PCM] stop failed '+(wsErr2.message||wsErr2)); }
+      }
+
       fetch('/api/intercom/'+next+'?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
         .then(function(r){ return r.text().then(function(t){ return {ok:r.ok,status:r.status,raw:t}; }); })
-        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; if(x.ok){ rt7IntercomQueueOn = (next==='begin'); } var line='INTERCOM '+next.toUpperCase()+' OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer(next==='begin'?'Begin Queue OK：等待 ESP32 輪詢':'End Queue OK：等待 ESP32 輪詢'); setDebug(line); })
-        .catch(function(err){ var line='INTERCOM '+next.toUpperCase()+' FAIL '+label+' '+(err.message||err); setAnswer('對講 '+next+' 失敗'); setDebug(line); alert(line); });
-    }catch(err){ alert('FETCH PROBE handler error: '+(err.message||err)); }
+        .then(function(x){
+          var obj=null; try{obj=JSON.parse(x.raw)}catch(_){};
+          if(x.ok){ rt7IntercomQueueOn = (next==='begin'); }
+          var line='D8 INTERCOM '+next.toUpperCase()+' OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180);
+          setAnswer(next==='begin'?'Begin Queue OK + WS PCM 啟動：請說話':'End Queue OK + WS PCM 停止');
+          setDebug(line);
+        })
+        .catch(function(err){
+          var line='D8 INTERCOM '+next.toUpperCase()+' FAIL '+label+' '+(err.message||err);
+          setAnswer('對講 '+next+' 失敗'); setDebug(line); alert(line);
+        });
+    }catch(err){ alert('D8 handler error: '+(err.message||err)); }
     return false;
   }
   window.rt7UiDebugClick=rt7UiDebugClick;
@@ -1658,16 +1685,16 @@ app.get('/api/intercom/begin', (req,res)=>{
     requested_device_id:requestedDeviceId,
     endpoint:'api_intercom_begin',
     label,
-    message:'INTERCOM_BEGIN_D7_BEGIN_END_QUEUE: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
+    message:'INTERCOM_BEGIN_D8_WS_PCM_RELAY_FIRST_TEST: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
   });
   rt7IntercomBeginFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomBeginFetchState.count, command_id: cmd.id, device_id: deviceId };
-  console.log('[INTERCOM_BEGIN_TO_ESP32][D7] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
+  console.log('[INTERCOM_BEGIN_TO_ESP32][D8] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
   appendEvent({ type:'intercom_begin_to_esp32', label, command_id:cmd.id, device_id:deviceId, count:rt7IntercomBeginFetchState.count, ip:rt7IntercomBeginFetchState.last.ip });
   res.json({ ok:true, type:'intercom_begin_to_esp32', route:'intercom_begin', label, command:cmd, count:rt7IntercomBeginFetchState.count, version:SERVER_VERSION, time:nowIso() });
 });
 app.get('/api/intercom/begin/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, state:rt7IntercomBeginFetchState, pending:pendingCommands }));
 
-// V5.2D7: phone -> Railway -> ESP32 command queue intercom_end.
+// V5.2D8: phone -> Railway -> ESP32 command queue intercom_end.
 const rt7IntercomEndFetchState = { count:0, last:null };
 app.get('/api/intercom/end', (req,res)=>{
   const label = safeString(req.query.label || 'end_to_esp32');
@@ -1682,10 +1709,10 @@ app.get('/api/intercom/end', (req,res)=>{
     requested_device_id:requestedDeviceId,
     endpoint:'api_intercom_end',
     label,
-    message:'INTERCOM_END_D7_BEGIN_END_QUEUE: 雲端對講 END 已排入佇列，等待 ESP32 輪詢'
+    message:'INTERCOM_END_D8_WS_PCM_RELAY_FIRST_TEST: 雲端對講 END 已排入佇列，等待 ESP32 輪詢'
   });
   rt7IntercomEndFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomEndFetchState.count, command_id: cmd.id, device_id: deviceId };
-  console.log('[INTERCOM_END_TO_ESP32][D7] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomEndFetchState.count+' ip='+rt7IntercomEndFetchState.last.ip);
+  console.log('[INTERCOM_END_TO_ESP32][D8] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomEndFetchState.count+' ip='+rt7IntercomEndFetchState.last.ip);
   appendEvent({ type:'intercom_end_to_esp32', label, command_id:cmd.id, device_id:deviceId, count:rt7IntercomEndFetchState.count, ip:rt7IntercomEndFetchState.last.ip });
   res.json({ ok:true, type:'intercom_end_to_esp32', route:'intercom_end', label, command:cmd, count:rt7IntercomEndFetchState.count, version:SERVER_VERSION, time:nowIso() });
 });
