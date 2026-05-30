@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D5_INTERCOM_COMMAND_QUEUE_TRACE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D6_INTERCOM_COMMAND_FILTER_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1490,9 +1490,9 @@ app.get('/api/rt7/device/commands', (req,res)=>{ const id=normalizeDoorCommandDe
 app.get('/api/rt7/device/commands/next', (req,res)=>{
   const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||'');
   const list=id?pendingCommands.filter(c=>commandMatchesDevice_(c,id)):pendingCommands;
-  // V5.2D5: prioritize intercom_begin so it is not hidden behind other command types during tests.
-  const cmd=(list.find(c=>String(c.command||'').indexOf('intercom_begin')>=0 || String(c.action||'').indexOf('intercom_begin')>=0) || list[0] || null);
-  if(cmd){ console.log('[CMD_NEXT][D5] device='+id+' command='+cmd.command+' action='+(cmd.action||'')+' id='+cmd.id+' pending='+pendingCommands.length); }
+  // V5.2D6: return current pending command; ESP32 now filters command object strictly.
+  const cmd=(list[0] || null);
+  if(cmd){ console.log('[CMD_NEXT][D6] device='+id+' command='+cmd.command+' action='+(cmd.action||'')+' id='+cmd.id+' pending='+pendingCommands.length); }
   res.json({ok:true, version:SERVER_VERSION, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState});
 });
 function ackCommand(req,res){ const id=safeString(req.body?.id||req.query.id); const status=safeString(req.body?.status||req.query.status||'done'); const idx=pendingCommands.findIndex(c=>c.id===id); let cmd=null; if(idx>=0){cmd=pendingCommands[idx]; pendingCommands.splice(idx,1);} doorOpenQueueState.acked+=1; doorOpenQueueState.last_ack={id, status, time:nowIso(), found:!!cmd, command:cmd}; appendEvent({type:'command_ack', id, status, found:!!cmd}); res.json({ok:true, id, status, found:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); }
@@ -1656,10 +1656,10 @@ app.get('/api/intercom/begin', (req,res)=>{
     requested_device_id:requestedDeviceId,
     endpoint:'api_intercom_begin',
     label,
-    message:'INTERCOM_BEGIN_D5_QUEUE_TRACE: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
+    message:'INTERCOM_BEGIN_D6_FILTER_FIX: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
   });
   rt7IntercomBeginFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomBeginFetchState.count, command_id: cmd.id, device_id: deviceId };
-  console.log('[INTERCOM_BEGIN_TO_ESP32][D5] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
+  console.log('[INTERCOM_BEGIN_TO_ESP32][D6] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
   appendEvent({ type:'intercom_begin_to_esp32', label, command_id:cmd.id, device_id:deviceId, count:rt7IntercomBeginFetchState.count, ip:rt7IntercomBeginFetchState.last.ip });
   res.json({ ok:true, type:'intercom_begin_to_esp32', route:'intercom_begin', label, command:cmd, count:rt7IntercomBeginFetchState.count, version:SERVER_VERSION, time:nowIso() });
 });
