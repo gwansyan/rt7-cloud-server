@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2B_INTERCOM_WS_BUTTON_ROUTE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2C_WS_INTERCOM_ROUTE_PROBE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -748,8 +748,37 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setTimeout(rt7StopPhoneMic, 250);
     }
   }
-  bind('btnVoice', function(){ intercomBeginEndToggle('bigMic_click'); });
-  bind('btnEndTalk', function(){ if(rt7IntercomBeginOn) intercomBeginEndToggle('lowerTalk_end'); else { setAnswer('對講尚未開始'); setDebug('intercom end ignored'); } });
+
+  // V5.2C: route probe only. No phone mic and no PCM.
+  function rt7WsIntercomRouteProbe(label){
+    label = label || 'bigMic_probe';
+    setAnswer('WS 對講路由測試中');
+    setDebug('[WSIC][PROBE][PHONE] start '+label);
+    try{
+      var w = new WebSocket(rt7WsUrl());
+      var done=false;
+      w.onopen=function(){
+        setDebug('[WSIC][PROBE][PHONE] ws open');
+        try{ w.send(JSON.stringify({role:'intercom_phone',type:'intercom_probe',device_id:'#1',label:label,t:Date.now()})); }catch(e){ setDebug('[WSIC][PROBE][PHONE] send err '+(e.message||e)); }
+      };
+      w.onmessage=function(ev){
+        var txt = (typeof ev.data==='string') ? ev.data : '[binary '+(ev.data&&ev.data.byteLength||0)+']';
+        setDebug('[WSIC][PROBE][PHONE] rx '+txt.slice(0,220));
+        if(txt.indexOf('intercom_control_relay')>=0 || txt.indexOf('role_ack')>=0){ done=true; setAnswer('WS路由測試已送出，請看 ESP32 串口'); }
+      };
+      w.onerror=function(){ setDebug('[WSIC][PROBE][PHONE] ws error'); };
+      w.onclose=function(){ setDebug('[WSIC][PROBE][PHONE] ws close done='+done); };
+      setTimeout(function(){ try{ if(w.readyState===1)w.close(); }catch(_){} }, 1800);
+    }catch(e){ setDebug('[WSIC][PROBE][PHONE] ws failed '+(e.message||e)); }
+    // Also send HTTP probe through Railway so we can tell if ESP32 is registered on /ws.
+    fetch('/api/rt7/intercom/ws/probe?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
+      .then(function(r){return r.json();})
+      .then(function(j){ setDebug('[WSIC][PROBE][HTTP] esp='+(j.esp||0)+' state='+JSON.stringify(j.state||{})); })
+      .catch(function(e){ setDebug('[WSIC][PROBE][HTTP] failed '+(e.message||e)); });
+  }
+
+  bind('btnVoice', function(){ rt7WsIntercomRouteProbe('bigMic_click'); });
+  bind('btnEndTalk', function(){ rt7WsIntercomRouteProbe('lowerTalk_probe'); });
 
   // V5.2A: WebSocket Binary Intercom. Replaces HTTP/HEX PCM path.
   var rt7WsIc=null, rt7WsIcOn=false, rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
@@ -1558,6 +1587,17 @@ app.get('/api/rt7/stream/compare/state', (req, res) => {
 });
 
 
+
+// V5.2C: WS intercom route probe. This is diagnostic only: no mic, no PCM.
+app.get('/api/rt7/intercom/ws/probe', (req,res)=>{
+  const label = safeString(req.query.label || 'http_probe');
+  const payload = JSON.stringify({ type:'intercom_probe', role:'intercom_probe_http', device_id:'#1', label, t:Date.now(), version:SERVER_VERSION });
+  const esp = rt7SendToEspIntercom_(payload);
+  const state = rt7IntercomWsState_();
+  console.log('[WSIC][PROBE_HTTP] label='+label+' esp='+esp+' state='+JSON.stringify(state));
+  res.json({ ok:true, type:'intercom_probe_http', label, esp, state, version:SERVER_VERSION });
+});
+
 app.get('/api/rt7/intercom/ws/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, ws:rt7IntercomWsState_() }));
 
 wss.on('connection', (ws, req) => {
@@ -1588,8 +1628,8 @@ wss.on('connection', (ws, req) => {
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
         ws.send(JSON.stringify({ ok:true, type:'role_ack', role:ws.rt7Role, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
-      if (msg && ws.rt7Role === 'intercom_phone' && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping')) {
-        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg))); console.log('[WSIC][RELAY_CTRL] '+msg.type+' esp='+n);
+      if (msg && ws.rt7Role === 'intercom_phone' && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe')) {
+        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg))); console.log((msg.type==='intercom_probe'?'[WSIC][RELAY_PROBE] ':'[WSIC][RELAY_CTRL] ')+msg.type+' esp='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
         try { ws.send(JSON.stringify({ ok:true, type:'intercom_control_relay', control:msg.type, esp:n, state:rt7IntercomWsState_() })); } catch (_) {}
       }
     } catch (e) {
