@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D4_INTERCOM_BEGIN_TO_ESP32';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D5_INTERCOM_COMMAND_QUEUE_TRACE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -512,7 +512,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講" onclick="rt7UiDebugClick('bigMic_inline_click');return false;" ontouchstart="rt7UiDebugClick('bigMic_inline_touch');return false;" onpointerdown="rt7UiDebugClick('bigMic_inline_pointer');return false;">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">BEGIN FETCH：等待按「對講」</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">D5：等待對講 Begin Command Trace</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -547,7 +547,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       try{ if(navigator.vibrate) navigator.vibrate(40); }catch(_){}
       fetch('/api/intercom/begin?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
         .then(function(r){ return r.text().then(function(t){ return {ok:r.ok,status:r.status,raw:t}; }); })
-        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; var line='BEGIN FETCH OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer('Begin To ESP32 OK：已排入 ESP32 輪詢佇列'); setDebug(line); })
+        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; var line='BEGIN FETCH OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer('Begin Queue OK：等待 ESP32 輪詢'); setDebug(line); })
         .catch(function(err){ var line='BEGIN FETCH FAIL '+label+' '+(err.message||err); setAnswer('Begin Fetch 失敗'); setDebug(line); alert(line); });
     }catch(err){ alert('FETCH PROBE handler error: '+(err.message||err)); }
     return false;
@@ -1487,7 +1487,14 @@ app.post('/api/rt7/door/open', (req,res)=>enqueueDoorOpen(req,res,'rt7_door_open
 app.get('/api/door/open', (req,res)=>enqueueDoorOpen(req,res,'compat_api_door_open'));
 app.get('/api/rt7/door/open/state', (req,res)=>res.json({ ok:true, state:doorOpenQueueState, pending:pendingCommands }));
 app.get('/api/rt7/device/commands', (req,res)=>{ const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||''); const list=id?pendingCommands.filter(c=>commandMatchesDevice_(c,id)):pendingCommands; res.json({ok:true, device_id:id, commands:list, count:list.length, state:doorOpenQueueState}); });
-app.get('/api/rt7/device/commands/next', (req,res)=>{ const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||''); const cmd=pendingCommands.find(c=>commandMatchesDevice_(c,id)) || null; res.json({ok:true, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); });
+app.get('/api/rt7/device/commands/next', (req,res)=>{
+  const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||'');
+  const list=id?pendingCommands.filter(c=>commandMatchesDevice_(c,id)):pendingCommands;
+  // V5.2D5: prioritize intercom_begin so it is not hidden behind other command types during tests.
+  const cmd=(list.find(c=>String(c.command||'').indexOf('intercom_begin')>=0 || String(c.action||'').indexOf('intercom_begin')>=0) || list[0] || null);
+  if(cmd){ console.log('[CMD_NEXT][D5] device='+id+' command='+cmd.command+' action='+(cmd.action||'')+' id='+cmd.id+' pending='+pendingCommands.length); }
+  res.json({ok:true, version:SERVER_VERSION, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState});
+});
 function ackCommand(req,res){ const id=safeString(req.body?.id||req.query.id); const status=safeString(req.body?.status||req.query.status||'done'); const idx=pendingCommands.findIndex(c=>c.id===id); let cmd=null; if(idx>=0){cmd=pendingCommands[idx]; pendingCommands.splice(idx,1);} doorOpenQueueState.acked+=1; doorOpenQueueState.last_ack={id, status, time:nowIso(), found:!!cmd, command:cmd}; appendEvent({type:'command_ack', id, status, found:!!cmd}); res.json({ok:true, id, status, found:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); }
 app.get('/api/rt7/device/commands/ack', ackCommand);
 app.post('/api/rt7/device/commands/ack', ackCommand);
@@ -1632,19 +1639,31 @@ app.get('/api/rt7/stream/compare/state', (req, res) => {
 
 
 
-// V5.2D3: phone -> Railway intercom begin fetch probe. This does NOT touch ESP32/WS/PCM yet.
 
-// V5.2D3: phone -> Railway BEGIN fetch probe. This does NOT touch ESP32/WS/PCM yet.
+// V5.2D4: phone -> Railway -> ESP32 command queue begin probe.
+// This does NOT send PCM. ESP32 polls /api/rt7/device/commands/next and prints BEGIN_FROM_CLOUD.
 const rt7IntercomBeginFetchState = { count:0, last:null };
 app.get('/api/intercom/begin', (req,res)=>{
-  const label = safeString(req.query.label || 'unknown');
+  const label = safeString(req.query.label || 'begin_to_esp32');
+  const dev = getCurrentDevice(req);
+  const requestedDeviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
+  const deviceId = normalizeDoorCommandDeviceId_(requestedDeviceId);
   rt7IntercomBeginFetchState.count++;
-  rt7IntercomBeginFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomBeginFetchState.count };
-  console.log('[INTERCOM_BEGIN_FETCH] hit label='+label+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
-  appendEvent({ type:'intercom_begin_fetch', label, count:rt7IntercomBeginFetchState.count, ip:rt7IntercomBeginFetchState.last.ip });
-  res.json({ ok:true, type:'intercom_begin_fetch', route:'intercom_begin', label, count:rt7IntercomBeginFetchState.count, version:SERVER_VERSION, time:nowIso() });
+  const cmd = queueCommand({
+    command:'intercom_begin',
+    action:'intercom_begin',
+    device_id:deviceId,
+    requested_device_id:requestedDeviceId,
+    endpoint:'api_intercom_begin',
+    label,
+    message:'INTERCOM_BEGIN_D5_QUEUE_TRACE: 雲端對講 BEGIN 已排入佇列，等待 ESP32 輪詢'
+  });
+  rt7IntercomBeginFetchState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomBeginFetchState.count, command_id: cmd.id, device_id: deviceId };
+  console.log('[INTERCOM_BEGIN_TO_ESP32][D5] QUEUED label='+label+' cmd='+cmd.id+' device='+deviceId+' pending='+pendingCommands.length+' count='+rt7IntercomBeginFetchState.count+' ip='+rt7IntercomBeginFetchState.last.ip);
+  appendEvent({ type:'intercom_begin_to_esp32', label, command_id:cmd.id, device_id:deviceId, count:rt7IntercomBeginFetchState.count, ip:rt7IntercomBeginFetchState.last.ip });
+  res.json({ ok:true, type:'intercom_begin_to_esp32', route:'intercom_begin', label, command:cmd, count:rt7IntercomBeginFetchState.count, version:SERVER_VERSION, time:nowIso() });
 });
-app.get('/api/intercom/begin/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, state:rt7IntercomBeginFetchState }));
+app.get('/api/intercom/begin/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, state:rt7IntercomBeginFetchState, pending:pendingCommands }));
 
 // V5.2D2 compatibility: phone -> Railway fetch probe. This does NOT touch ESP32/WS/PCM.
 const rt7IntercomFetchProbeState = { count:0, last:null };
