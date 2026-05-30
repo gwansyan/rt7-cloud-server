@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2A_INTERCOM_WS_BINARY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2B_INTERCOM_WS_BUTTON_ROUTE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -511,7 +511,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="按住對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">短按麥克風播放對講測試音</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
@@ -777,6 +777,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var b=document.getElementById('btnVoice'); if(b)b.classList.add('talking'); var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking');
       rt7WsIc=new WebSocket(rt7WsUrl()); rt7WsIc.binaryType='arraybuffer';
       rt7WsIc.onopen=async function(){ setDebug('[WSIC][PHONE] ws open'); rt7WsSendJson({role:'intercom_phone',type:'intercom_begin',device_id:'#1',label:label||'begin',t:Date.now()}); try{ await rt7WsStartMic(); }catch(err){ setAnswer('手機麥克風啟用失敗：'+(err.message||err)); setDebug('[WSIC][PHONE] mic failed '+(err.message||err)); rt7WsIntercomStop('mic_failed'); } };
+      rt7WsIc.onmessage=function(ev){ try{ if(typeof ev.data==='string'){ setDebug('[WSIC][PHONE] '+ev.data.slice(0,180)); } }catch(_){} };
       rt7WsIc.onerror=function(){ setDebug('[WSIC][PHONE] ws error'); };
       rt7WsIc.onclose=function(){ if(rt7WsIcOn){ rt7WsIcOn=false; rt7WsStopMic(); setAnswer('WS對講已中斷'); } };
     } else rt7WsIntercomStop(label||'toggle_end');
@@ -935,7 +936,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       // V5.1G: send a tiny begin burst in capture phase before mic permission / long-press logic.
       b.addEventListener('pointerdown',function(ev){ try{ fastIntercomBeginBurst('pdcap'); }catch(e){} },true);
       b.addEventListener('touchstart',function(ev){ try{ fastIntercomBeginBurst('tscap'); }catch(e){} },{passive:true,capture:true});
-      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); fastIntercomButtonTest('bigMic_click'); }catch(e){} },true);
+      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); rt7WsIntercomToggle('bigMic_ws_click'); }catch(e){ setDebug('ws btn err '+(e.message||e)); } },true);
       b.addEventListener('pointerdown',intercomDown,false);
       b.addEventListener('pointerup',intercomUp,false);
       b.addEventListener('pointercancel',intercomUp,false);
@@ -948,7 +949,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
     var end=document.getElementById('btnEndTalk');
     if(end){
-      end.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation(); if(talking) intercomUp(ev); else { fastIntercomButtonTest('lowerTalk_click'); }},false);
+      end.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation(); if(rt7WsIcOn) rt7WsIntercomStop('lowerTalk_ws_end'); else { setAnswer('WS對講尚未開始'); setDebug('ws end ignored'); }},false);
     }
   }
   window.addEventListener('mouseup',function(){ if(talking)intercomUp(); }); window.addEventListener('pageshow',function(){ resumeAudioForIntercom('pageshow'); }); document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') resumeAudioForIntercom('visible'); });
@@ -1568,7 +1569,7 @@ wss.on('connection', (ws, req) => {
       if (isBinary || Buffer.isBuffer(data)) {
         const buf = Buffer.from(data);
         if (ws.rt7Role === 'intercom_phone') {
-          const n = rt7SendToEspIntercom_(buf, { binary:true });
+          const n = rt7SendToEspIntercom_(buf, { binary:true }); if ((ws.rt7IntercomPackets||0) < 3 || ((ws.rt7IntercomPackets||0) % 50) === 0) console.log('[WSIC][RELAY_PCM] bytes='+buf.length+' esp='+n);
           ws.rt7IntercomPackets = (ws.rt7IntercomPackets || 0) + 1;
           if (ws.rt7IntercomPackets <= 3 || ws.rt7IntercomPackets % 50 === 0) {
             try { ws.send(JSON.stringify({ ok:true, type:'intercom_pcm_relay', packets:ws.rt7IntercomPackets, bytes:buf.length, esp:n, state:rt7IntercomWsState_() })); } catch (_) {}
@@ -1588,7 +1589,7 @@ wss.on('connection', (ws, req) => {
         ws.send(JSON.stringify({ ok:true, type:'role_ack', role:ws.rt7Role, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
       if (msg && ws.rt7Role === 'intercom_phone' && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping')) {
-        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg)));
+        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg))); console.log('[WSIC][RELAY_CTRL] '+msg.type+' esp='+n);
         try { ws.send(JSON.stringify({ ok:true, type:'intercom_control_relay', control:msg.type, esp:n, state:rt7IntercomWsState_() })); } catch (_) {}
       }
     } catch (e) {
