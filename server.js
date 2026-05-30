@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D9_PHONE_MIC_CAPTURE_PROBE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D9A_PHONE_MIC_CAPTURE_BUTTON_SAFE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -503,7 +503,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{touch-action:none;-webkit-user-select:none;user-select:none;width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
-.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.bigMic.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 5px rgba(239,68,68,.16)}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:block!important;white-space:pre-wrap;background:#111827;color:#d1fae5;border-radius:10px;margin:8px 12px;padding:8px;font-size:12px;min-height:38px;max-height:120px;overflow:auto}.bigMic,#btnEndTalk{position:relative;z-index:2147483000;pointer-events:auto!important}
+.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.bigMic.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 5px rgba(239,68,68,.16)}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{pointer-events:none!important;display:block!important;white-space:pre-wrap;background:#111827;color:#d1fae5;border-radius:10px;margin:8px 12px;padding:8px;font-size:12px;min-height:38px;max-height:120px;overflow:auto}.bigMic,#btnEndTalk{position:relative;z-index:2147483000;pointer-events:auto!important}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
@@ -511,8 +511,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講" onclick="rt7UiDebugClick('bigMic_inline_click');return false;" ontouchstart="rt7UiDebugClick('bigMic_inline_touch');return false;" onpointerdown="rt7UiDebugClick('bigMic_inline_pointer');return false;">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">D9：Phone Mic Capture Probe</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">D9A：Phone Mic Capture Probe / Button Safe Fix</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">Mic診斷</button>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -838,19 +838,11 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   window.rt7HardProbeTap = function(label){ return rt7UiDebugClick(label||'old_hard_probe'); }; // V5.2D1 override old hard probe
   function rt7BindHardProbeButton(id,label){
-    var el=document.getElementById(id); if(!el)return;
-    ['click','pointerdown','touchstart'].forEach(function(evname){
-      el.addEventListener(evname,function(ev){
-        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation(); }catch(_){}
-        rt7HardProbeTap(label+'_'+evname);
-        return false;
-      }, true);
-    });
+    // D9A: disabled capture-level pointer/touch binding. It made Android Chrome buttons appear dead.
+    // Use normal click binding only, the same safe path as 開門/AI buttons.
   }
-  rt7BindHardProbeButton('btnVoice','bigMic_hard');
-  rt7BindHardProbeButton('btnEndTalk','lowerTalk_hard');
-  bind('btnVoice', function(){ rt7HardProbeTap('bigMic_bind_click'); });
-  bind('btnEndTalk', function(){ rt7HardProbeTap('lowerTalk_bind_click'); });
+  bind('btnVoice', function(){ rt7UiDebugClick('bigMic_safe_click'); });
+  bind('btnEndTalk', function(){ rt7UiDebugClick('lowerTalk_safe_click'); });
 
   // V5.2A: WebSocket Binary Intercom. Replaces HTTP/HEX PCM path.
   var rt7WsIc=null, rt7WsIcOn=false, rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
