@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B_PCM_GATEWAY';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B1_BUTTON_SAFE_PCM_GATEWAY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1811,132 +1811,65 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 WebRTC Phase B PCM Gateway</title>
+<title>RT7 WebRTC Phase B1 Button Safe PCM Gateway</title>
 <style>
   body{margin:0;background:#0f172a;color:#e5e7eb;font-family:system-ui,-apple-system,"Noto Sans TC",Arial,sans-serif}
   .wrap{max-width:760px;margin:0 auto;padding:16px}.card{background:#111827;border:1px solid #334155;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 10px 24px rgba(0,0,0,.25)}
   h1{font-size:21px;margin:0 0 8px}p{line-height:1.55;color:#cbd5e1}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  button{width:100%;border:0;border-radius:16px;padding:15px 14px;margin:8px 0;font-weight:900;font-size:17px;background:#22c55e;color:#06220f;touch-action:manipulation}button.stop{background:#ef4444;color:#fff}button.secondary{background:#38bdf8;color:#082f49}
-  .status{white-space:pre-wrap;background:#020617;border:1px solid #334155;border-radius:14px;padding:12px;min-height:260px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.45;overflow:auto}.pill{display:inline-block;border-radius:999px;padding:4px 8px;background:#1f2937;color:#bfdbfe;margin:2px;font-size:12px}.ok{color:#86efac}.bad{color:#fca5a5}.warn{color:#fde68a}@media(max-width:600px){.row{grid-template-columns:1fr}.wrap{padding:10px}button{font-size:16px}}
+  button{width:100%;border:0;border-radius:16px;padding:15px 14px;margin:8px 0;font-weight:900;font-size:17px;background:#22c55e;color:#06220f;touch-action:manipulation;pointer-events:auto!important}button.stop{background:#ef4444;color:#fff}button.secondary{background:#38bdf8;color:#082f49}button.gray{background:#64748b;color:white}
+  .status{white-space:pre-wrap;background:#020617;border:1px solid #334155;border-radius:14px;padding:12px;min-height:300px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.45;overflow:auto;pointer-events:none}.pill{display:inline-block;border-radius:999px;padding:4px 8px;background:#1f2937;color:#bfdbfe;margin:2px;font-size:12px}@media(max-width:600px){.row{grid-template-columns:1fr}.wrap{padding:10px}button{font-size:16px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B_PCM_GATEWAY</h1>
-    <p>本頁測試：手機 Mic → PCM16 → Railway WS Binary → ESP32 Speaker。成功時 ESP32 串口會出現 <b>[INTERCOM][WS_BINARY][PHONE_PCM]</b>。</p>
-    <div class="row"><button id="btnStart">開始 Phase B 對講測試</button><button id="btnStop" class="stop">停止測試</button></div>
-    <button id="btnStatus" class="secondary">讀取 Railway 狀態</button>
+    <h1>RT7_WEBRTC_PHASE_B1_BUTTON_SAFE_PCM_GATEWAY</h1>
+    <p>安全版：頁面載入時不啟動 Mic / AudioContext / WS；只在按下按鍵後才開始，避免 Android Chrome 全部按鍵失效。</p>
+    <div class="row"><button type="button" onclick="rt7StartB();return false;">開始 Phase B1 對講測試</button><button type="button" class="stop" onclick="rt7StopB();return false;">停止測試</button></div>
+    <button type="button" class="secondary" onclick="rt7ReadStatusB();return false;">讀取 Railway 狀態</button>
+    <button type="button" class="gray" onclick="rt7ButtonPingB();return false;">按鍵測試</button>
   </div>
   <div class="card">
-    <span class="pill">PCM 16k mono</span><span class="pill">640 bytes / 20ms</span><span class="pill">WS Binary</span>
-    <div id="status" class="status">等待測試...</div>
+    <span class="pill">Button Safe</span><span class="pill">PCM 16k mono</span><span class="pill">640 bytes / 20ms</span><span class="pill">WS Binary</span>
+    <div id="status" class="status">PAGE_LOADED：請先按「按鍵測試」，確認按鍵可按。</div>
   </div>
 </div>
 <script>
-(function(){
-  var logEl=document.getElementById('status');
-  var ws=null, stream=null, ctx=null, src=null, proc=null, silentGain=null, timer=null, statsTimer=null;
-  var pcmQueue=[], byteBuf=[], running=false, frames=0, sent=0, sentBytes=0, peak=0, relayAcks=0, relayEsp=0, startedAt=0;
-  function log(s){ logEl.textContent += "\n"+s; logEl.scrollTop=logEl.scrollHeight; }
-  function resetLog(){ logEl.textContent=''; }
-  function wsUrl(){ return (location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws'; }
-  async function j(url,opt){ var r=await fetch(url,opt||{cache:'no-store'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t,status:r.status};} }
-  async function postStatus(obj){ try{ await j('/api/webrtc/phaseB/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({time:Date.now()},obj||{}))}); }catch(e){} }
-  function floatToPcm16Bytes(arr){
-    var out=new Uint8Array(arr.length*2);
-    for(var i=0;i<arr.length;i++){ var s=Math.max(-1,Math.min(1,arr[i])); var v=s<0?s*32768:s*32767; v=v|0; out[i*2]=v&255; out[i*2+1]=(v>>8)&255; }
-    return out;
-  }
-  function downsample(input, inRate, outRate){
-    if(!inRate || inRate===outRate) return input;
-    var ratio=inRate/outRate, outLen=Math.floor(input.length/ratio), out=new Float32Array(outLen);
-    for(var i=0;i<outLen;i++){ var start=Math.floor(i*ratio), end=Math.min(input.length, Math.floor((i+1)*ratio)); var sum=0, n=0; for(var j=start;j<end;j++){sum+=input[j];n++;} out[i]=n?sum/n:0; }
-    return out;
-  }
-  function enqueueBytes(bytes){
-    for(var i=0;i<bytes.length;i++) byteBuf.push(bytes[i]);
-    while(byteBuf.length>=640){ var chunk=new Uint8Array(640); for(var k=0;k<640;k++) chunk[k]=byteBuf.shift(); pcmQueue.push(chunk); }
-    if(pcmQueue.length>30){ pcmQueue.splice(0, pcmQueue.length-30); log('DROP_OLD_PCM queue_trim'); }
-  }
-  function startPacer(){
-    if(timer) clearInterval(timer);
-    timer=setInterval(function(){
-      if(!running || !ws || ws.readyState!==1) return;
-      var chunk=pcmQueue.shift(); if(!chunk) return;
-      try{ ws.send(chunk); sent++; sentBytes+=chunk.length; }catch(e){ log('WS_SEND_ERR '+e.message); }
-    },20);
-  }
-  function stopPacer(){ if(timer) clearInterval(timer); timer=null; }
-  async function openWs(){
-    return new Promise(function(resolve,reject){
-      ws=new WebSocket(wsUrl()); ws.binaryType='arraybuffer';
-      var done=false;
-      ws.onopen=function(){ log('WS_OPEN'); ws.send(JSON.stringify({role:'intercom_phone',type:'intercom_begin',device_id:'#1',label:'phaseB_ws_open',t:Date.now()})); done=true; resolve(); };
-      ws.onerror=function(){ if(!done) reject(new Error('ws error')); };
-      ws.onmessage=function(ev){
-        if(typeof ev.data==='string'){
-          try{ var m=JSON.parse(ev.data); if(m.type==='intercom_pcm_relay'){ relayAcks++; relayEsp=m.esp||0; if(relayAcks<=3 || relayAcks%20===0) log('RELAY_ACK packets='+m.packets+' bytes='+m.bytes+' esp='+m.esp); } else if(m.type==='role_ack'||m.type==='intercom_control_relay'){ log('WS_MSG '+JSON.stringify(m).slice(0,180)); } }catch(_){ }
-        }
-      };
-      setTimeout(function(){ if(!done) reject(new Error('ws timeout')); },5000);
-    });
-  }
-  async function startMic(){
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},video:false});
-    log('MIC_GRANTED=YES tracks='+stream.getAudioTracks().length+' label='+(stream.getAudioTracks()[0]&&stream.getAudioTracks()[0].label||''));
-    var AC=window.AudioContext||window.webkitAudioContext; ctx=new AC(); await ctx.resume();
-    src=ctx.createMediaStreamSource(stream);
-    proc=ctx.createScriptProcessor(2048,1,1);
-    silentGain=ctx.createGain(); silentGain.gain.value=0;
-    proc.onaudioprocess=function(e){
-      if(!running) return;
-      var raw=e.inputBuffer.getChannelData(0); var p=0;
-      for(var i=0;i<raw.length;i++){ var a=Math.abs(raw[i]); if(a>p)p=a; }
-      peak=Math.round(p*32767); frames++;
-      var ds=downsample(raw, ctx.sampleRate, 16000);
-      enqueueBytes(floatToPcm16Bytes(ds));
-    };
-    src.connect(proc); proc.connect(silentGain); silentGain.connect(ctx.destination);
-    log('AUDIO_CONTEXT='+ctx.state+' sampleRate='+ctx.sampleRate);
-  }
-  async function start(){
-    if(running) return; resetLog(); startedAt=Date.now(); frames=0; sent=0; sentBytes=0; peak=0; relayAcks=0; relayEsp=0; pcmQueue=[]; byteBuf=[];
-    log('PHASE_B_START'); log('目標：Mic → PCM16 → WS Binary → Railway → ESP32');
-    try{
-      await openWs();
-      await j('/api/intercom/begin?label=phaseB_begin&_='+Date.now(),{cache:'no-store'}).then(function(x){ log('BEGIN_QUEUE_OK '+JSON.stringify(x).slice(0,160)); });
-      await startMic();
-      running=true; startPacer();
-      if(statsTimer) clearInterval(statsTimer);
-      statsTimer=setInterval(function(){
-        var st={ mic:'granted', audio_context:ctx?ctx.state:'none', ws_state:ws?ws.readyState:-1, frames:frames, mic_peak:peak, pcm_queue:pcmQueue.length, ws_pcm_sent:sent, ws_pcm_bytes:sentBytes, relay_acks:relayAcks, relay_esp:relayEsp, elapsed_ms:Date.now()-startedAt };
-        log('STAT ctx='+st.audio_context+' ws='+st.ws_state+' frames='+frames+' peak='+peak+' q='+pcmQueue.length+' sent='+sent+' bytes='+sentBytes+' relayAck='+relayAcks+' esp='+relayEsp);
-        postStatus(st);
-      },1000);
-    }catch(e){ log('START_ERROR '+(e.stack||e.message||e)); await postStatus({error:String(e&&e.message||e)}); stop(); }
-  }
-  async function stop(){
-    var was=running; running=false; stopPacer();
-    try{ if(statsTimer) clearInterval(statsTimer); }catch(_){} statsTimer=null;
-    try{ if(proc) proc.disconnect(); }catch(_){} proc=null;
-    try{ if(src) src.disconnect(); }catch(_){} src=null;
-    try{ if(silentGain) silentGain.disconnect(); }catch(_){} silentGain=null;
-    try{ if(stream) stream.getTracks().forEach(function(t){t.stop();}); }catch(_){} stream=null;
-    try{ if(ctx) await ctx.close(); }catch(_){} ctx=null;
-    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({role:'intercom_phone',type:'intercom_end',device_id:'#1',label:'phaseB_stop',sent:sent,bytes:sentBytes,t:Date.now()})); }catch(_){}
-    try{ if(ws) ws.close(); }catch(_){} ws=null;
-    try{ await j('/api/intercom/end?label=phaseB_end&_='+Date.now(),{cache:'no-store'}); }catch(_){}
-    log('STOPPED sent='+sent+' bytes='+sentBytes+' frames='+frames+' relayAck='+relayAcks+' esp='+relayEsp);
-    await postStatus({stopped:true, sent:sent, bytes:sentBytes, frames:frames, relay_acks:relayAcks, relay_esp:relayEsp});
-  }
-  async function readStatus(){
-    try{ var x=await j('/api/webrtc/phaseB/status?_'+Date.now(),{cache:'no-store'}); log('RAILWAY_STATUS '+JSON.stringify(x).slice(0,800)); }catch(e){ log('STATUS_ERR '+e.message); }
-  }
-  document.getElementById('btnStart').addEventListener('click',function(){ start(); });
-  document.getElementById('btnStop').addEventListener('click',function(){ stop(); });
-  document.getElementById('btnStatus').addEventListener('click',function(){ readStatus(); });
-})();
+window.onerror=function(msg,src,line,col,err){try{rt7LogB('JS_ERROR '+msg+' line='+line+' col='+col);}catch(e){} return false;};
+var rt7B={ws:null,stream:null,ctx:null,src:null,proc:null,gain:null,timer:null,stats:null,buf:[],q:[],running:false,frames:0,sent:0,bytes:0,peak:0,acks:0,esp:0,started:0};
+function rt7ElB(){return document.getElementById('status');}
+function rt7LogB(s){var el=rt7ElB(); if(!el)return; el.textContent+='\n'+s; el.scrollTop=el.scrollHeight;}
+function rt7ClearB(){var el=rt7ElB(); if(el)el.textContent='';}
+function rt7ButtonPingB(){rt7LogB('BUTTON_OK '+new Date().toLocaleTimeString());}
+function rt7WsUrlB(){return (location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws';}
+async function rt7JsonB(url,opt){var r=await fetch(url,opt||{cache:'no-store'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,status:r.status,raw:t};}}
+async function rt7PostStatusB(obj){try{await rt7JsonB('/api/webrtc/phaseB/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({time:Date.now(),phase:'B1'},obj||{}))});}catch(e){}}
+function rt7DownB(input,inRate,outRate){if(!inRate||inRate===outRate)return input; var ratio=inRate/outRate,outLen=Math.floor(input.length/ratio),out=new Float32Array(outLen); for(var i=0;i<outLen;i++){var st=Math.floor(i*ratio),ed=Math.min(input.length,Math.floor((i+1)*ratio)),sum=0,n=0; for(var j=st;j<ed;j++){sum+=input[j];n++;} out[i]=n?sum/n:0;} return out;}
+function rt7Pcm16B(arr){var out=new Uint8Array(arr.length*2); for(var i=0;i<arr.length;i++){var s=Math.max(-1,Math.min(1,arr[i])); var v=(s<0?s*32768:s*32767)|0; out[i*2]=v&255; out[i*2+1]=(v>>8)&255;} return out;}
+function rt7EnqB(bytes){for(var i=0;i<bytes.length;i++)rt7B.buf.push(bytes[i]); while(rt7B.buf.length>=640){var c=new Uint8Array(640); for(var k=0;k<640;k++)c[k]=rt7B.buf.shift(); rt7B.q.push(c);} if(rt7B.q.length>20){rt7B.q.splice(0,rt7B.q.length-20); rt7LogB('DROP_OLD_PCM');}}
+function rt7StartPacerB(){if(rt7B.timer)clearInterval(rt7B.timer); rt7B.timer=setInterval(function(){if(!rt7B.running||!rt7B.ws||rt7B.ws.readyState!==1)return; var c=rt7B.q.shift(); if(!c)return; try{rt7B.ws.send(c); rt7B.sent++; rt7B.bytes+=c.length;}catch(e){rt7LogB('WS_SEND_ERR '+e.message);}},20);}
+function rt7OpenWsB(){return new Promise(function(resolve,reject){var ws=new WebSocket(rt7WsUrlB()); rt7B.ws=ws; ws.binaryType='arraybuffer'; var done=false; ws.onopen=function(){done=true; rt7LogB('WS_OPEN'); try{ws.send(JSON.stringify({role:'intercom_phone',type:'intercom_begin',device_id:'#1',label:'phaseB1_ws_open',t:Date.now()}));}catch(e){} resolve();}; ws.onerror=function(){if(!done)reject(new Error('ws error'));}; ws.onmessage=function(ev){if(typeof ev.data==='string'){try{var m=JSON.parse(ev.data); if(m.type==='intercom_pcm_relay'){rt7B.acks++; rt7B.esp=m.esp||0; if(rt7B.acks<=3||rt7B.acks%20===0)rt7LogB('RELAY_ACK packets='+m.packets+' bytes='+m.bytes+' esp='+m.esp);} else if(m.type==='role_ack'||m.type==='intercom_control_relay'){rt7LogB('WS_MSG '+JSON.stringify(m).slice(0,180));}}catch(e){}}}; setTimeout(function(){if(!done)reject(new Error('ws timeout'));},5000);});}
+async function rt7StartMicB(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('getUserMedia unsupported');
+  rt7B.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},video:false});
+  var tr=rt7B.stream.getAudioTracks(); rt7LogB('MIC_GRANTED=YES tracks='+tr.length+' label='+(tr[0]&&tr[0].label||''));
+  var AC=window.AudioContext||window.webkitAudioContext; rt7B.ctx=new AC(); await rt7B.ctx.resume();
+  rt7B.src=rt7B.ctx.createMediaStreamSource(rt7B.stream); rt7B.proc=rt7B.ctx.createScriptProcessor(2048,1,1); rt7B.gain=rt7B.ctx.createGain(); rt7B.gain.gain.value=0;
+  rt7B.proc.onaudioprocess=function(e){if(!rt7B.running)return; var raw=e.inputBuffer.getChannelData(0),p=0; for(var i=0;i<raw.length;i++){var a=Math.abs(raw[i]); if(a>p)p=a;} rt7B.peak=Math.round(p*32767); rt7B.frames++; var ds=rt7DownB(raw,rt7B.ctx.sampleRate,16000); rt7EnqB(rt7Pcm16B(ds));};
+  rt7B.src.connect(rt7B.proc); rt7B.proc.connect(rt7B.gain); rt7B.gain.connect(rt7B.ctx.destination); rt7LogB('AUDIO_CONTEXT='+rt7B.ctx.state+' sampleRate='+rt7B.ctx.sampleRate);
+}
+async function rt7StartB(){
+  if(rt7B.running){rt7LogB('ALREADY_RUNNING');return;} rt7ClearB(); rt7LogB('PHASE_B1_START');
+  rt7B.buf=[];rt7B.q=[];rt7B.frames=0;rt7B.sent=0;rt7B.bytes=0;rt7B.peak=0;rt7B.acks=0;rt7B.esp=0;rt7B.started=Date.now();
+  try{await rt7OpenWsB(); var b=await rt7JsonB('/api/intercom/begin?label=phaseB1_begin&_='+Date.now(),{cache:'no-store'}); rt7LogB('BEGIN_QUEUE_OK '+JSON.stringify(b).slice(0,200)); await rt7StartMicB(); rt7B.running=true; rt7StartPacerB(); if(rt7B.stats)clearInterval(rt7B.stats); rt7B.stats=setInterval(function(){var st={mic:'granted',audio_context:rt7B.ctx?rt7B.ctx.state:'none',ws_state:rt7B.ws?rt7B.ws.readyState:-1,frames:rt7B.frames,mic_peak:rt7B.peak,pcm_queue:rt7B.q.length,ws_pcm_sent:rt7B.sent,ws_pcm_bytes:rt7B.bytes,relay_acks:rt7B.acks,relay_esp:rt7B.esp,elapsed_ms:Date.now()-rt7B.started}; rt7LogB('STAT ctx='+st.audio_context+' ws='+st.ws_state+' frames='+st.frames+' peak='+st.mic_peak+' q='+st.pcm_queue+' sent='+st.ws_pcm_sent+' bytes='+st.ws_pcm_bytes+' relayAck='+st.relay_acks+' esp='+st.relay_esp); rt7PostStatusB(st);},1000);}catch(e){rt7LogB('START_ERROR '+(e&&e.message?e.message:e)); rt7PostStatusB({error:String(e&&e.message||e)}); await rt7StopB();}
+}
+async function rt7StopB(){
+  var s=rt7B.sent,b=rt7B.bytes,f=rt7B.frames,a=rt7B.acks,esp=rt7B.esp; rt7B.running=false; if(rt7B.timer)clearInterval(rt7B.timer); rt7B.timer=null; if(rt7B.stats)clearInterval(rt7B.stats); rt7B.stats=null;
+  try{if(rt7B.proc)rt7B.proc.disconnect();}catch(e){} rt7B.proc=null; try{if(rt7B.src)rt7B.src.disconnect();}catch(e){} rt7B.src=null; try{if(rt7B.gain)rt7B.gain.disconnect();}catch(e){} rt7B.gain=null; try{if(rt7B.stream)rt7B.stream.getTracks().forEach(function(t){t.stop();});}catch(e){} rt7B.stream=null; try{if(rt7B.ctx)await rt7B.ctx.close();}catch(e){} rt7B.ctx=null;
+  try{if(rt7B.ws&&rt7B.ws.readyState===1)rt7B.ws.send(JSON.stringify({role:'intercom_phone',type:'intercom_end',device_id:'#1',label:'phaseB1_stop',sent:s,bytes:b,t:Date.now()}));}catch(e){} try{if(rt7B.ws)rt7B.ws.close();}catch(e){} rt7B.ws=null; try{await rt7JsonB('/api/intercom/end?label=phaseB1_end&_='+Date.now(),{cache:'no-store'});}catch(e){}
+  rt7LogB('STOPPED sent='+s+' bytes='+b+' frames='+f+' relayAck='+a+' esp='+esp); rt7PostStatusB({stopped:true,sent:s,bytes:b,frames:f,relay_acks:a,relay_esp:esp});
+}
+async function rt7ReadStatusB(){try{var x=await rt7JsonB('/api/webrtc/phaseB/status?_'+Date.now(),{cache:'no-store'}); rt7LogB('RAILWAY_STATUS '+JSON.stringify(x).slice(0,900));}catch(e){rt7LogB('STATUS_ERR '+e.message);}}
 </script>
 </body>
 </html>`);
