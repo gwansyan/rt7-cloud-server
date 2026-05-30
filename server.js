@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B3_WS_RELAY_TRACE';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B4_RELAY_STATUS_COUNTER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1758,7 +1758,7 @@ wss.on('connection', (ws, req) => {
             console.log('[WS_RELAY_TO_ESP32] packets='+rt7WsTrace.relayPcmPackets+' bytes='+rt7WsTrace.relayPcmBytes+' len='+buf.length+' clients='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
           }
           if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
-            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, state:rt7IntercomWsState_() })); } catch (_) {}
+            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
           }
           return;
         }
@@ -1995,7 +1995,7 @@ app.get('/rt7_webrtc_phase_a', (req, res) => {
 // Convenience link from the main RT7 mobile page to Phase A.
 
 
-// ================= RT7 WebRTC Phase B3: Button-safe PCM gateway probe =================
+// ================= RT7 WebRTC Phase B4: Button-safe PCM gateway probe =================
 // Built from the known-good Phase A UI. Nothing starts on page load.
 // Start button only: mic permission -> AudioContext -> WebSocket role=intercom_phone -> PCM16 binary frames.
 const webrtcPhaseBState = {
@@ -2014,7 +2014,24 @@ app.post('/api/webrtc/phaseB/status', (req, res) => {
 });
 
 app.get('/api/webrtc/phaseB/status', (req, res) => {
-  res.json({ ok:true, state: webrtcPhaseBState });
+  res.json({ ok:true, state: webrtcPhaseBState, relay: rt7IntercomWsState_(), version: SERVER_VERSION });
+});
+
+app.get('/api/webrtc/phaseB/relay_status', (req, res) => {
+  const st = rt7IntercomWsState_();
+  res.json({
+    ok:true,
+    version:SERVER_VERSION,
+    phone_pcm_rx: st.phone_pcm_packets,
+    phone_pcm_bytes: st.phone_pcm_bytes,
+    relay_to_esp32: st.relay_pcm_packets,
+    relay_to_esp32_bytes: st.relay_pcm_bytes,
+    esp32_clients: st.esp,
+    phone_clients: st.phones,
+    last_phone_pcm_time: st.last_phone_pcm_time,
+    last_relay_time: st.last_relay_time,
+    raw: st
+  });
 });
 
 app.get('/rt7_webrtc_phase_b', (req, res) => {
@@ -2023,7 +2040,7 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 WebRTC Phase B3</title>
+<title>RT7 WebRTC Phase B4</title>
 <style>
   *{box-sizing:border-box}
   body{margin:0;background:#0f172a;color:#e5e7eb;font-family:system-ui,-apple-system,"Noto Sans TC",Arial,sans-serif}
@@ -2042,10 +2059,10 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B3_WS_RELAY_TRACE</h1>
-    <p>本頁從「按鍵可按的 Phase B2」修改，加入 Railway/ESP32 WS Relay Trace。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
+    <h1>RT7_WEBRTC_PHASE_B4_RELAY_STATUS_COUNTER</h1>
+    <p>本頁從「按鍵可按的 Phase B2」修改，加入 Railway Relay 狀態計數器。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
     <p>目標：手機 Mic → PCM16 640B → Railway WebSocket → ESP32 Speaker。</p>
-    <button id="btnStart">開始 Phase B3 WS Relay Trace</button>
+    <button id="btnStart">開始 Phase B4 WS Relay Trace</button>
     <button id="btnStop" class="stop">停止測試</button>
     <button id="btnStatus" class="secondary">讀取 Railway 狀態</button>
   </div>
@@ -2120,7 +2137,7 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
     running=true;
     sentPackets=0; sentBytes=0; frameCount=0; micPeak=0; sendBuf=[];
     btnStart.disabled=true;
-    log('PHASE_B3_START');
+    log('PHASE_B4_START');
     log('Step1: request microphone only after user click');
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       log('MIC_GRANTED=NO getUserMedia not supported');
@@ -2139,11 +2156,11 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
     ws.binaryType='arraybuffer';
     ws.onopen=function(){
       log('WS_STATE=OPEN');
-      try{ ws.send(JSON.stringify({role:'intercom_phone', type:'role', phase:'B3', time:Date.now()})); }catch(e){}
-      try{ ws.send(JSON.stringify({type:'intercom_begin', phase:'B3', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({role:'intercom_phone', type:'role', phase:'B4', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({type:'intercom_begin', phase:'B4', time:Date.now()})); }catch(e){}
     };
     ws.onmessage=function(ev){
-      if(typeof ev.data==='string' && (ev.data.indexOf('role_ack')>=0 || ev.data.indexOf('intercom')>=0)) log('WS_MSG '+ev.data.slice(0,220));
+      if(typeof ev.data==='string' && (ev.data.indexOf('role_ack')>=0 || ev.data.indexOf('intercom')>=0 || ev.data.indexOf('ws_relay_trace')>=0)) log('WS_MSG '+ev.data.slice(0,360));
     };
     ws.onerror=function(){ log('WS_STATE=ERROR'); };
     ws.onclose=function(){ log('WS_STATE=CLOSED'); };
@@ -2183,7 +2200,7 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
   }
   function stop(){
     running=false;
-    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'intercom_end', phase:'B3', time:Date.now()})); }catch(_){}
+    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'intercom_end', phase:'B4', time:Date.now()})); }catch(_){}
     try{ if(processor) processor.disconnect(); }catch(_){}
     try{ if(source) source.disconnect(); }catch(_){}
     try{ if(audioCtx) audioCtx.close(); }catch(_){}
@@ -2198,7 +2215,8 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
     try{
       var r=await fetch('/api/webrtc/phaseB/status?_'+Date.now(),{cache:'no-store'});
       var j=await r.json();
-      log('RAILWAY_STATUS '+JSON.stringify(j.state||j).slice(0,700));
+      log('RAILWAY_STATUS '+JSON.stringify(j.state||j).slice(0,500));
+      if(j.relay){ log('RELAY_STATUS phone_pcm_rx='+j.relay.phone_pcm_packets+' phone_bytes='+j.relay.phone_pcm_bytes+' relay_to_esp32='+j.relay.relay_pcm_packets+' relay_bytes='+j.relay.relay_pcm_bytes+' esp32_clients='+j.relay.esp+' phone_clients='+j.relay.phones); }
     }catch(e){ log('RAILWAY_STATUS_ERROR '+e.message); }
   }
   btnStart.addEventListener('click',function(ev){ ev.preventDefault(); start().catch(function(e){log('START_ERROR '+(e.stack||e.message||e)); running=false; btnStart.disabled=false;}); },false);
