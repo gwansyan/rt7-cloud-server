@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D3_INTERCOM_BEGIN_FETCH';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D4_INTERCOM_BEGIN_TO_ESP32';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -547,7 +547,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       try{ if(navigator.vibrate) navigator.vibrate(40); }catch(_){}
       fetch('/api/intercom/begin?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
         .then(function(r){ return r.text().then(function(t){ return {ok:r.ok,status:r.status,raw:t}; }); })
-        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; var line='BEGIN FETCH OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer('Begin Fetch OK：手機已打到 Railway'); setDebug(line); })
+        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; var line='BEGIN FETCH OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer('Begin To ESP32 OK：已排入 ESP32 輪詢佇列'); setDebug(line); })
         .catch(function(err){ var line='BEGIN FETCH FAIL '+label+' '+(err.message||err); setAnswer('Begin Fetch 失敗'); setDebug(line); alert(line); });
     }catch(err){ alert('FETCH PROBE handler error: '+(err.message||err)); }
     return false;
