@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D1_INTERCOM_UI_DEBUG';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D2_INTERCOM_FETCH_PROBE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -492,7 +492,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.1A</title>
+<title>RT7 Cloud Original UI V5.2D2 Fetch Probe</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -512,7 +512,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講" onclick="rt7UiDebugClick('bigMic_inline_click');return false;" ontouchstart="rt7UiDebugClick('bigMic_inline_touch');return false;" onpointerdown="rt7UiDebugClick('bigMic_inline_pointer');return false;">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">UI DEBUG：等待按「對講」</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">FETCH PROBE：等待按「對講」</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -536,16 +536,20 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function startAuto(){ try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','AUTO');}catch(e){} if(videoWanted && (currentStreamMode==='LAN' || currentStreamMode==='CLOUD')){ setAnswer(currentStreamMode==='LAN'?'內網直連影像模式':'雲端遠端影像模式'); return; } videoWanted=true; currentStreamMode='AUTO'; clearLanReconnect(); setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先用單張 snapshot 測內網，成功才開啟 LAN 串流'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done||!videoWanted)return; done=true; try{probe.src='about:blank'}catch(e){} cloud(); },1800); probe.onload=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} lan(); }; probe.onerror=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} cloud(); }; probe.src='http://'+ip+'/api/camera/snapshot?_probe_once='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
-  // V5.2D1: UI-only intercom button debug. No WS, no PCM, no ESP32 command.
+  // V5.2D2: fetch probe. UI event is proven; now verify phone -> Railway route. No WS, no PCM.
   function rt7UiDebugClick(label){
     try{
-      var msg='MIC CLICK '+(label||'')+' '+new Date().toLocaleTimeString('zh-TW');
-      setAnswer(msg); setDebug(msg);
+      label=label||'unknown';
+      var msg='FETCH PROBE SEND '+label+' '+new Date().toLocaleTimeString('zh-TW');
+      setAnswer('對講 Fetch Probe 送出中'); setDebug(msg);
       var b=document.getElementById('btnVoice'); if(b){ b.classList.add('talking'); setTimeout(function(){try{b.classList.remove('talking')}catch(_){}},500); }
       var e=document.getElementById('btnEndTalk'); if(e){ e.classList.add('talking'); setTimeout(function(){try{e.classList.remove('talking')}catch(_){}},500); }
       try{ if(navigator.vibrate) navigator.vibrate(40); }catch(_){}
-      alert(msg);
-    }catch(err){ alert('MIC CLICK handler error: '+(err.message||err)); }
+      fetch('/api/intercom/test?label='+encodeURIComponent(label)+'&_='+Date.now(),{cache:'no-store'})
+        .then(function(r){ return r.text().then(function(t){ return {ok:r.ok,status:r.status,raw:t}; }); })
+        .then(function(x){ var obj=null; try{obj=JSON.parse(x.raw)}catch(_){}; var line='FETCH PROBE OK status='+x.status+' label='+label+' resp='+(obj?JSON.stringify(obj):x.raw).slice(0,180); setAnswer('Fetch Probe OK：手機已打到 Railway'); setDebug(line); })
+        .catch(function(err){ var line='FETCH PROBE FAIL '+label+' '+(err.message||err); setAnswer('Fetch Probe 失敗'); setDebug(line); alert(line); });
+    }catch(err){ alert('FETCH PROBE handler error: '+(err.message||err)); }
     return false;
   }
   window.rt7UiDebugClick=rt7UiDebugClick;
@@ -1626,6 +1630,19 @@ app.get('/api/rt7/stream/compare/state', (req, res) => {
 });
 
 
+
+
+// V5.2D2: phone -> Railway fetch probe. This does NOT touch ESP32/WS/PCM.
+const rt7IntercomFetchProbeState = { count:0, last:null };
+app.get('/api/intercom/test', (req,res)=>{
+  const label = safeString(req.query.label || 'unknown');
+  rt7IntercomFetchProbeState.count++;
+  rt7IntercomFetchProbeState.last = { label, time: nowIso(), ip: clientIp(req), ua: safeString(req.headers['user-agent']).slice(0,120), count: rt7IntercomFetchProbeState.count };
+  console.log('[INTERCOM_FETCH_PROBE] hit label='+label+' count='+rt7IntercomFetchProbeState.count+' ip='+rt7IntercomFetchProbeState.last.ip);
+  appendEvent({ type:'intercom_fetch_probe', label, count:rt7IntercomFetchProbeState.count, ip:rt7IntercomFetchProbeState.last.ip });
+  res.json({ ok:true, type:'intercom_fetch_probe', label, count:rt7IntercomFetchProbeState.count, version:SERVER_VERSION, time:nowIso() });
+});
+app.get('/api/intercom/test/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, state:rt7IntercomFetchProbeState }));
 
 // V5.2C: WS intercom route probe. This is diagnostic only: no mic, no PCM.
 app.get('/api/rt7/intercom/ws/probe', (req,res)=>{
