@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2C_WS_INTERCOM_ROUTE_PROBE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2D_INTERCOM_BUTTON_INLINE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -511,8 +511,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
+<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講" onclick="rt7HardProbeTap('bigMic_inline_click');return false;" ontouchstart="rt7HardProbeTap('bigMic_inline_touch');return false;" onpointerdown="rt7HardProbeTap('bigMic_inline_pointer');return false;">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7HardProbeTap('lowerTalk_inline_click');return false;" ontouchstart="rt7HardProbeTap('lowerTalk_inline_touch');return false;" onpointerdown="rt7HardProbeTap('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -777,8 +777,34 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       .catch(function(e){ setDebug('[WSIC][PROBE][HTTP] failed '+(e.message||e)); });
   }
 
-  bind('btnVoice', function(){ rt7WsIntercomRouteProbe('bigMic_click'); });
-  bind('btnEndTalk', function(){ rt7WsIntercomRouteProbe('lowerTalk_probe'); });
+  // V5.2D: hard inline/capture route fix. Some mobile browsers cancel click when old PTT handlers exist.
+  var rt7LastHardProbeMs=0;
+  function rt7HardProbeTap(label){
+    var now=Date.now();
+    if(now-rt7LastHardProbeMs<700){ return false; }
+    rt7LastHardProbeMs=now;
+    try{
+      setAnswer('WS 對講路由測試中');
+      setDebug('[WSIC][HARD_BTN] '+label);
+      rt7WsIntercomRouteProbe(label||'hard_btn');
+    }catch(e){ try{ setDebug('[WSIC][HARD_BTN][ERR] '+(e.message||e)); }catch(_){} }
+    return false;
+  }
+  window.rt7HardProbeTap = rt7HardProbeTap;
+  function rt7BindHardProbeButton(id,label){
+    var el=document.getElementById(id); if(!el)return;
+    ['click','pointerdown','touchstart'].forEach(function(evname){
+      el.addEventListener(evname,function(ev){
+        try{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation&&ev.stopImmediatePropagation(); }catch(_){}
+        rt7HardProbeTap(label+'_'+evname);
+        return false;
+      }, true);
+    });
+  }
+  rt7BindHardProbeButton('btnVoice','bigMic_hard');
+  rt7BindHardProbeButton('btnEndTalk','lowerTalk_hard');
+  bind('btnVoice', function(){ rt7HardProbeTap('bigMic_bind_click'); });
+  bind('btnEndTalk', function(){ rt7HardProbeTap('lowerTalk_bind_click'); });
 
   // V5.2A: WebSocket Binary Intercom. Replaces HTTP/HEX PCM path.
   var rt7WsIc=null, rt7WsIcOn=false, rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
@@ -965,7 +991,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       // V5.1G: send a tiny begin burst in capture phase before mic permission / long-press logic.
       b.addEventListener('pointerdown',function(ev){ try{ fastIntercomBeginBurst('pdcap'); }catch(e){} },true);
       b.addEventListener('touchstart',function(ev){ try{ fastIntercomBeginBurst('tscap'); }catch(e){} },{passive:true,capture:true});
-      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); rt7WsIntercomToggle('bigMic_ws_click'); }catch(e){ setDebug('ws btn err '+(e.message||e)); } },true);
+      b.addEventListener('click',function(ev){ try{ ev.preventDefault(); ev.stopPropagation(); rt7HardProbeTap('bigMic_oldptt_click_redirect'); }catch(e){ setDebug('ws btn err '+(e.message||e)); } },true);
       b.addEventListener('pointerdown',intercomDown,false);
       b.addEventListener('pointerup',intercomUp,false);
       b.addEventListener('pointercancel',intercomUp,false);
