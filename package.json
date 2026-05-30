@@ -1,6 +1,6 @@
 {
   "name": "rt7-cloud-server",
-  "version": "4.9.3",
+  "version": "5.3.0-phase-b2",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
