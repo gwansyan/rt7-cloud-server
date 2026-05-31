@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B10_JITTER_BUFFER_SPK_TASK_FIX';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B10A_ROLLBACK_NO_RESET_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -168,7 +168,7 @@ const STREAM_FRAME_FILE = path.join(DATA_DIR, 'latest_stream_frame.jpg');
 let latestStreamFrame = null;
 let rt7MjpegCongestUntilMs = 0;
 
-// B9: server-side audio priority window. While phone PCM is active, do not waste Railway
+// B10A: server-side audio priority window. While phone PCM is active, do not waste Railway
 // work on live JPEG relay. ESP32 also pauses uploads; this is a safety net.
 let rt7AudioActiveUntilMs = 0;
 function rt7AudioHold_(ms) { rt7AudioActiveUntilMs = Math.max(rt7AudioActiveUntilMs, Date.now() + ms); }
@@ -1769,8 +1769,8 @@ wss.on('connection', (ws, req) => {
   try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true })); } catch (_) {}
   ws.on('message', (data, isBinary) => {
     try {
-      // B9: keeps B7 text/binary split; audio priority handled on ESP32 as Buffer too, with isBinary=false.
-      // B7 fixed text/binary split; B9 keeps this behavior
+      // B10A: keeps B7 text/binary split; audio priority handled on ESP32 as Buffer too, with isBinary=false.
+      // B7 fixed text/binary split; B10A keeps this behavior
       // could be misclassified as PCM and relayed to ESP32 speaker.
       // Only WebSocket opcode binary frames are PCM/JPEG here; text goes to JSON parser below.
       if (isBinary) {
@@ -1814,7 +1814,7 @@ wss.on('connection', (ws, req) => {
         if (msg && (msg.pcm_client === true || msg.type === 'esp32_pcm_register')) { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
         console.log('[WS_ROLE][B6] role='+ws.rt7Role+' pcm_role='+(ws.rt7PcmRole||'')+' pcm_client='+(ws.rt7PcmClient?1:0)+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
-        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B9', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B10A', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
       if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe')) {
         if (msg.type === 'intercom_begin') rt7AudioHold_(4000);
@@ -2102,10 +2102,10 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B10_JITTER_BUFFER_SPK_TASK_FIX</h1>
+    <h1>RT7_WEBRTC_PHASE_B10A_ROLLBACK_NO_RESET_FIX</h1>
     <p>本頁從 B7 修改：保留文字/二進位分離，並提升 ESP32 WebSocket PCM 處理優先權，降低串流期間音訊延遲尖峰。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
     <p>目標：手機 Mic → PCM16 640B → Railway WebSocket → ESP32 Speaker。</p>
-    <button id="btnStart">開始 Phase B10 Jitter Buffer + Speaker Task Fix</button>
+    <button id="btnStart">開始 Phase B10A Rollback No Reset Fix</button>
     <button id="btnStop" class="stop">停止測試</button>
     <button id="btnStatus" class="secondary">讀取 Railway 狀態</button>
   </div>
@@ -2195,12 +2195,12 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
       running=false; btnStart.disabled=false; return;
     }
     log('Step2: open Railway WS');
-    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B9');
+    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B10A');
     ws.binaryType='arraybuffer';
     ws.onopen=function(){
       log('WS_STATE=OPEN');
-      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B9', device_id:'#1', time:Date.now()})); }catch(e){}
-      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B9', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B10A', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B10A', device_id:'#1', time:Date.now()})); }catch(e){}
     };
     ws.onmessage=function(ev){
       if(typeof ev.data==='string' && (ev.data.indexOf('role_ack')>=0 || ev.data.indexOf('intercom')>=0 || ev.data.indexOf('ws_relay_trace')>=0)) log('WS_MSG '+ev.data.slice(0,360));
@@ -2243,7 +2243,7 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
   }
   function stop(){
     running=false;
-    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'intercom_end', phase:'B9', time:Date.now()})); }catch(_){}
+    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'intercom_end', phase:'B10A', time:Date.now()})); }catch(_){}
     try{ if(processor) processor.disconnect(); }catch(_){}
     try{ if(source) source.disconnect(); }catch(_){}
     try{ if(audioCtx) audioCtx.close(); }catch(_){}
