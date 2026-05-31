@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0F_AI_VOICE_ONE_SHOT_UI_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0G_ADD_WEBRTC_TALK_BUTTON_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -96,6 +96,54 @@ function broadcastBinaryToViewers(buf) {
   }
 }
 
+
+// V5.0G: WebSocket binary intercom relay. Phone sends PCM16 binary frames to Railway;
+// Railway forwards them to ESP32 persistent esp32_pcm client over /ws.
+function rt7IsPhonePcmRole_(role) {
+  return role === 'phone_pcm' || role === 'intercom_phone' || role === 'phone' || role === 'webrtc_phone';
+}
+function rt7IsEspPcmRole_(role) {
+  return role === 'esp32_pcm' || role === 'esp32_intercom' || role === 'esp32' || role === 'esp32_frame_upload' || role === 'esp32_pcm_client';
+}
+function rt7IsEspPcmClient_(c) {
+  return !!c && (rt7IsEspPcmRole_(c.rt7Role) || rt7IsEspPcmRole_(c.rt7PcmRole) || c.rt7PcmClient === true);
+}
+function rt7SendToEspIntercom_(payload, opts) {
+  let n = 0;
+  for (const c of wss.clients) {
+    if (c.readyState !== WebSocket.OPEN) continue;
+    if (rt7IsEspPcmClient_(c)) {
+      try { c.send(payload, opts || {}); n++; } catch (_) {}
+    }
+  }
+  return n;
+}
+const rt7WsTrace = {
+  phonePcmPackets: 0,
+  phonePcmBytes: 0,
+  relayPcmPackets: 0,
+  relayPcmBytes: 0,
+  lastPhonePcmTime: null,
+  lastRelayTime: null
+};
+function rt7IntercomWsState_() {
+  let phones=0, esp=0;
+  for (const c of wss.clients) {
+    if (c.readyState !== WebSocket.OPEN) continue;
+    if (rt7IsPhonePcmRole_(c.rt7Role)) phones++;
+    if (rt7IsEspPcmClient_(c)) esp++;
+  }
+  return {
+    phones, esp,
+    phone_pcm_packets: rt7WsTrace.phonePcmPackets,
+    phone_pcm_bytes: rt7WsTrace.phonePcmBytes,
+    relay_pcm_packets: rt7WsTrace.relayPcmPackets,
+    relay_pcm_bytes: rt7WsTrace.relayPcmBytes,
+    last_phone_pcm_time: rt7WsTrace.lastPhonePcmTime,
+    last_relay_time: rt7WsTrace.lastRelayTime
+  };
+}
+
 function normalizeDevice(body, req) {
   const ip = body.ip || body.device_ip || body.esp_ip || clientIp(req);
   return {
@@ -119,6 +167,10 @@ const SNAPSHOT_FILE = path.join(DATA_DIR, 'latest.jpg');
 const STREAM_FRAME_FILE = path.join(DATA_DIR, 'latest_stream_frame.jpg');
 let latestStreamFrame = null;
 let rt7MjpegCongestUntilMs = 0;
+// V5.0G: while phone PCM is active, skip Railway JPEG work to reduce audio jitter.
+let rt7AudioActiveUntilMs = 0;
+function rt7AudioHold_(ms) { rt7AudioActiveUntilMs = Math.max(rt7AudioActiveUntilMs, Date.now() + ms); }
+function rt7AudioActive_() { return Date.now() < rt7AudioActiveUntilMs; }
 const RT7_STREAM_FAST_MS = 100;
 const RT7_STREAM_STABLE_MS = 140;
 const RT7_STREAM_IDLE_MS = 1000;
@@ -481,7 +533,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
-.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
+.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
@@ -490,7 +542,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講結束</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -562,7 +614,47 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   function startVoiceAsk(){ setAiUi(true,'請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAiUi(false,'語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnVoice', startVoiceAsk); bind('btnAiVoice', startVoiceAsk);
-  bind('btnEndTalk', function(){ setAnswer('對講已結束'); setDebug('talk end'); });
+
+  // V5.0G: WebSocket 對講。只綁定下方「對講」按鍵；AI 語音助理維持原本功能。
+  var rt7WsIc=null, rt7WsIcOn=false, rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
+  var rt7WsTxBytes=[], rt7WsSent=0, rt7WsBeginMs=0;
+  function rt7WsUrl(){ return (location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws'; }
+  function rt7WsPcm16Bytes(f32){ var b=new Uint8Array(f32.length*2); for(var i=0;i<f32.length;i++){ var v=Math.max(-1,Math.min(1,f32[i])); var s=Math.round(v<0?v*0x8000:v*0x7fff); b[i*2]=s&255; b[i*2+1]=(s>>8)&255; } return b; }
+  function rt7WsDown16(input,rate){ if(!rate||Math.abs(rate-16000)<1)return input; var ratio=rate/16000, len=Math.floor(input.length/ratio); var out=new Float32Array(Math.max(0,len)); for(var i=0;i<len;i++){ var a=Math.floor(i*ratio), b=Math.min(Math.floor((i+1)*ratio),input.length), sum=0,c=0; for(var j=a;j<b;j++){sum+=input[j];c++;} out[i]=c?sum/c:0; } return out; }
+  function rt7WsClean(input){ var out=new Float32Array(input.length); var peak=0; for(var i=0;i<input.length;i++){ var x=input[i]*0.86; if(x>0.98)x=0.98; if(x<-0.98)x=-0.98; out[i]=x; var a=Math.abs(x); if(a>peak)peak=a; } out.peak=peak; return out; }
+  function rt7WsSendJson(o){ try{ if(rt7WsIc&&rt7WsIc.readyState===1) rt7WsIc.send(JSON.stringify(o)); }catch(e){} }
+  function rt7WsQueue(bytes){ for(var i=0;i<bytes.length;i++) rt7WsTxBytes.push(bytes[i]); while(rt7WsTxBytes.length>=640){ var chunk=rt7WsTxBytes.splice(0,640); if(rt7WsIc&&rt7WsIc.readyState===1){ rt7WsSent++; try{ rt7WsIc.send(new Uint8Array(chunk).buffer); }catch(e){ setDebug('ws pcm send failed '+(e.message||e)); } } } }
+  function rt7WsStopMic(){ try{ if(rt7WsMicProc){rt7WsMicProc.disconnect();rt7WsMicProc.onaudioprocess=null;} }catch(_){} try{ if(rt7WsMicSource)rt7WsMicSource.disconnect(); }catch(_){} try{ if(rt7WsMicCtx)rt7WsMicCtx.close(); }catch(_){} try{ if(rt7WsMicStream)rt7WsMicStream.getTracks().forEach(function(t){try{t.stop();}catch(_){}}); }catch(_){} rt7WsMicStream=null; rt7WsMicCtx=null; rt7WsMicSource=null; rt7WsMicProc=null; }
+  async function rt7WsStartMic(){
+    rt7WsStopMic();
+    rt7WsMicStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:{ideal:true},noiseSuppression:{ideal:false},autoGainControl:{ideal:false},channelCount:{ideal:1},sampleRate:{ideal:48000}},video:false});
+    var AC=window.AudioContext||window.webkitAudioContext; rt7WsMicCtx=new AC();
+    rt7WsMicSource=rt7WsMicCtx.createMediaStreamSource(rt7WsMicStream);
+    rt7WsMicProc=rt7WsMicCtx.createScriptProcessor(2048,1,1);
+    rt7WsMicProc.onaudioprocess=function(e){ if(!rt7WsIcOn)return; var raw=e.inputBuffer.getChannelData(0); var cl=rt7WsClean(raw); if(cl.peak<0.00004)return; var ds=rt7WsDown16(cl,rt7WsMicCtx.sampleRate); if(ds.length)rt7WsQueue(rt7WsPcm16Bytes(ds)); };
+    rt7WsMicSource.connect(rt7WsMicProc); rt7WsMicProc.connect(rt7WsMicCtx.destination); if(rt7WsMicCtx.state!=='running') await rt7WsMicCtx.resume();
+    setDebug('WS intercom mic ready sr='+Math.round(rt7WsMicCtx.sampleRate));
+  }
+  async function rt7WsIntercomToggle(label){
+    if(!rt7WsIcOn){
+      rt7WsIcOn=true; rt7WsSent=0; rt7WsTxBytes=[]; rt7WsBeginMs=performance.now(); setAnswer('對講開始：請說話');
+      var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking');
+      rt7WsIc=new WebSocket(rt7WsUrl()+'?role=phone_pcm&device_id=%231&phase=V50G'); rt7WsIc.binaryType='arraybuffer';
+      rt7WsIc.onopen=async function(){ setDebug('WS intercom open'); rt7WsSendJson({role:'phone_pcm',type:'intercom_begin',device_id:'#1',label:label||'begin',t:Date.now(),phase:'V50G'}); try{ await rt7WsStartMic(); }catch(err){ setAnswer('手機麥克風啟用失敗：'+(err.message||err)); rt7WsIntercomStop('mic_failed'); } };
+      rt7WsIc.onmessage=function(ev){ try{ if(typeof ev.data==='string' && ev.data.indexOf('ws_relay_trace')>=0){ setDebug(ev.data.slice(0,180)); } }catch(_){} };
+      rt7WsIc.onerror=function(){ setDebug('WS intercom error'); };
+      rt7WsIc.onclose=function(){ if(rt7WsIcOn){ rt7WsIcOn=false; rt7WsStopMic(); var e2=document.getElementById('btnEndTalk'); if(e2)e2.classList.remove('talking'); setAnswer('對講已中斷'); } };
+    } else rt7WsIntercomStop(label||'toggle');
+  }
+  function rt7WsIntercomStop(label){
+    if(!rt7WsIcOn && !rt7WsIc)return;
+    rt7WsIcOn=false;
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'end',sent:rt7WsSent,t:Date.now(),phase:'V50G'});
+    setTimeout(function(){ try{ if(rt7WsIc)rt7WsIc.close(); }catch(_){} rt7WsIc=null; rt7WsStopMic(); },120);
+    var e=document.getElementById('btnEndTalk'); if(e)e.classList.remove('talking');
+    setAnswer('對講結束');
+  }
+  bind('btnEndTalk', function(){ rt7WsIntercomToggle('lower_talk_button'); });
   var lastCount=null;
   async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; showDoorbellInline(); } } }catch(e){} setTimeout(pollDoor,2500); }
   pollDoor();
@@ -753,6 +845,7 @@ function acceptWsStreamFrame_(buf, ws) {
   ensureDataDir();
   if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf || []);
   if (!buf || buf.length < 16 || buf[0] !== 0xFF || buf[1] !== 0xD8) return false;
+  if (rt7AudioActive_()) return true;
   latestStreamFrame = Buffer.from(buf);
   fs.writeFileSync(STREAM_FRAME_FILE, latestStreamFrame);
   fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
@@ -770,6 +863,7 @@ function acceptStreamFrame_(req, res) {
   ensureDataDir();
   const buf = Buffer.isBuffer(req.body) ? req.body : null;
   if (!buf || buf.length < 16 || buf[0] !== 0xFF || buf[1] !== 0xD8) return res.status(400).json({ok:false,error:'JPEG_FRAME_REQUIRED'});
+  if (rt7AudioActive_()) return res.json({ ok:true, version:SERVER_VERSION, audio_gate:true, skipped:true });
   latestStreamFrame = Buffer.from(buf);
   fs.writeFileSync(STREAM_FRAME_FILE, latestStreamFrame);
   fs.writeFileSync(SNAPSHOT_FILE, latestStreamFrame); // keep Vision QA / latest.jpg aligned with live stream
@@ -1164,14 +1258,48 @@ app.get('/api/rt7/stream/compare/state', (req, res) => {
   res.json({ ok:true, version:SERVER_VERSION, lan:{ url: dev.base_url ? dev.base_url + '/api/camera/stream' : '', note:'手機與 ESP32 同 Wi-Fi 時測試；不經 Node-RED/Tailscale/Railway relay' }, cloud:{ url:'/api/rt7/camera/stream.mjpg', stream:liveStreamState, snapshot:getSnapshotMeta_() } });
 });
 
+app.get('/api/rt7/intercom/ws/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, ws:rt7IntercomWsState_() }));
+app.get('/api/rt7/intercom/ws/probe', (req,res)=>{ const label=safeString(req.query.label||'probe'); const n=rt7SendToEspIntercom_(JSON.stringify({type:'intercom_probe',role:'intercom_probe_http',device_id:'#1',label,t:Date.now(),version:SERVER_VERSION})); res.json({ok:true,version:SERVER_VERSION,esp:n,state:rt7IntercomWsState_()}); });
+
 wss.on('connection', (ws, req) => {
   ws.rt7Role = 'control';
   ws.rt7DeviceId = '';
-  try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true })); } catch (_) {}
+  try {
+    const u = new URL(req.url || '/ws', 'http://localhost');
+    const qRole = safeString(u.searchParams.get('role') || '');
+    const qDev = safeString(u.searchParams.get('device_id') || u.searchParams.get('device') || '');
+    const qPcmRole = safeString(u.searchParams.get('pcm_role') || '');
+    if (qRole) ws.rt7Role = qRole;
+    if (qDev) ws.rt7DeviceId = qDev;
+    if (qPcmRole) { ws.rt7PcmRole = qPcmRole; ws.rt7PcmClient = rt7IsEspPcmRole_(qPcmRole); }
+    if (rt7IsEspPcmRole_(qRole)) { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
+  } catch (_) {}
+  try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true, intercom_ws:rt7IntercomWsState_() })); } catch (_) {}
   ws.on('message', (data, isBinary) => {
     try {
-      if (isBinary || Buffer.isBuffer(data)) {
-        acceptWsStreamFrame_(Buffer.from(data), ws);
+      if (isBinary) {
+        const buf = Buffer.from(data);
+        const looksLikePhonePcm = rt7IsPhonePcmRole_(ws.rt7Role) || (!rt7IsEspPcmRole_(ws.rt7Role) && buf.length <= 2048);
+        if (looksLikePhonePcm) {
+          rt7AudioHold_(5000);
+          if (!rt7IsPhonePcmRole_(ws.rt7Role)) ws.rt7Role = 'phone_pcm_auto';
+          ws.rt7IntercomPackets = (ws.rt7IntercomPackets || 0) + 1;
+          ws.rt7IntercomBytes = (ws.rt7IntercomBytes || 0) + buf.length;
+          rt7WsTrace.phonePcmPackets++;
+          rt7WsTrace.phonePcmBytes += buf.length;
+          rt7WsTrace.lastPhonePcmTime = nowIso();
+          const n = rt7SendToEspIntercom_(buf, { binary:true });
+          if (n > 0) {
+            rt7WsTrace.relayPcmPackets++;
+            rt7WsTrace.relayPcmBytes += buf.length;
+            rt7WsTrace.lastRelayTime = nowIso();
+          }
+          if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
+            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_v50g', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
+          }
+          return;
+        }
+        acceptWsStreamFrame_(buf, ws);
         return;
       }
       const txt = data.toString('utf8');
@@ -1180,8 +1308,16 @@ wss.on('connection', (ws, req) => {
       if (msg && msg.role) {
         ws.rt7Role = safeString(msg.role);
         ws.rt7DeviceId = safeString(msg.device_id || msg.device || msg.id || ws.rt7DeviceId || '#1');
+        if (msg.pcm_role) { ws.rt7PcmRole = safeString(msg.pcm_role); ws.rt7PcmClient = rt7IsEspPcmRole_(ws.rt7PcmRole); }
+        if (msg.pcm_client === true || msg.type === 'esp32_pcm_register') { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
-        ws.send(JSON.stringify({ ok:true, type:'role_ack', role:ws.rt7Role, version:SERVER_VERSION, time:nowIso() }));
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'V50G', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
+      }
+      if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe')) {
+        if (msg.type === 'intercom_begin') rt7AudioHold_(8000);
+        if (msg.type === 'intercom_end') rt7AudioHold_(3500);
+        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg)));
+        try { ws.send(JSON.stringify({ ok:true, type:'intercom_control_relay', control:msg.type, esp:n, state:rt7IntercomWsState_() })); } catch (_) {}
       }
     } catch (e) {
       try { ws.send(JSON.stringify({ ok:false, type:'ws_error', error:String(e.message||e) })); } catch (_) {}
