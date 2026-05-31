@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B9_AUDIO_ACTIVE_STREAM_PAUSE_FIX';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B10_JITTER_BUFFER_SPK_TASK_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -2102,10 +2102,10 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B9_AUDIO_ACTIVE_STREAM_PAUSE_FIX</h1>
+    <h1>RT7_WEBRTC_PHASE_B10_JITTER_BUFFER_SPK_TASK_FIX</h1>
     <p>本頁從 B7 修改：保留文字/二進位分離，並提升 ESP32 WebSocket PCM 處理優先權，降低串流期間音訊延遲尖峰。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
     <p>目標：手機 Mic → PCM16 640B → Railway WebSocket → ESP32 Speaker。</p>
-    <button id="btnStart">開始 Phase B9 Audio Active Stream Pause Fix</button>
+    <button id="btnStart">開始 Phase B10 Jitter Buffer + Speaker Task Fix</button>
     <button id="btnStop" class="stop">停止測試</button>
     <button id="btnStatus" class="secondary">讀取 Railway 狀態</button>
   </div>
