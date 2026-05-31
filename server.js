@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B11A_STABLE_TRACE_CLEAN_FIX';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B12_ORIGINAL_UI_TALK_BUTTON_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -168,7 +168,7 @@ const STREAM_FRAME_FILE = path.join(DATA_DIR, 'latest_stream_frame.jpg');
 let latestStreamFrame = null;
 let rt7MjpegCongestUntilMs = 0;
 
-// B11A: server-side audio priority window. While phone PCM is active, do not waste Railway
+// B12: server-side audio priority window. While phone PCM is active, do not waste Railway
 // work on live JPEG relay. ESP32 also pauses uploads; this is a safety net.
 let rt7AudioActiveUntilMs = 0;
 function rt7AudioHold_(ms) { rt7AudioActiveUntilMs = Math.max(rt7AudioActiveUntilMs, Date.now() + ms); }
@@ -524,7 +524,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.2D3 Begin Fetch</title>
+<title>RT7 Cloud Original UI B12 Talk Button Fix</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -535,7 +535,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{touch-action:none;-webkit-user-select:none;user-select:none;width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
-.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.bigMic.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 5px rgba(239,68,68,.16)}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:block!important;white-space:pre-wrap;background:#111827;color:#d1fae5;border-radius:10px;margin:8px 12px;padding:8px;font-size:12px;min-height:38px;max-height:120px;overflow:auto}.bigMic,#btnEndTalk{position:relative;z-index:2147483000;pointer-events:auto!important}
+.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.bigMic.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 5px rgba(239,68,68,.16)}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:block!important;white-space:pre-wrap;background:#111827;color:#d1fae5;border-radius:10px;margin:8px 12px;padding:8px;font-size:12px;min-height:38px;max-height:120px;overflow:auto}#btnEndTalk{position:relative;z-index:2147483000;pointer-events:auto!important}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
@@ -543,9 +543,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section class="micZone"><button id="btnVoice" class="bigMic" type="button" aria-label="WS對講" onclick="rt7UiDebugClick('bigMic_inline_click');return false;" ontouchstart="rt7UiDebugClick('bigMic_inline_touch');return false;" onpointerdown="rt7UiDebugClick('bigMic_inline_pointer');return false;">🎙️</button><div class="small" style="font-weight:900;color:#64748b;margin-top:4px">按一下開始 WS 對講，再按一下結束</div></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" onclick="rt7UiDebugClick('lowerTalk_inline_click');return false;" ontouchstart="rt7UiDebugClick('lowerTalk_inline_touch');return false;" onpointerdown="rt7UiDebugClick('lowerTalk_inline_pointer');return false;">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">D5：等待對講 Begin Command Trace</div><button id="rt7FloatMicDebug" type="button" onclick="rt7UiDebugClick('floating_button_click');return false;" style="position:fixed;right:12px;bottom:12px;z-index:2147483647;border:3px solid #ef4444;border-radius:999px;background:#fff7ed;color:#111827;font-weight:900;font-size:15px;padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:auto!important">對講測試</button>
-<a href="/rt7_webrtc_phase_a" style="position:fixed;left:12px;bottom:12px;z-index:2147483647;background:#e0f2fe;color:#082f49;border:2px solid #38bdf8;border-radius:999px;padding:10px 12px;font-weight:900;text-decoration:none;box-shadow:0 8px 24px rgba(0,0,0,.20)">WebRTC A</a>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button" aria-label="WebSocket 對講開始/結束">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section><div id="dbg" class="debug">B12：對講功能已移至下方「對講」按鍵</div>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
@@ -853,10 +851,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       }, true);
     });
   }
-  rt7BindHardProbeButton('btnVoice','bigMic_hard');
-  rt7BindHardProbeButton('btnEndTalk','lowerTalk_hard');
-  bind('btnVoice', function(){ rt7HardProbeTap('bigMic_bind_click'); });
-  bind('btnEndTalk', function(){ rt7HardProbeTap('lowerTalk_bind_click'); });
+  // B12: 原始手機 UI 不再顯示額外 WebRTC 測試鈕；下方「對講」鍵改為正式 WS PCM 對講。
+  // Do not bind old hard-probe handlers here because they intercept the talk button.
 
   // V5.2A: WebSocket Binary Intercom. Replaces HTTP/HEX PCM path.
   var rt7WsIc=null, rt7WsIcOn=false, rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
@@ -897,6 +893,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   // Override V5.1P HTTP/HEX intercom after profiler block.
   try{ intercomBeginEndToggle = rt7WsIntercomToggle; }catch(_){ }
+  // B12: 正式對講入口只保留網頁原本下方「對講」按鍵；按一下開始，再按一下結束。
+  bind('btnEndTalk', function(){ rt7WsIntercomToggle('lowerTalk_main_button'); });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     ai=!!on;
@@ -1769,7 +1767,7 @@ wss.on('connection', (ws, req) => {
   try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true })); } catch (_) {}
   ws.on('message', (data, isBinary) => {
     try {
-      // B11A: keeps B7 text/binary split; audio priority handled on ESP32 as Buffer too, with isBinary=false.
+      // B12: keeps B7 text/binary split; audio priority handled on ESP32 as Buffer too, with isBinary=false.
       // B7 fixed text/binary split; B11 keeps this behavior
       // could be misclassified as PCM and relayed to ESP32 speaker.
       // Only WebSocket opcode binary frames are PCM/JPEG here; text goes to JSON parser below.
@@ -1797,7 +1795,7 @@ wss.on('connection', (ws, req) => {
             console.log('[WS_RELAY_TO_ESP32][B6] packets='+rt7WsTrace.relayPcmPackets+' bytes='+rt7WsTrace.relayPcmBytes+' len='+buf.length+' clients='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
           }
           if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
-            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_b11a', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
+            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_b12', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
           }
           return;
         }
@@ -1814,7 +1812,7 @@ wss.on('connection', (ws, req) => {
         if (msg && (msg.pcm_client === true || msg.type === 'esp32_pcm_register')) { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
         console.log('[WS_ROLE][B6] role='+ws.rt7Role+' pcm_role='+(ws.rt7PcmRole||'')+' pcm_client='+(ws.rt7PcmClient?1:0)+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
-        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B11A', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B12', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
       if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe')) {
         if (msg.type === 'intercom_begin') rt7AudioHold_(8000);
@@ -2102,10 +2100,10 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B11A_STABLE_TRACE_CLEAN_FIX</h1>
+    <h1>RT7_WEBRTC_PHASE_B12_ORIGINAL_UI_TALK_BUTTON_FIX</h1>
     <p>本頁從 B7 修改：保留文字/二進位分離，並提升 ESP32 WebSocket PCM 處理優先權，降低串流期間音訊延遲尖峰。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
     <p>目標：手機 Mic → PCM16 640B → Railway WebSocket → ESP32 Speaker。</p>
-    <button id="btnStart">開始 Phase B11A Stable Trace Clean Fix</button>
+    <button id="btnStart">開始 Phase B12 Original UI Talk Button Fix</button>
     <button id="btnStop" class="stop">停止測試</button>
     <button id="btnStatus" class="secondary">讀取 Railway 狀態</button>
   </div>
@@ -2195,12 +2193,12 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
       running=false; btnStart.disabled=false; return;
     }
     log('Step2: open Railway WS');
-    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B11A');
+    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B12');
     ws.binaryType='arraybuffer';
     ws.onopen=function(){
       log('WS_STATE=OPEN');
-      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B11A', device_id:'#1', time:Date.now()})); }catch(e){}
-      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B11A', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B12', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B12', device_id:'#1', time:Date.now()})); }catch(e){}
     };
     ws.onmessage=function(ev){
       if(typeof ev.data==='string' && (ev.data.indexOf('role_ack')>=0 || ev.data.indexOf('intercom')>=0 || ev.data.indexOf('ws_relay_trace')>=0)) log('WS_MSG '+ev.data.slice(0,360));
@@ -2243,7 +2241,7 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
   }
   function stop(){
     running=false;
-    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'intercom_end', phase:'B11A', time:Date.now()})); }catch(_){}
+    try{ if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'intercom_end', phase:'B12', time:Date.now()})); }catch(_){}
     try{ if(processor) processor.disconnect(); }catch(_){}
     try{ if(source) source.disconnect(); }catch(_){}
     try{ if(audioCtx) audioCtx.close(); }catch(_){}
