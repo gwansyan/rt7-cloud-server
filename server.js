@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B5_WS_PATH_ROLE_FIX';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B6_ESP32_PCM_CLIENT_ROLE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -102,13 +102,16 @@ function rt7IsPhonePcmRole_(role) {
   return role === 'phone_pcm' || role === 'intercom_phone' || role === 'phone' || role === 'webrtc_phone';
 }
 function rt7IsEspPcmRole_(role) {
-  return role === 'esp32_pcm' || role === 'esp32_intercom' || role === 'esp32' || role === 'esp32_frame_upload';
+  return role === 'esp32_pcm' || role === 'esp32_intercom' || role === 'esp32' || role === 'esp32_frame_upload' || role === 'esp32_pcm_client';
+}
+function rt7IsEspPcmClient_(c) {
+  return !!c && (rt7IsEspPcmRole_(c.rt7Role) || rt7IsEspPcmRole_(c.rt7PcmRole) || c.rt7PcmClient === true);
 }
 function rt7SendToEspIntercom_(payload, opts) {
   let n = 0;
   for (const c of wss.clients) {
     if (c.readyState !== WebSocket.OPEN) continue;
-    if (rt7IsEspPcmRole_(c.rt7Role)) {
+    if (rt7IsEspPcmClient_(c)) {
       try { c.send(payload, opts || {}); n++; } catch (_) {}
     }
   }
@@ -119,7 +122,7 @@ function rt7IntercomWsState_() {
   for (const c of wss.clients) {
     if (c.readyState !== WebSocket.OPEN) continue;
     if (rt7IsPhonePcmRole_(c.rt7Role)) phones++;
-    if (rt7IsEspPcmRole_(c.rt7Role)) esp++;
+    if (rt7IsEspPcmClient_(c)) esp++;
   }
   return {
     phones, esp,
@@ -1748,7 +1751,10 @@ wss.on('connection', (ws, req) => {
     const qDev = safeString(u.searchParams.get('device_id') || u.searchParams.get('device') || '');
     if (qRole) ws.rt7Role = qRole;
     if (qDev) ws.rt7DeviceId = qDev;
-    if (qRole) console.log('[WS_ROLE_QUERY][B5] role='+ws.rt7Role+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
+    const qPcmRole = safeString(u.searchParams.get('pcm_role') || '');
+    if (qPcmRole) { ws.rt7PcmRole = qPcmRole; ws.rt7PcmClient = rt7IsEspPcmRole_(qPcmRole); }
+    if (rt7IsEspPcmRole_(qRole)) { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
+    if (qRole) console.log('[WS_ROLE_QUERY][B6] role='+ws.rt7Role+' pcm_role='+(ws.rt7PcmRole||'')+' pcm_client='+(ws.rt7PcmClient?1:0)+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
   } catch (_) {}
   try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true })); } catch (_) {}
   ws.on('message', (data, isBinary) => {
@@ -1772,8 +1778,8 @@ wss.on('connection', (ws, req) => {
             rt7WsTrace.lastRelayTime = nowIso();
           }
           if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
-            console.log('[WS_PHONE_PCM_RX][B5] role='+ws.rt7Role+' packets='+ws.rt7IntercomPackets+' bytes='+ws.rt7IntercomBytes+' len='+buf.length+' state='+JSON.stringify(rt7IntercomWsState_()));
-            console.log('[WS_RELAY_TO_ESP32][B5] packets='+rt7WsTrace.relayPcmPackets+' bytes='+rt7WsTrace.relayPcmBytes+' len='+buf.length+' clients='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
+            console.log('[WS_PHONE_PCM_RX][B6] role='+ws.rt7Role+' packets='+ws.rt7IntercomPackets+' bytes='+ws.rt7IntercomBytes+' len='+buf.length+' state='+JSON.stringify(rt7IntercomWsState_()));
+            console.log('[WS_RELAY_TO_ESP32][B6] packets='+rt7WsTrace.relayPcmPackets+' bytes='+rt7WsTrace.relayPcmBytes+' len='+buf.length+' clients='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
           }
           if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
             try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_b5', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
@@ -1789,9 +1795,11 @@ wss.on('connection', (ws, req) => {
       if (msg && msg.role) {
         ws.rt7Role = safeString(msg.role);
         ws.rt7DeviceId = safeString(msg.device_id || msg.device || msg.id || ws.rt7DeviceId || '#1');
+        if (msg && msg.pcm_role) { ws.rt7PcmRole = safeString(msg.pcm_role); ws.rt7PcmClient = rt7IsEspPcmRole_(ws.rt7PcmRole); }
+        if (msg && (msg.pcm_client === true || msg.type === 'esp32_pcm_register')) { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
-        console.log('[WS_ROLE] role='+ws.rt7Role+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
-        ws.send(JSON.stringify({ ok:true, type:'role_ack', role:ws.rt7Role, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
+        console.log('[WS_ROLE][B6] role='+ws.rt7Role+' pcm_role='+(ws.rt7PcmRole||'')+' pcm_client='+(ws.rt7PcmClient?1:0)+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B6', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
       if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe')) {
         const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg))); console.log((msg.type==='intercom_probe'?'[WSIC][RELAY_PROBE] ':'[WSIC][RELAY_CTRL] ')+msg.type+' esp='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
@@ -2077,7 +2085,7 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B5_WS_PATH_ROLE_FIX</h1>
+    <h1>RT7_WEBRTC_PHASE_B6_ESP32_PCM_CLIENT_ROLE_FIX</h1>
     <p>本頁從「按鍵可按的 Phase B2」修改，修正 WS path/role 與 Relay 計數。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
     <p>目標：手機 Mic → PCM16 640B → Railway WebSocket → ESP32 Speaker。</p>
     <button id="btnStart">開始 Phase B5 WS Path/Role Fix</button>
@@ -2170,12 +2178,12 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
       running=false; btnStart.disabled=false; return;
     }
     log('Step2: open Railway WS');
-    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B5');
+    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B6');
     ws.binaryType='arraybuffer';
     ws.onopen=function(){
       log('WS_STATE=OPEN');
-      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B5', device_id:'#1', time:Date.now()})); }catch(e){}
-      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B5', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B6', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B6', device_id:'#1', time:Date.now()})); }catch(e){}
     };
     ws.onmessage=function(ev){
       if(typeof ev.data==='string' && (ev.data.indexOf('role_ack')>=0 || ev.data.indexOf('intercom')>=0 || ev.data.indexOf('ws_relay_trace')>=0)) log('WS_MSG '+ev.data.slice(0,360));
