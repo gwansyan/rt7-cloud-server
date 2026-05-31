@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B6_ESP32_PCM_CLIENT_ROLE_FIX';
+const SERVER_VERSION = 'RT7_WEBRTC_PHASE_B7_WS_TEXT_BINARY_SPLIT_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1759,9 +1759,13 @@ wss.on('connection', (ws, req) => {
   try { ws.send(JSON.stringify({ ok: true, type: 'hello', version: SERVER_VERSION, time: nowIso(), ws_frame:true })); } catch (_) {}
   ws.on('message', (data, isBinary) => {
     try {
-      if (isBinary || Buffer.isBuffer(data)) {
+      // B7: Node ws delivers text frames as Buffer too, with isBinary=false.
+      // B6 used Buffer.isBuffer(data), so JSON role/intercom_begin text (85/95B)
+      // could be misclassified as PCM and relayed to ESP32 speaker.
+      // Only WebSocket opcode binary frames are PCM/JPEG here; text goes to JSON parser below.
+      if (isBinary) {
         const buf = Buffer.from(data);
-        // B5: classify phone PCM by explicit role OR by small binary PCM length.
+        // B7: classify phone PCM by explicit role OR by small binary PCM length.
         // Camera JPEG upload is normally > 2 KB and/or from esp32 roles, so 640B phone PCM no longer falls into the MJPEG frame handler.
         const looksLikePhonePcm = rt7IsPhonePcmRole_(ws.rt7Role) || (!rt7IsEspPcmRole_(ws.rt7Role) && buf.length <= 2048);
         if (looksLikePhonePcm) {
@@ -1782,7 +1786,7 @@ wss.on('connection', (ws, req) => {
             console.log('[WS_RELAY_TO_ESP32][B6] packets='+rt7WsTrace.relayPcmPackets+' bytes='+rt7WsTrace.relayPcmBytes+' len='+buf.length+' clients='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
           }
           if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
-            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_b5', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
+            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_b7', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
           }
           return;
         }
@@ -1799,7 +1803,7 @@ wss.on('connection', (ws, req) => {
         if (msg && (msg.pcm_client === true || msg.type === 'esp32_pcm_register')) { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
         console.log('[WS_ROLE][B6] role='+ws.rt7Role+' pcm_role='+(ws.rt7PcmRole||'')+' pcm_client='+(ws.rt7PcmClient?1:0)+' device='+ws.rt7DeviceId+' state='+JSON.stringify(rt7IntercomWsState_()));
-        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B6', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'B7', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
       if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe')) {
         const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg))); console.log((msg.type==='intercom_probe'?'[WSIC][RELAY_PROBE] ':'[WSIC][RELAY_CTRL] ')+msg.type+' esp='+n+' state='+JSON.stringify(rt7IntercomWsState_()));
@@ -2085,10 +2089,10 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>RT7_WEBRTC_PHASE_B6_ESP32_PCM_CLIENT_ROLE_FIX</h1>
-    <p>本頁從「按鍵可按的 Phase B2」修改，修正 WS path/role 與 Relay 計數。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
+    <h1>RT7_WEBRTC_PHASE_B7_WS_TEXT_BINARY_SPLIT_FIX</h1>
+    <p>本頁從 B6 修改：修正 Node ws 文字/二進位判斷，避免 JSON role/intercom_begin 被當成 PCM 送到 ESP32 喇叭。載入時不啟動 Mic、不啟動 AudioContext、不啟動 WS；只有按下開始才啟動。</p>
     <p>目標：手機 Mic → PCM16 640B → Railway WebSocket → ESP32 Speaker。</p>
-    <button id="btnStart">開始 Phase B5 WS Path/Role Fix</button>
+    <button id="btnStart">開始 Phase B7 Text/Binary Split Fix</button>
     <button id="btnStop" class="stop">停止測試</button>
     <button id="btnStatus" class="secondary">讀取 Railway 狀態</button>
   </div>
@@ -2178,12 +2182,12 @@ app.get('/rt7_webrtc_phase_b', (req, res) => {
       running=false; btnStart.disabled=false; return;
     }
     log('Step2: open Railway WS');
-    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B6');
+    ws=new WebSocket(wsUrl()+'?role=phone_pcm&device_id=%231&phase=B7');
     ws.binaryType='arraybuffer';
     ws.onopen=function(){
       log('WS_STATE=OPEN');
-      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B6', device_id:'#1', time:Date.now()})); }catch(e){}
-      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B6', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({role:'phone_pcm', type:'role', phase:'B7', device_id:'#1', time:Date.now()})); }catch(e){}
+      try{ ws.send(JSON.stringify({type:'intercom_begin', role:'phone_pcm', phase:'B7', device_id:'#1', time:Date.now()})); }catch(e){}
     };
     ws.onmessage=function(ev){
       if(typeof ev.data==='string' && (ev.data.indexOf('role_ack')>=0 || ev.data.indexOf('intercom')>=0 || ev.data.indexOf('ws_relay_trace')>=0)) log('WS_MSG '+ev.data.slice(0,360));
