@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0M_DUPLEX_ESP_TX_WS_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0N_MANUAL_END_LISTEN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -119,7 +119,7 @@ function rt7SendToEspIntercom_(payload, opts) {
   return n;
 }
 
-// V5.0M: Relay ESP32 mic PCM back only to phone/intercom clients.
+// V5.0N: Relay ESP32 mic PCM back only to phone/intercom clients.
 // This is required for release-to-listen duplex mode.
 function rt7SendToPhoneIntercom_(payload, opts) {
   let n = 0;
@@ -641,7 +641,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
 
   // V5.0K: 雙向 PTT WebSocket 對講。
-  // 按住中央/下方「對講」：手機 Mic -> ESP32 Speaker；放開：ESP32 Mic -> 手機 Speaker。
+  // 按住中央「對講」：手機 Mic -> ESP32 Speaker；放開：ESP32 Mic -> 手機 Speaker；按下方「◼ 對講」才結束。
   var rt7WsIc=null, rt7WsIcOn=false, rt7WsTxActive=false, rt7WsListenActive=false;
   var rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
   var rt7WsTxBytes=[], rt7WsSent=0, rt7WsBeginMs=0, rt7WsListenTimer=null;
@@ -708,9 +708,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function rt7WsEnsureSocket(label){
     if(rt7WsIc && rt7WsIc.readyState===1) return true;
     return new Promise(function(resolve){
-      rt7WsIc=new WebSocket(rt7WsUrl()+'?role=phone_pcm&device_id=%231&phase=V50M'); rt7WsIc.binaryType='arraybuffer';
+      rt7WsIc=new WebSocket(rt7WsUrl()+'?role=phone_pcm&device_id=%231&phase=V50N'); rt7WsIc.binaryType='arraybuffer';
       var done=false; function finish(ok){ if(done)return; done=true; resolve(ok); }
-      rt7WsIc.onopen=function(){ setDebug('WS duplex open'); rt7WsSendJson({role:'phone_pcm',type:'intercom_probe',device_id:'#1',label:label||'open',t:Date.now(),phase:'V50M'}); finish(true); };
+      rt7WsIc.onopen=function(){ setDebug('WS duplex open'); rt7WsSendJson({role:'phone_pcm',type:'intercom_probe',device_id:'#1',label:label||'open',t:Date.now(),phase:'V50N'}); finish(true); };
       rt7WsIc.onmessage=function(ev){ try{ if(typeof ev.data==='string'){ if(ev.data.indexOf('trace')>=0||ev.data.indexOf('relay')>=0) setDebug(ev.data.slice(0,180)); } else if(ev.data){ rt7RxPlayPcm(ev.data); } }catch(e){ setDebug('ws msg err '+(e.message||e)); } };
       rt7WsIc.onerror=function(){ setDebug('WS duplex error'); finish(false); };
       rt7WsIc.onclose=function(){ rt7WsIcOn=false; rt7WsTxActive=false; rt7WsListenActive=false; rt7WsStopMic(); var a=document.getElementById('btnEndTalk'); if(a)a.classList.remove('talking'); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); };
@@ -725,25 +725,26 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.add('talking');
     rt7SetTalkIcon_('talk'); setAnswer('對講中：手機 → ESP32，放開後接收 ESP32 聲音');
     var ok=await rt7WsEnsureSocket(label||'ptt_down'); if(!ok){ setAnswer('對講連線失敗'); return; }
-    rt7WsSendJson({role:'phone_pcm',type:'intercom_begin',device_id:'#1',label:label||'ptt_down',t:Date.now(),phase:'V50M'});
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_begin',device_id:'#1',label:label||'ptt_down',t:Date.now(),phase:'V50N'});
     try{ await rt7WsStartMic(); }catch(err){ setAnswer('手機麥克風啟用失敗：'+(err.message||err)); rt7WsPttStop('mic_failed'); }
   }
   function rt7WsPttUp(label){
     if(!rt7WsIcOn) return;
     rt7WsTxActive=false; rt7WsStopMic();
-    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'ptt_up',sent:rt7WsSent,t:Date.now(),phase:'V50M'});
-    rt7WsSendJson({role:'phone_pcm',type:'esp_begin',device_id:'#1',label:label||'ptt_up_listen',t:Date.now(),phase:'V50M'});
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'ptt_up',sent:rt7WsSent,t:Date.now(),phase:'V50N'});
+    rt7WsSendJson({role:'phone_pcm',type:'esp_begin',device_id:'#1',label:label||'ptt_up_listen',t:Date.now(),phase:'V50N'});
     rt7WsListenActive=true; rt7RxEnsureAudio();
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.remove('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.remove('talking');
-    rt7SetTalkIcon_('listen'); setAnswer('接收中：ESP32 → 手機');
-    if(rt7WsListenTimer)clearTimeout(rt7WsListenTimer);
-    rt7WsListenTimer=setTimeout(function(){ rt7WsPttStop('listen_timeout'); }, 10000);
+    rt7SetTalkIcon_('listen'); setAnswer('接收中：ESP32 → 手機；按下 ◼ 對講 才結束');
+    if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
+    // V50N: 放開中央對講鍵後，保持 ESP32→手機接收，不再自動 10 秒結束。
+    // 只有按下下方「◼ 對講」結束鍵，才會停止接收與恢復影像。
   }
   function rt7WsPttStop(label){
     if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
     rt7WsTxActive=false; rt7WsListenActive=false;
-    rt7WsSendJson({role:'phone_pcm',type:'esp_end',device_id:'#1',label:label||'stop',t:Date.now(),phase:'V50M'});
-    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'stop',sent:rt7WsSent,t:Date.now(),phase:'V50M'});
+    rt7WsSendJson({role:'phone_pcm',type:'esp_end',device_id:'#1',label:label||'stop',t:Date.now(),phase:'V50N'});
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'stop',sent:rt7WsSent,t:Date.now(),phase:'V50N'});
     setTimeout(function(){ try{ if(rt7WsIc)rt7WsIc.close(); }catch(_){} rt7WsIc=null; rt7WsStopMic(); rt7WsIcOn=false; rt7RestoreVideoAfterTalk(); },120);
     rt7SetTalkIcon_('idle'); setAnswer('對講結束');
   }
@@ -757,7 +758,19 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     el.addEventListener('click',function(ev){ ev.preventDefault(); ev.stopPropagation(); },true);
   }
   rt7BindPtt('btnVoice','center_ptt');
-  rt7BindPtt('btnEndTalk','lower_ptt');
+  // V50N: 下方「◼ 對講」只做結束鍵，不再做 PTT。
+  (function(){
+    var endBtn=document.getElementById('btnEndTalk');
+    if(!endBtn) return;
+    function stop(ev){
+      if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+      if(rt7WsIcOn || rt7WsTxActive || rt7WsListenActive){ rt7WsPttStop('manual_end_button'); }
+      else { setAnswer('目前沒有進行中的對講'); rt7SetTalkIcon_('idle'); }
+    }
+    endBtn.addEventListener('click', stop, true);
+    endBtn.addEventListener('touchend', stop, {passive:false});
+    endBtn.addEventListener('pointerup', stop, {passive:false});
+  })();
   var lastCount=null;
   async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; showDoorbellInline(); } } }catch(e){} setTimeout(pollDoor,2500); }
   pollDoor();
@@ -1398,7 +1411,7 @@ wss.on('connection', (ws, req) => {
             rt7WsTrace.lastPhoneRxTime = nowIso();
           }
           if (ws.rt7EspPcmPackets <= 5 || ws.rt7EspPcmPackets % 50 === 0) {
-            try { ws.send(JSON.stringify({ ok:true, type:'esp_pcm_relay_trace_v50k', esp_packets:ws.rt7EspPcmPackets, esp_bytes:ws.rt7EspPcmBytes, phone_clients:pn, state:rt7IntercomWsState_() })); } catch (_) {}
+            try { ws.send(JSON.stringify({ ok:true, type:'esp_pcm_relay_trace_v50n', esp_packets:ws.rt7EspPcmPackets, esp_bytes:ws.rt7EspPcmBytes, phone_clients:pn, state:rt7IntercomWsState_() })); } catch (_) {}
           }
           return;
         }
@@ -1418,7 +1431,7 @@ wss.on('connection', (ws, req) => {
             rt7WsTrace.lastRelayTime = nowIso();
           }
           if (ws.rt7IntercomPackets <= 5 || ws.rt7IntercomPackets % 50 === 0) {
-            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_v50k', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
+            try { ws.send(JSON.stringify({ ok:true, type:'ws_relay_trace_v50n', phone_packets:ws.rt7IntercomPackets, phone_bytes:ws.rt7IntercomBytes, relay_clients:n, phone_pcm_rx:rt7WsTrace.phonePcmPackets, relay_to_esp32:rt7WsTrace.relayPcmPackets, esp32_clients:rt7IntercomWsState_().esp, state:rt7IntercomWsState_() })); } catch (_) {}
           }
           return;
         }
@@ -1434,7 +1447,7 @@ wss.on('connection', (ws, req) => {
         if (msg.pcm_role) { ws.rt7PcmRole = safeString(msg.pcm_role); ws.rt7PcmClient = rt7IsEspPcmRole_(ws.rt7PcmRole); }
         if (msg.pcm_client === true || msg.type === 'esp32_pcm_register') { ws.rt7PcmClient = true; if (!ws.rt7PcmRole) ws.rt7PcmRole = 'esp32_pcm'; }
         if (ws.rt7Role === 'viewer') streamViewers.set(safeString(msg.viewer_id || req.socket.remoteAddress || Math.random()), { ts:Date.now(), ip:req.socket.remoteAddress, state:'visible', ws:true });
-        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'V50M', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
+        ws.send(JSON.stringify({ ok:true, type:'role_ack', phase:'V50N', role:ws.rt7Role, pcm_role:ws.rt7PcmRole||'', pcm_client:!!ws.rt7PcmClient, version:SERVER_VERSION, time:nowIso(), intercom_ws:rt7IntercomWsState_() }));
       }
       if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe' || msg.type === 'esp_begin' || msg.type === 'esp_end' || msg.type === 'intercom_listen')) {
         if (msg.type === 'intercom_begin') rt7AudioHold_(8000);
