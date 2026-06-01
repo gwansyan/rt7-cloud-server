@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0P_FACE_API_VISIBLE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0Q_FACE_DEBUG_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -564,13 +564,13 @@ function rt7ParseFaceJson_(txt) {
   return { ok:true, known_face:false, matched_name:'', confidence:0, summary:raw.slice(0,240) };
 }
 async function rt7FaceMatchLatest_() {
-  console.log('[FACE_API][V50P] /api/rt7/face/match ENTER');
+  console.log('[FACE_API][V50Q] /api/rt7/face/match ENTER');
   const latest = rt7LatestJpegB64_();
   if (!latest) return { ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或讓 ESP32 上傳 snapshot。' };
   const faces = rt7ReadFaces_();
   if (!faces.length) return { ok:false, version:SERVER_VERSION, error:'NO_ENROLLED_FACE', answer:'尚未註冊人臉，請先輸入姓名後按「註冊」。', count:0 };
   const refs = faces.slice(0, 6);
-  const content = [{ type:'text', text:'你是 RT7 門禁人臉辨識。請比較「目前門口照片」是否與任一已註冊人臉相同。只回 JSON：{"known_face":true/false,"matched_name":"姓名","confidence":0-100,"summary":"繁中簡短說明"}。若看不清楚或不像，known_face=false。' }];
+  const content = [{ type:'text', text:'你是 RT7 門禁人臉辨識除錯器。請先判斷「目前門口照片」是否有可辨識的人臉，再和已註冊人臉比對。只回 JSON，不要 markdown。格式：{"api_entered":true,"face_found":true/false,"known_face":true/false,"matched_name":"姓名","confidence":0-100,"face_quality":"GOOD/OK/LOW/BAD","face_position":"CENTER/LEFT/RIGHT/TOP/BOTTOM/CORNER/UNKNOWN","reason":"FACE_OK/FACE_TOO_SMALL/BACKLIGHT/BLUR/DARK/SIDE_FACE/NO_FACE/LOW_SIMILARITY/NO_REGISTERED_MATCH","summary":"繁中簡短說明，請明確說明光線、臉大小、位置、是否通過"}。判斷規則：看不清楚、臉太小、強逆光、側臉、相似度不足都要 known_face=false，並在 reason 說明。' }];
   content.push({ type:'text', text:'目前門口照片：' });
   content.push({ type:'image_url', image_url:{ url:'data:image/jpeg;base64,' + latest.b64 } });
   refs.forEach((f, idx) => {
@@ -580,13 +580,24 @@ async function rt7FaceMatchLatest_() {
   const txt = await openAiChat([{ role:'user', content }], 260);
   const out = rt7ParseFaceJson_(txt);
   const result = {
-    ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match', known_face:!!out.known_face,
-    matched_name:safeString(out.matched_name || ''), confidence:Number(out.confidence || 0),
-    summary:safeString(out.summary || txt).slice(0,300), count:faces.length, time:nowIso()
+    ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match',
+    face_found: !!out.face_found,
+    known_face: !!out.known_face,
+    matched_name: safeString(out.matched_name || ''),
+    confidence: Number(out.confidence || 0),
+    face_quality: safeString(out.face_quality || 'UNKNOWN'),
+    face_position: safeString(out.face_position || 'UNKNOWN'),
+    reason: safeString(out.reason || (out.known_face ? 'FACE_OK' : 'UNKNOWN')),
+    summary: safeString(out.summary || txt).slice(0,500),
+    count: faces.length,
+    latest_bytes: latest.bytes,
+    ref_names: refs.map(f => safeString(f.name || '')),
+    debug_text: ('API_ENTER=YES FACE_FOUND=' + (!!out.face_found) + ' KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN')),
+    time: nowIso()
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V50P] result known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence);
+  console.log('[FACE_API][V50Q] result face_found=' + result.face_found + ' known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason);
   broadcast('face_match', result);
   return result;
 }
@@ -783,8 +794,14 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{
       setAnswer('人臉辨識中...');
       var j=await rt7Json('/api/rt7/face/match',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-      if(j.ok && j.known_face) setAnswer('人臉通過：'+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%');
-      else setAnswer('人臉未通過：'+(j.summary||j.answer||j.error||'UNKNOWN'));
+      if(j.ok && j.known_face) {
+        setAnswer('人臉通過：'+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜位置='+(j.face_position||'UNKNOWN'));
+      } else if(j.ok) {
+        setAnswer('人臉未通過：'+(j.reason||'UNKNOWN')+'｜品質='+(j.face_quality||'UNKNOWN')+'｜位置='+(j.face_position||'UNKNOWN')+'｜'+(j.summary||''));
+      } else {
+        setAnswer('人臉辨識失敗：'+(j.answer||j.error||'UNKNOWN'));
+      }
+      try{ setDebug((j.debug_text||JSON.stringify(j)).slice(0,240)); }catch(_){ }
     }catch(e){ setAnswer('人臉辨識失敗：'+(e.message||e)); }
   }
   var _faceEnrollBtn=document.getElementById('btnFaceEnroll'); if(_faceEnrollBtn)_faceEnrollBtn.addEventListener('click',function(ev){ev.preventDefault();rt7FaceEnroll();});
