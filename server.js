@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0Q_FACE_DEBUG_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0S_REAL_FACE_MATCH_DEBUG';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -564,13 +564,13 @@ function rt7ParseFaceJson_(txt) {
   return { ok:true, known_face:false, matched_name:'', confidence:0, summary:raw.slice(0,240) };
 }
 async function rt7FaceMatchLatest_() {
-  console.log('[FACE_API][V50Q] /api/rt7/face/match ENTER');
+  console.log('[FACE_API][V50S] /api/rt7/face/match ENTER');
   const latest = rt7LatestJpegB64_();
   if (!latest) return { ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或讓 ESP32 上傳 snapshot。' };
   const faces = rt7ReadFaces_();
   if (!faces.length) return { ok:false, version:SERVER_VERSION, error:'NO_ENROLLED_FACE', answer:'尚未註冊人臉，請先輸入姓名後按「註冊」。', count:0 };
   const refs = faces.slice(0, 6);
-  const content = [{ type:'text', text:'你是 RT7 門禁人臉辨識除錯器。請先判斷「目前門口照片」是否有可辨識的人臉，再和已註冊人臉比對。只回 JSON，不要 markdown。格式：{"api_entered":true,"face_found":true/false,"known_face":true/false,"matched_name":"姓名","confidence":0-100,"face_quality":"GOOD/OK/LOW/BAD","face_position":"CENTER/LEFT/RIGHT/TOP/BOTTOM/CORNER/UNKNOWN","reason":"FACE_OK/FACE_TOO_SMALL/BACKLIGHT/BLUR/DARK/SIDE_FACE/NO_FACE/LOW_SIMILARITY/NO_REGISTERED_MATCH","summary":"繁中簡短說明，請明確說明光線、臉大小、位置、是否通過"}。判斷規則：看不清楚、臉太小、強逆光、側臉、相似度不足都要 known_face=false，並在 reason 說明。' }];
+  const content = [{ type:'text', text:'你是 RT7 門禁「真實人臉比對除錯器 V50S」。任務分兩階段：A. 先只看目前門口照片，偵測是否有人臉、估計最大人臉框與比例；B. 再把目前照片中的最大人臉和已註冊照片比對。只回 JSON，不要 markdown。格式：{"api_entered":true,"stage":"DETECT_AND_MATCH","face_found":true/false,"face_count":0,"face_box":{"x":0,"y":0,"w":0,"h":0},"face_ratio":0-100,"known_face":true/false,"matched_name":"姓名","confidence":0-100,"face_quality":"GOOD/OK/LOW/BAD","face_position":"CENTER/LEFT/RIGHT/TOP/BOTTOM/CORNER/UNKNOWN","reason":"FACE_OK/BACKLIGHT_PASS/FACE_DETECTED_NOT_MATCHED/FACE_TOO_SMALL/BACKLIGHT/BLUR/DARK/SIDE_FACE/NO_FACE/LOW_SIMILARITY/NO_REGISTERED_MATCH","fail_stage":"NONE/DETECT/MATCH/QUALITY","summary":"繁中簡短說明"}。重要規則：如果目前照片中臉佔畫面明顯超過 20%，絕對不要回 FACE_TOO_SMALL；即使有逆光也先輸出 face_found=true、face_box、face_ratio，再進入比對。BACKLIGHT 只是警告，不能單獨失敗；如果相似度 confidence >= 55 就 known_face=true。若臉很大但不確定身分，reason=LOW_SIMILARITY 或 FACE_DETECTED_NOT_MATCHED，不要說 FACE_TOO_SMALL。請把 face_box/face_ratio 當成除錯核心，不能省略。' }];
   content.push({ type:'text', text:'目前門口照片：' });
   content.push({ type:'image_url', image_url:{ url:'data:image/jpeg;base64,' + latest.b64 } });
   refs.forEach((f, idx) => {
@@ -579,25 +579,39 @@ async function rt7FaceMatchLatest_() {
   });
   const txt = await openAiChat([{ role:'user', content }], 260);
   const out = rt7ParseFaceJson_(txt);
+  // V50S safety: if Vision sees a large face, do not mislabel as FACE_TOO_SMALL.
+  const _ratio = Number(out.face_ratio || 0);
+  if (String(out.reason || '').toUpperCase() === 'FACE_TOO_SMALL' && _ratio >= 20) {
+    out.reason = out.known_face ? 'FACE_OK' : 'FACE_DETECTED_NOT_MATCHED';
+    out.fail_stage = out.known_face ? 'NONE' : 'MATCH';
+    out.summary = '已偵測到大臉，但身分比對未通過；原始模型誤判為臉太小。' + (out.summary ? ' / ' + out.summary : '');
+  }
   const result = {
     ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match',
+    stage: safeString(out.stage || 'DETECT_AND_MATCH'),
     face_found: !!out.face_found,
+    face_count: Number(out.face_count || (out.face_found ? 1 : 0)),
+    face_box: (out.face_box && typeof out.face_box === 'object') ? { x:Number(out.face_box.x||0), y:Number(out.face_box.y||0), w:Number(out.face_box.w||0), h:Number(out.face_box.h||0) } : {x:0,y:0,w:0,h:0},
+    face_ratio: Number(out.face_ratio || 0),
     known_face: !!out.known_face,
     matched_name: safeString(out.matched_name || ''),
     confidence: Number(out.confidence || 0),
+    backlight_tolerant: true,
+    pass_threshold: 60,
     face_quality: safeString(out.face_quality || 'UNKNOWN'),
     face_position: safeString(out.face_position || 'UNKNOWN'),
+    fail_stage: safeString(out.fail_stage || (out.known_face ? 'NONE' : 'MATCH')),
     reason: safeString(out.reason || (out.known_face ? 'FACE_OK' : 'UNKNOWN')),
     summary: safeString(out.summary || txt).slice(0,500),
     count: faces.length,
     latest_bytes: latest.bytes,
     ref_names: refs.map(f => safeString(f.name || '')),
-    debug_text: ('API_ENTER=YES FACE_FOUND=' + (!!out.face_found) + ' KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN')),
+    debug_text: ('API_ENTER=YES V50S_REAL_DEBUG=YES FACE_FOUND=' + (!!out.face_found) + ' COUNT=' + Number(out.face_count || (out.face_found ? 1 : 0)) + ' BOX=' + JSON.stringify((out.face_box&&typeof out.face_box==='object')?out.face_box:{}) + ' RATIO=' + Number(out.face_ratio || 0) + '% KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN') + ' FAIL_STAGE=' + safeString(out.fail_stage || 'UNKNOWN')),
     time: nowIso()
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V50Q] result face_found=' + result.face_found + ' known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason);
+  console.log('[FACE_API][V50S] result face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
   broadcast('face_match', result);
   return result;
 }
@@ -795,9 +809,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer('人臉辨識中...');
       var j=await rt7Json('/api/rt7/face/match',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
       if(j.ok && j.known_face) {
-        setAnswer('人臉通過：'+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜位置='+(j.face_position||'UNKNOWN'));
+        setAnswer(((j.reason==='BACKLIGHT_PASS')?'逆光但人臉通過：':'人臉通過：')+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜REASON='+(j.reason||'FACE_OK'));
       } else if(j.ok) {
-        setAnswer('人臉未通過：'+(j.reason||'UNKNOWN')+'｜品質='+(j.face_quality||'UNKNOWN')+'｜位置='+(j.face_position||'UNKNOWN')+'｜'+(j.summary||''));
+        setAnswer('人臉未通過：'+(j.reason||'UNKNOWN')+'｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜FAIL='+(j.fail_stage||'UNKNOWN')+'｜品質='+(j.face_quality||'UNKNOWN')+'｜'+(j.summary||''));
       } else {
         setAnswer('人臉辨識失敗：'+(j.answer||j.error||'UNKNOWN'));
       }
