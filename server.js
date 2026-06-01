@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
+const jpeg = require('jpeg-js');
 
 const app = express();
 const server = http.createServer(app);
@@ -15,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0Y_FACE_DETECT_FIRST_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0Z_REAL_FACE_COUNT_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -574,7 +575,7 @@ function rt7FaceGateCheck_(latest) {
   const pass = bytes >= 2500;
   const gate = {
     enabled: !!cloudState.face_gate_enabled,
-    source: 'V50W_CLOUD_GATE_TEST',
+    source: 'V50Z_CLOUD_GATE_TEST',
     pass,
     bytes,
     age_ms: ageMs,
@@ -582,7 +583,7 @@ function rt7FaceGateCheck_(latest) {
     time: nowIso()
   };
   cloudState.last_face_gate = gate;
-  console.log('[RT7_FACE_GATE][TOGGLE][V50Y] enabled=' + gate.enabled + ' pass=' + gate.pass + ' bytes=' + gate.bytes + ' age_ms=' + gate.age_ms + ' reason=' + gate.reason);
+  console.log('[RT7_FACE_GATE][TOGGLE][V50Z] enabled=' + gate.enabled + ' pass=' + gate.pass + ' bytes=' + gate.bytes + ' age_ms=' + gate.age_ms + ' reason=' + gate.reason);
   return gate;
 }
 
@@ -595,30 +596,145 @@ function rt7QuickHash_(bufOrB64) {
   return ('00000000' + h.toString(16).toUpperCase()).slice(-8);
 }
 
-async function rt7DetectFaceOnly_(latest) {
-  const content = [
-    { type:'text', text:'你是 RT7 門禁「目前照片人臉偵測器 V50Y」。你只能判斷「目前門口照片」這一張圖片，不會看到任何註冊照片，也不能根據之前記憶或姓名推測。只回 JSON，不要 markdown。格式：{"face_found":true/false,"face_count":0,"face_box":{"x":0,"y":0,"w":0,"h":0},"face_ratio":0-100,"face_quality":"GOOD/OK/LOW/BAD","face_position":"CENTER/LEFT/RIGHT/TOP/BOTTOM/CORNER/UNKNOWN","reason":"FACE_OK/NO_FACE/FACE_TOO_SMALL/BACKLIGHT/BLUR/DARK/SIDE_FACE/OCCLUDED/UNKNOWN","summary":"繁中簡短說明"}。嚴格規則：如果目前照片沒有清楚可見的人臉，必須 face_found=false、face_count=0、reason=NO_FACE；不能因為畫面像室內或之前曾註冊而說有人臉。如果有人臉但只看到一小部分或太模糊，face_found=true 但 reason=OCCLUDED/BLUR/SIDE_FACE。' },
-    { type:'text', text:'目前門口照片（只判斷這一張）：' },
-    { type:'image_url', image_url:{ url:'data:image/jpeg;base64,' + latest.b64 } }
-  ];
-  const txt = await openAiChat([{ role:'user', content }], 220);
-  const out = rt7ParseFaceJson_(txt);
-  const box = (out.face_box && typeof out.face_box === 'object') ? out.face_box : {};
+function rt7SkinLike_(r, g, b) {
+  const y  =  0.299*r + 0.587*g + 0.114*b;
+  const cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
+  const cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
+  const maxc = Math.max(r,g,b), minc = Math.min(r,g,b);
+  // YCbCr + simple color spread. This avoids gray wall/curtain being counted as face.
+  return y > 45 && cr >= 133 && cr <= 185 && cb >= 75 && cb <= 145 && (maxc - minc) > 12 && r > b * 0.85 && r > g * 0.72;
+}
+
+function rt7RealFaceCountDetect_(latest) {
+  const empty = {
+    face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0,
+    face_quality:'NO_FACE', face_position:'UNKNOWN', reason:'NO_FACE',
+    summary:'目前畫面未偵測到人臉。', raw:'LOCAL_REAL_FACE_COUNT_V50Z'
+  };
+  let img;
+  try { img = jpeg.decode(Buffer.from(latest.b64, 'base64'), { useTArray:true, maxMemoryUsageInMB:80 }); }
+  catch (e) { return { ...empty, face_quality:'DECODE_FAIL', reason:'JPEG_DECODE_FAIL', summary:'JPEG 解碼失敗：' + String(e && e.message || e).slice(0,80) }; }
+  const W = img.width || 0, H = img.height || 0;
+  if (!W || !H || !img.data) return { ...empty, reason:'JPEG_EMPTY', summary:'JPEG 無有效影像資料。' };
+
+  const sw = 160, sh = Math.max(1, Math.round(H * sw / W));
+  const mask = new Uint8Array(sw * sh);
+  const lum = new Uint8Array(sw * sh);
+  let skinTotal = 0;
+  for (let yy=0; yy<sh; yy++) {
+    const sy = Math.min(H-1, Math.floor(yy * H / sh));
+    for (let xx=0; xx<sw; xx++) {
+      const sx = Math.min(W-1, Math.floor(xx * W / sw));
+      const p = (sy * W + sx) * 4;
+      const r = img.data[p], g = img.data[p+1], b = img.data[p+2];
+      const yv = Math.max(0, Math.min(255, Math.round(0.299*r + 0.587*g + 0.114*b)));
+      lum[yy*sw+xx] = yv;
+      if (rt7SkinLike_(r,g,b)) { mask[yy*sw+xx] = 1; skinTotal++; }
+    }
+  }
+  if (skinTotal < sw*sh*0.012) return { ...empty, reason:'NO_SKIN_FACE_CANDIDATE', summary:'未偵測到足夠的人臉膚色區塊。' };
+
+  const seen = new Uint8Array(sw * sh);
+  const comps = [];
+  const qx = new Int16Array(sw*sh), qy = new Int16Array(sw*sh);
+  for (let y=0; y<sh; y++) for (let x=0; x<sw; x++) {
+    const idx=y*sw+x;
+    if (!mask[idx] || seen[idx]) continue;
+    let head=0, tail=0, area=0, minx=x, maxx=x, miny=y, maxy=y;
+    seen[idx]=1; qx[tail]=x; qy[tail]=y; tail++;
+    while (head<tail) {
+      const cx=qx[head], cy=qy[head]; head++; area++;
+      if (cx<minx) minx=cx; if (cx>maxx) maxx=cx; if (cy<miny) miny=cy; if (cy>maxy) maxy=cy;
+      const nbs=[[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]];
+      for (const [nx,ny] of nbs) {
+        if (nx<0||ny<0||nx>=sw||ny>=sh) continue;
+        const ni=ny*sw+nx;
+        if (mask[ni] && !seen[ni]) { seen[ni]=1; qx[tail]=nx; qy[tail]=ny; tail++; }
+      }
+    }
+    if (area>20) comps.push({area,minx,maxx,miny,maxy,w:maxx-minx+1,h:maxy-miny+1});
+  }
+  comps.sort((a,b)=>b.area-a.area);
+
+  function darkFeatureCount(c) {
+    let sum=0, n=0;
+    for (let y=c.miny; y<=c.maxy; y++) for (let x=c.minx; x<=c.maxx; x++) { sum += lum[y*sw+x]; n++; }
+    const avg = n ? sum/n : 128;
+    const dark = new Uint8Array(sw*sh);
+    const y0 = c.miny + Math.floor(c.h*0.18), y1 = c.miny + Math.floor(c.h*0.72);
+    const x0 = c.minx + Math.floor(c.w*0.12), x1 = c.maxx - Math.floor(c.w*0.12);
+    let dtotal=0;
+    for (let y=y0; y<=y1; y++) for (let x=x0; x<=x1; x++) {
+      const idx=y*sw+x;
+      if (lum[idx] < avg - 18) { dark[idx]=1; dtotal++; }
+    }
+    if (dtotal < Math.max(8, c.area*0.015)) return {count:0,dark_ratio:0};
+    const seenD = new Uint8Array(sw*sh); let cnt=0;
+    const qx2 = new Int16Array(sw*sh), qy2 = new Int16Array(sw*sh);
+    for (let y=y0; y<=y1; y++) for (let x=x0; x<=x1; x++) {
+      const idx=y*sw+x; if (!dark[idx] || seenD[idx]) continue;
+      let head=0, tail=0, area=0, minx=x,maxx=x,miny=y,maxy=y;
+      seenD[idx]=1; qx2[tail]=x; qy2[tail]=y; tail++;
+      while(head<tail){ const cx=qx2[head],cy=qy2[head]; head++; area++; if(cx<minx)minx=cx;if(cx>maxx)maxx=cx;if(cy<miny)miny=cy;if(cy>maxy)maxy=cy;
+        for (const [nx,ny] of [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]]) { if(nx<0||ny<0||nx>=sw||ny>=sh)continue; const ni=ny*sw+nx; if(dark[ni]&&!seenD[ni]){seenD[ni]=1;qx2[tail]=nx;qy2[tail]=ny;tail++;} }
+      }
+      const ww=maxx-minx+1, hh=maxy-miny+1;
+      if (area>=3 && area<=c.area*0.20 && ww<=c.w*0.55 && hh<=c.h*0.45) cnt++;
+    }
+    return {count:cnt, dark_ratio: Math.round(dtotal * 1000 / Math.max(1,c.area))/10};
+  }
+
+  const candidates=[];
+  for (const c of comps.slice(0,8)) {
+    const ratioArea = c.area / (sw*sh);
+    const asp = c.w / Math.max(1,c.h);
+    const fill = c.area / Math.max(1, c.w*c.h);
+    if (ratioArea < 0.018 || ratioArea > 0.70) continue;
+    if (c.w < 18 || c.h < 18) continue;
+    if (asp < 0.42 || asp > 1.45) continue;
+    if (fill < 0.22) continue;
+    const feat = darkFeatureCount(c);
+    // Real face count rule: require skin blob AND internal dark facial features.
+    if (feat.count < 2 && ratioArea < 0.22) continue;
+    candidates.push({...c, ratioArea, asp, fill, features:feat.count, dark_ratio:feat.dark_ratio});
+  }
+  if (!candidates.length) {
+    const c = comps[0];
+    return { ...empty, reason:'NO_FACE_DETECTED', summary:'未偵測到符合人臉形狀與五官特徵的區塊。', local_skin_total:skinTotal, largest_skin_box:c?{x:c.minx,y:c.miny,w:c.w,h:c.h}:null };
+  }
+
+  const best = candidates[0];
+  const scaleX = W / sw, scaleY = H / sh;
+  const box = { x:Math.round(best.minx*scaleX), y:Math.round(best.miny*scaleY), w:Math.round(best.w*scaleX), h:Math.round(best.h*scaleY) };
+  const faceRatio = Math.round((box.w * box.h) * 100 / Math.max(1, W*H));
+  const cx = best.minx + best.w/2, cy = best.miny + best.h/2;
+  let pos = 'CENTER';
+  if (cx < sw*0.30) pos='LEFT'; else if (cx > sw*0.70) pos='RIGHT';
+  if (cy < sh*0.25) pos = pos==='CENTER' ? 'TOP' : 'CORNER'; else if (cy > sh*0.78) pos = pos==='CENTER' ? 'BOTTOM' : 'CORNER';
+  let quality = 'OK';
+  if (faceRatio >= 18 && best.features >= 2) quality='GOOD';
+  if (faceRatio < 7 || best.features < 2) quality='LOW';
   return {
-    face_found: !!out.face_found,
-    face_count: Number(out.face_count || (out.face_found ? 1 : 0)),
-    face_box: { x:Number(box.x||0), y:Number(box.y||0), w:Number(box.w||0), h:Number(box.h||0) },
-    face_ratio: Number(out.face_ratio || 0),
-    face_quality: safeString(out.face_quality || 'UNKNOWN'),
-    face_position: safeString(out.face_position || 'UNKNOWN'),
-    reason: safeString(out.reason || (out.face_found ? 'FACE_OK' : 'NO_FACE')),
-    summary: safeString(out.summary || txt).slice(0,300),
-    raw: txt
+    face_found:true,
+    face_count:candidates.length,
+    face_box:box,
+    face_ratio:faceRatio,
+    face_quality:quality,
+    face_position:pos,
+    reason:'FACE_OK',
+    summary:'本機影像偵測到 ' + candidates.length + ' 個人臉候選區塊。',
+    raw:'LOCAL_REAL_FACE_COUNT_V50Z features=' + best.features + ' skin=' + skinTotal + ' blob=' + JSON.stringify({w:best.w,h:best.h,area:best.area,fill:best.fill,dark_ratio:best.dark_ratio}),
+    local_debug:{ width:W, height:H, skin_total:skinTotal, candidates:candidates.slice(0,3).map(c=>({w:c.w,h:c.h,area:c.area,features:c.features,dark_ratio:c.dark_ratio,fill:Number(c.fill.toFixed(2))})) }
   };
 }
 
+async function rt7DetectFaceOnly_(latest) {
+  // V5.0Z: real local face-count gate first. It does not see registered photos, so an empty room cannot match gwansyan.
+  return rt7RealFaceCountDetect_(latest);
+}
+
 async function rt7MatchKnownFaceOnly_(latest, refs, detect) {
-  const content = [{ type:'text', text:'你是 RT7 門禁「身分比對器 V50Y」。目前照片已先由偵測器確認有人臉。你的任務只比較目前照片的人臉是否為已註冊名單之一。只回 JSON，不要 markdown。格式：{"known_face":true/false,"matched_name":"姓名","confidence":0-100,"reason":"FACE_OK/LOW_SIMILARITY/NO_REGISTERED_MATCH/SIDE_FACE/BLUR/BACKLIGHT","summary":"繁中簡短說明"}。通過規則：confidence >= 60 且最像註冊者時 known_face=true；若不確定請 known_face=false。' }];
+  const content = [{ type:'text', text:'你是 RT7 門禁「身分比對器 V50Z」。目前照片已先由偵測器確認有人臉。你的任務只比較目前照片的人臉是否為已註冊名單之一。只回 JSON，不要 markdown。格式：{"known_face":true/false,"matched_name":"姓名","confidence":0-100,"reason":"FACE_OK/LOW_SIMILARITY/NO_REGISTERED_MATCH/SIDE_FACE/BLUR/BACKLIGHT","summary":"繁中簡短說明"}。通過規則：confidence >= 60 且最像註冊者時 known_face=true；若不確定請 known_face=false。' }];
   content.push({ type:'text', text:'目前門口照片：' });
   content.push({ type:'image_url', image_url:{ url:'data:image/jpeg;base64,' + latest.b64 } });
   refs.forEach((f, idx) => {
@@ -638,7 +754,7 @@ async function rt7MatchKnownFaceOnly_(latest, refs, detect) {
 }
 
 async function rt7FaceMatchLatest_() {
-  console.log('[FACE_API][V50Y] /api/rt7/face/match ENTER detect_first=1');
+  console.log('[FACE_API][V50Z] /api/rt7/face/match ENTER detect_first=1');
   const latest = rt7LatestJpegB64_();
   if (!latest) return { ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或讓 ESP32 上傳 snapshot。' };
   const latestMeta = getSnapshotMeta_() || {};
@@ -650,12 +766,12 @@ async function rt7FaceMatchLatest_() {
   if (cloudState.face_gate_enabled && !gate.pass) {
     const skip = { ok:true, version:SERVER_VERSION, api_entered:true, type:'face_match', known_face:false, face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0, confidence:0, face_quality:'SKIP', reason:gate.reason, fail_stage:'FACE_GATE', face_gate:gate, snap_time:latest.snap_time, snap_hash:latest.snap_hash, latest_bytes:latest.bytes, summary:'FACE_GATE 測試模式阻擋，未送 AI 比對。' };
     cloudState.last_face_match = skip; broadcast('face_match', skip);
-    console.log('[FACE_API][V50Y] FACE_GATE_SKIP hash=' + latest.snap_hash + ' reason=' + gate.reason);
+    console.log('[FACE_API][V50Z] FACE_GATE_SKIP hash=' + latest.snap_hash + ' reason=' + gate.reason);
     return skip;
   }
 
   const detect = await rt7DetectFaceOnly_(latest);
-  console.log('[FACE_API][V50Y] detect face_found=' + detect.face_found + ' count=' + detect.face_count + ' box=' + JSON.stringify(detect.face_box) + ' ratio=' + detect.face_ratio + ' reason=' + detect.reason + ' hash=' + latest.snap_hash);
+  console.log('[FACE_API][V50Z] detect face_found=' + detect.face_found + ' count=' + detect.face_count + ' box=' + JSON.stringify(detect.face_box) + ' ratio=' + detect.face_ratio + ' reason=' + detect.reason + ' hash=' + latest.snap_hash);
   if (!detect.face_found || detect.face_count <= 0) {
     const noface = {
       ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match', stage:'DETECT_ONLY',
@@ -706,7 +822,7 @@ async function rt7FaceMatchLatest_() {
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V50Y] result stage=' + result.stage + ' hash=' + result.snap_hash + ' face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
+  console.log('[FACE_API][V50Z] result stage=' + result.stage + ' hash=' + result.snap_hash + ' face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
   broadcast('face_match', result);
   return result;
 }
@@ -764,7 +880,7 @@ app.post('/api/rt7/face_gate/toggle', (req,res) => {
   if (/^(on|1|true|enable)$/i.test(mode)) cloudState.face_gate_enabled = true;
   else if (/^(off|0|false|disable)$/i.test(mode)) cloudState.face_gate_enabled = false;
   else cloudState.face_gate_enabled = !cloudState.face_gate_enabled;
-  console.log('[RT7_FACE_GATE][TOGGLE][V50Y] set enabled=' + cloudState.face_gate_enabled);
+  console.log('[RT7_FACE_GATE][TOGGLE][V50Z] set enabled=' + cloudState.face_gate_enabled);
   res.json({ ok:true, version:SERVER_VERSION, enabled:!!cloudState.face_gate_enabled, last_face_gate:cloudState.last_face_gate || null });
 });
 app.get('/api/rt7/face/state', (req,res) => {
