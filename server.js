@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0T_FACE_GATE_AI_BUTTON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0U_FACE_GATE_SERIAL_DEBUG_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -564,13 +564,13 @@ function rt7ParseFaceJson_(txt) {
   return { ok:true, known_face:false, matched_name:'', confidence:0, summary:raw.slice(0,240) };
 }
 async function rt7FaceMatchLatest_() {
-  console.log('[FACE_API][V50T] /api/rt7/face/match ENTER face_gate=' + JSON.stringify(req.body && req.body.face_gate ? req.body.face_gate : null).slice(0,220));
+  console.log('[FACE_API][V50U] /api/rt7/face/match ENTER face_gate=' + JSON.stringify(req.body && req.body.face_gate ? req.body.face_gate : null).slice(0,220));
   const latest = rt7LatestJpegB64_();
   if (!latest) return { ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或讓 ESP32 上傳 snapshot。' };
   const faces = rt7ReadFaces_();
   if (!faces.length) return { ok:false, version:SERVER_VERSION, error:'NO_ENROLLED_FACE', answer:'尚未註冊人臉，請先輸入姓名後按「註冊」。', count:0 };
   const refs = faces.slice(0, 6);
-  const content = [{ type:'text', text:'你是 RT7 門禁「真實人臉比對除錯器 V50T」。前置流程：ESP32 已先用 FACE_GATE 過濾候選畫面，只有候選畫面才送到本 AI 流程。任務分兩階段：A. 先只看目前門口照片，偵測是否有人臉、估計最大人臉框與比例；B. 再把目前照片中的最大人臉和已註冊照片比對。只回 JSON，不要 markdown。格式：{"api_entered":true,"stage":"DETECT_AND_MATCH","face_found":true/false,"face_count":0,"face_box":{"x":0,"y":0,"w":0,"h":0},"face_ratio":0-100,"known_face":true/false,"matched_name":"姓名","confidence":0-100,"face_quality":"GOOD/OK/LOW/BAD","face_position":"CENTER/LEFT/RIGHT/TOP/BOTTOM/CORNER/UNKNOWN","reason":"FACE_OK/BACKLIGHT_PASS/FACE_DETECTED_NOT_MATCHED/FACE_TOO_SMALL/BACKLIGHT/BLUR/DARK/SIDE_FACE/NO_FACE/LOW_SIMILARITY/NO_REGISTERED_MATCH","fail_stage":"NONE/DETECT/MATCH/QUALITY","summary":"繁中簡短說明"}。重要規則：如果目前照片中臉佔畫面明顯超過 20%，絕對不要回 FACE_TOO_SMALL；即使有逆光也先輸出 face_found=true、face_box、face_ratio，再進入比對。BACKLIGHT 只是警告，不能單獨失敗；如果相似度 confidence >= 55 就 known_face=true。若臉很大但不確定身分，reason=LOW_SIMILARITY 或 FACE_DETECTED_NOT_MATCHED，不要說 FACE_TOO_SMALL。請把 face_box/face_ratio 當成除錯核心，不能省略。' }];
+  const content = [{ type:'text', text:'你是 RT7 門禁「真實人臉比對除錯器 V50U」。前置流程：ESP32 已先用 FACE_GATE 過濾候選畫面，只有候選畫面才送到本 AI 流程。任務分兩階段：A. 先只看目前門口照片，偵測是否有人臉、估計最大人臉框與比例；B. 再把目前照片中的最大人臉和已註冊照片比對。只回 JSON，不要 markdown。格式：{"api_entered":true,"stage":"DETECT_AND_MATCH","face_found":true/false,"face_count":0,"face_box":{"x":0,"y":0,"w":0,"h":0},"face_ratio":0-100,"known_face":true/false,"matched_name":"姓名","confidence":0-100,"face_quality":"GOOD/OK/LOW/BAD","face_position":"CENTER/LEFT/RIGHT/TOP/BOTTOM/CORNER/UNKNOWN","reason":"FACE_OK/BACKLIGHT_PASS/FACE_DETECTED_NOT_MATCHED/FACE_TOO_SMALL/BACKLIGHT/BLUR/DARK/SIDE_FACE/NO_FACE/LOW_SIMILARITY/NO_REGISTERED_MATCH","fail_stage":"NONE/DETECT/MATCH/QUALITY","summary":"繁中簡短說明"}。重要規則：如果目前照片中臉佔畫面明顯超過 20%，絕對不要回 FACE_TOO_SMALL；即使有逆光也先輸出 face_found=true、face_box、face_ratio，再進入比對。BACKLIGHT 只是警告，不能單獨失敗；如果相似度 confidence >= 55 就 known_face=true。若臉很大但不確定身分，reason=LOW_SIMILARITY 或 FACE_DETECTED_NOT_MATCHED，不要說 FACE_TOO_SMALL。請把 face_box/face_ratio 當成除錯核心，不能省略。' }];
   content.push({ type:'text', text:'目前門口照片：' });
   content.push({ type:'image_url', image_url:{ url:'data:image/jpeg;base64,' + latest.b64 } });
   refs.forEach((f, idx) => {
@@ -607,12 +607,12 @@ async function rt7FaceMatchLatest_() {
     latest_bytes: latest.bytes,
     ref_names: refs.map(f => safeString(f.name || '')),
     face_gate: (req.body && req.body.face_gate) ? req.body.face_gate : null,
-    debug_text: ('API_ENTER=YES V50T_FACE_GATE=YES FACE_FOUND=' + (!!out.face_found) + ' COUNT=' + Number(out.face_count || (out.face_found ? 1 : 0)) + ' BOX=' + JSON.stringify((out.face_box&&typeof out.face_box==='object')?out.face_box:{}) + ' RATIO=' + Number(out.face_ratio || 0) + '% KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN') + ' FAIL_STAGE=' + safeString(out.fail_stage || 'UNKNOWN')),
+    debug_text: ('API_ENTER=YES V50U_FACE_GATE=YES FACE_FOUND=' + (!!out.face_found) + ' COUNT=' + Number(out.face_count || (out.face_found ? 1 : 0)) + ' BOX=' + JSON.stringify((out.face_box&&typeof out.face_box==='object')?out.face_box:{}) + ' RATIO=' + Number(out.face_ratio || 0) + '% KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN') + ' FAIL_STAGE=' + safeString(out.fail_stage || 'UNKNOWN')),
     time: nowIso()
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V50T] result face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
+  console.log('[FACE_API][V50U] result face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
   broadcast('face_match', result);
   return result;
 }
@@ -734,7 +734,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
   bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio);
-  bind('btnAiOn', async function(){ setAiUi(true,'AI/人臉辨識已啟用：先做 ESP32 FACE_GATE，再送 AI 比對'); setDebug('ai+face gate on'); try{ await j('/api/rt7/return_fix2/enable'); }catch(_){} try{ await fetch('http://'+ip+'/api/motion/config?face_gate=1&face_threshold=2600&face_min_jpeg=3800&_='+Date.now(),{cache:'no-store',mode:'no-cors'}); }catch(_){} try{ await fetch('http://'+ip+'/api/motion/enable?_='+Date.now(),{cache:'no-store',mode:'no-cors'}); }catch(_){} setTimeout(function(){ rt7FaceMatch(); },350); });
+  bind('btnAiOn', async function(){ setAiUi(true,'AI/人臉辨識已啟用：ESP32 FACE_GATE 串口除錯已開啟'); setDebug('ai+face gate on'); try{ await j('/api/rt7/return_fix2/enable'); }catch(_){} try{ await fetch('http://'+ip+'/api/motion/config?face_gate=1&face_threshold=2600&face_min_jpeg=3800&_='+Date.now(),{cache:'no-store',mode:'no-cors'}); }catch(_){} try{ await fetch('http://'+ip+'/api/motion/enable?_='+Date.now(),{cache:'no-store',mode:'no-cors'}); }catch(_){} setTimeout(function(){ rt7FaceMatch(); },350); });
   bind('btnAiOff', async function(){ setAiUi(false,'AI/人臉辨識已關閉'); setDebug('ai+face gate off'); try{ await j('/api/rt7/return_fix2/disable'); }catch(_){} try{ await fetch('http://'+ip+'/api/motion/disable?_='+Date.now(),{cache:'no-store',mode:'no-cors'}); }catch(_){} });
   bind('btnOpenDoor', async function(){
     setAnswer('開門命令送出中...');
@@ -809,7 +809,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function rt7FaceGatePrecheck(){
     // V5.0T: 手機在同 Wi-Fi 時先讀 ESP32 FACE_GATE，再決定是否送 Railway AI。
     // 若瀏覽器擋私網 HTTP，為避免外網完全不能用，會 fallback 送 AI，但標示 FACE_GATE_UNAVAILABLE。
-    var url='http://'+ip+'/api/motion/status?_='+Date.now();
+    var url='http://'+ip+'/api/motion/sample?_='+Date.now();
     try{
       var r=await fetch(url,{cache:'no-store'});
       var g=await r.json();
@@ -819,7 +819,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var pass=(reason==='candidate_pass') || (score>=th && Number(g.face_gate_pass||0)>0);
       return {ok:true, pass:pass, score:score, threshold:th, reason:reason, raw:g};
     }catch(e){
-      return {ok:false, pass:true, score:0, threshold:0, reason:'FACE_GATE_UNAVAILABLE_'+(e.message||e)};
+      try{ var r2=await fetch('http://'+ip+'/api/motion/status?_='+Date.now(),{cache:'no-store'}); var g2=await r2.json(); return {ok:true, pass:true, score:Number(g2.face_candidate_score||0), threshold:Number(g2.face_candidate_threshold||2600), reason:'SAMPLE_FAILED_STATUS_ONLY_'+(e.message||e), raw:g2}; }catch(_){ return {ok:false, pass:true, score:0, threshold:0, reason:'FACE_GATE_UNAVAILABLE_'+(e.message||e)}; }
     }
   }
   async function rt7FaceMatch(){
