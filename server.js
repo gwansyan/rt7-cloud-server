@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
-const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0X_REALTIME_SNAPSHOT_VERIFY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0W_FACE_GATE_TOGGLE_TEST_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -553,27 +552,12 @@ function rt7SaveFaces_(arr) {
   ensureDataDir();
   fs.writeFileSync(FACES_FILE, JSON.stringify(Array.isArray(arr) ? arr : [], null, 2), 'utf8');
 }
-function rt7JpegHash_(buf) {
-  try { return crypto.createHash('sha1').update(buf).digest('hex').slice(0, 12).toUpperCase(); } catch (_) { return ''; }
-}
 function rt7LatestJpegB64_() {
   ensureDataDir();
   if (!fs.existsSync(SNAPSHOT_FILE)) return null;
-  const st = fs.statSync(SNAPSHOT_FILE);
   const buf = fs.readFileSync(SNAPSHOT_FILE);
   if (!buf || buf.length < 800) return null;
-  const hash = rt7JpegHash_(buf);
-  const meta = getSnapshotMeta_() || {};
-  return {
-    b64: buf.toString('base64'),
-    bytes: buf.length,
-    hash,
-    mtime: st.mtime.toISOString(),
-    age_ms: Math.max(0, Date.now() - st.mtimeMs),
-    source: meta.source || 'latest_file',
-    device_id: meta.device_id || '#1',
-    url: '/api/rt7/camera/latest.jpg?_face_verify=' + Date.now()
-  };
+  return { b64: buf.toString('base64'), bytes: buf.length };
 }
 function rt7ParseFaceJson_(txt) {
   const raw = String(txt || '').trim();
@@ -585,35 +569,33 @@ function rt7ParseFaceJson_(txt) {
 function rt7FaceGateCheck_(latest) {
   const bytes = Number(latest?.bytes || 0);
   const ageMs = latest?.time ? Math.max(0, Date.now() - new Date(latest.time).getTime()) : 0;
-  // V50X: test-mode gate. This is a safe cloud-side precheck so the known-good V5.0S recognition path remains usable.
+  // V50W: test-mode gate. This is a safe cloud-side precheck so the known-good V5.0S recognition path remains usable.
   // Real ESP32 FACE_GATE can be reintroduced after this toggle confirms ON/OFF routing.
   const pass = bytes >= 2500;
   const gate = {
     enabled: !!cloudState.face_gate_enabled,
-    source: 'V50X_CLOUD_GATE_TEST',
+    source: 'V50W_CLOUD_GATE_TEST',
     pass,
     bytes,
     age_ms: ageMs,
     reason: pass ? 'GATE_PASS_BYTES_OK' : 'GATE_SKIP_JPEG_TOO_SMALL',
-    snapshot_hash: latest.hash || '',
-    snapshot_age_ms: latest.age_ms || ageMs,
     time: nowIso()
   };
   cloudState.last_face_gate = gate;
-  console.log('[RT7_FACE_GATE][TOGGLE][V50X] enabled=' + gate.enabled + ' pass=' + gate.pass + ' bytes=' + gate.bytes + ' age_ms=' + gate.age_ms + ' reason=' + gate.reason);
+  console.log('[RT7_FACE_GATE][TOGGLE][V50W] enabled=' + gate.enabled + ' pass=' + gate.pass + ' bytes=' + gate.bytes + ' age_ms=' + gate.age_ms + ' reason=' + gate.reason);
   return gate;
 }
 
 async function rt7FaceMatchLatest_() {
-  console.log('[FACE_API][V50X] /api/rt7/face/match ENTER');
+  console.log('[FACE_API][V50W] /api/rt7/face/match ENTER');
   const latest = rt7LatestJpegB64_();
   if (!latest) return { ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或讓 ESP32 上傳 snapshot。' };
   const gate = rt7FaceGateCheck_(latest);
   if (cloudState.face_gate_enabled && !gate.pass) {
-    const skip = { ok:true, version:SERVER_VERSION, api_entered:true, type:'face_match', known_face:false, face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0, confidence:0, face_quality:'SKIP', reason:gate.reason, fail_stage:'FACE_GATE', face_gate:gate, summary:'FACE_GATE 測試模式阻擋，未送 AI 比對。', snapshot_hash: latest.hash||'', snapshot_bytes: latest.bytes||0, snapshot_age_ms: latest.age_ms||0, snapshot_mtime: latest.mtime||'' };
+    const skip = { ok:true, version:SERVER_VERSION, api_entered:true, type:'face_match', known_face:false, face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0, confidence:0, face_quality:'SKIP', reason:gate.reason, fail_stage:'FACE_GATE', face_gate:gate, summary:'FACE_GATE 測試模式阻擋，未送 AI 比對。' };
     cloudState.last_face_match = skip;
     broadcast('face_match', skip);
-    console.log('[FACE_API][V50X] FACE_GATE_SKIP no AI match reason=' + gate.reason);
+    console.log('[FACE_API][V50W] FACE_GATE_SKIP no AI match reason=' + gate.reason);
     return skip;
   }
   const faces = rt7ReadFaces_();
@@ -655,20 +637,13 @@ async function rt7FaceMatchLatest_() {
     summary: safeString(out.summary || txt).slice(0,500),
     count: faces.length,
     latest_bytes: latest.bytes,
-    snapshot_hash: latest.hash || '',
-    snapshot_age_ms: latest.age_ms || 0,
-    snapshot_mtime: latest.mtime || '',
-    snapshot_source: latest.source || '',
-    snapshot_url: latest.url || '',
-    realtime_verify: { hash: latest.hash || '', bytes: latest.bytes || 0, age_ms: latest.age_ms || 0, mtime: latest.mtime || '', source: latest.source || '' },
     ref_names: refs.map(f => safeString(f.name || '')),
-    debug_text: ('API_ENTER=YES V50X_REALTIME_SNAPSHOT_VERIFY=YES SNAP_HASH=' + (latest.hash||'') + ' SNAP_BYTES=' + (latest.bytes||0) + ' SNAP_AGE_MS=' + Math.round(latest.age_ms||0) + ' SNAP_MTIME=' + (latest.mtime||'') + ' FACE_FOUND=' + (!!out.face_found) + ' COUNT=' + Number(out.face_count || (out.face_found ? 1 : 0)) + ' BOX=' + JSON.stringify((out.face_box&&typeof out.face_box==='object')?out.face_box:{}) + ' RATIO=' + Number(out.face_ratio || 0) + '% KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN') + ' FAIL_STAGE=' + safeString(out.fail_stage || 'UNKNOWN')),
+    debug_text: ('API_ENTER=YES V50S_REAL_DEBUG=YES FACE_FOUND=' + (!!out.face_found) + ' COUNT=' + Number(out.face_count || (out.face_found ? 1 : 0)) + ' BOX=' + JSON.stringify((out.face_box&&typeof out.face_box==='object')?out.face_box:{}) + ' RATIO=' + Number(out.face_ratio || 0) + '% KNOWN=' + (!!out.known_face) + ' NAME=' + safeString(out.matched_name || '') + ' CONF=' + Number(out.confidence || 0) + ' QUALITY=' + safeString(out.face_quality || 'UNKNOWN') + ' POS=' + safeString(out.face_position || 'UNKNOWN') + ' REASON=' + safeString(out.reason || 'UNKNOWN') + ' FAIL_STAGE=' + safeString(out.fail_stage || 'UNKNOWN')),
     time: nowIso()
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V50X][SNAPSHOT_VERIFY] hash=' + result.snapshot_hash + ' bytes=' + result.latest_bytes + ' age_ms=' + Math.round(result.snapshot_age_ms||0) + ' mtime=' + result.snapshot_mtime + ' source=' + result.snapshot_source);
-  console.log('[FACE_API][V50X] result face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
+  console.log('[FACE_API][V50W] result face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
   broadcast('face_match', result);
   return result;
 }
@@ -726,11 +701,11 @@ app.post('/api/rt7/face_gate/toggle', (req,res) => {
   if (/^(on|1|true|enable)$/i.test(mode)) cloudState.face_gate_enabled = true;
   else if (/^(off|0|false|disable)$/i.test(mode)) cloudState.face_gate_enabled = false;
   else cloudState.face_gate_enabled = !cloudState.face_gate_enabled;
-  console.log('[RT7_FACE_GATE][TOGGLE][V50X] set enabled=' + cloudState.face_gate_enabled);
+  console.log('[RT7_FACE_GATE][TOGGLE][V50W] set enabled=' + cloudState.face_gate_enabled);
   res.json({ ok:true, version:SERVER_VERSION, enabled:!!cloudState.face_gate_enabled, last_face_gate:cloudState.last_face_gate || null });
 });
 app.get('/api/rt7/face/state', (req,res) => {
-  res.json({ ok:true, version:SERVER_VERSION, api:'/api/rt7/face/match', alias:'/api/face/recognize', faces:rt7ReadFaces_().length, last_face_match:cloudState.last_face_match || null, latest_snapshot:getSnapshotMeta_(), realtime_snapshot: (function(){ const x=rt7LatestJpegB64_(); return x ? {hash:x.hash, bytes:x.bytes, age_ms:x.age_ms, mtime:x.mtime, source:x.source, device_id:x.device_id} : null; })(), face_gate_enabled:!!cloudState.face_gate_enabled, last_face_gate:cloudState.last_face_gate || null });
+  res.json({ ok:true, version:SERVER_VERSION, api:'/api/rt7/face/match', alias:'/api/face/recognize', faces:rt7ReadFaces_().length, last_face_match:cloudState.last_face_match || null, latest_snapshot:getSnapshotMeta_(), face_gate_enabled:!!cloudState.face_gate_enabled, last_face_gate:cloudState.last_face_gate || null });
 });
 
 app.get('/api/rt7/faces/reset', (req,res) => {
@@ -890,9 +865,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer('人臉辨識中...');
       var j=await rt7Json('/api/rt7/face/match',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
       if(j.ok && j.known_face) {
-        setAnswer(((j.reason==='BACKLIGHT_PASS')?'逆光但人臉通過：':'人臉通過：')+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜SNAP='+((j.snapshot_hash||'').slice(0,12))+'｜BYTES='+(j.latest_bytes||j.snapshot_bytes||0)+'｜AGE='+Math.round(j.snapshot_age_ms||0)+'ms｜FACE_FOUND=+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜REASON='+(j.reason||'FACE_OK'));
+        setAnswer(((j.reason==='BACKLIGHT_PASS')?'逆光但人臉通過：':'人臉通過：')+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜REASON='+(j.reason||'FACE_OK'));
       } else if(j.ok) {
-        setAnswer('人臉未通過：'+(j.reason||'UNKNOWN')+'｜SNAP='+((j.snapshot_hash||'').slice(0,12))+'｜BYTES='+(j.latest_bytes||j.snapshot_bytes||0)+'｜AGE='+Math.round(j.snapshot_age_ms||0)+'ms｜FACE_FOUND=+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜FAIL='+(j.fail_stage||'UNKNOWN')+'｜品質='+(j.face_quality||'UNKNOWN')+'｜'+(j.summary||''));
+        setAnswer('人臉未通過：'+(j.reason||'UNKNOWN')+'｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜FAIL='+(j.fail_stage||'UNKNOWN')+'｜品質='+(j.face_quality||'UNKNOWN')+'｜'+(j.summary||''));
       } else {
         setAnswer('人臉辨識失敗：'+(j.answer||j.error||'UNKNOWN'));
       }
@@ -1153,7 +1128,6 @@ function getSnapshotMeta_() {
     cloudState.last_snapshot = {
       ok: true,
       bytes: st.size,
-      hash: rt7JpegHash_(fs.readFileSync(SNAPSHOT_FILE)),
       time: st.mtime.toISOString(),
       source: 'restored_from_file',
       device_id: '#1',
@@ -1171,7 +1145,7 @@ app.post('/api/rt7/camera/snapshot', express.raw({type:['image/jpeg','image/jpg'
   let buf = Buffer.isBuffer(req.body) ? req.body : null;
   if (!buf || buf.length < 10) return res.status(400).json({ok:false,error:'JPEG_BODY_REQUIRED'});
   fs.writeFileSync(SNAPSHOT_FILE, buf);
-  cloudState.last_snapshot = { ok:true, bytes:buf.length, hash:rt7JpegHash_(buf), time:nowIso(), source:'raw_post', device_id:safeString(req.query.device_id || req.headers['x-rt7-device-id'] || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
+  cloudState.last_snapshot = { ok:true, bytes:buf.length, time:nowIso(), source:'raw_post', device_id:safeString(req.query.device_id || req.headers['x-rt7-device-id'] || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
   const ev=appendEvent({ type:'snapshot', bytes:buf.length, message:'snapshot uploaded' });
   broadcast('snapshot', cloudState.last_snapshot);
   res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
@@ -1182,7 +1156,7 @@ app.post('/api/rt7/camera/snapshot_json', (req,res)=>{
   if (!b64) return res.status(400).json({ok:false,error:'image_b64 required'});
   const buf = Buffer.from(b64, 'base64');
   fs.writeFileSync(SNAPSHOT_FILE, buf);
-  cloudState.last_snapshot = { ok:true, bytes:buf.length, hash:rt7JpegHash_(buf), time:nowIso(), source:'json_b64', device_id:safeString(req.body?.device_id || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
+  cloudState.last_snapshot = { ok:true, bytes:buf.length, time:nowIso(), source:'json_b64', device_id:safeString(req.body?.device_id || '#1'), ip:clientIp(req), url:'/api/rt7/camera/latest.jpg' };
   const ev=appendEvent({ type:'snapshot', bytes:buf.length, message:'snapshot uploaded json' });
   broadcast('snapshot', cloudState.last_snapshot);
   res.json({ ok:true, snapshot:cloudState.last_snapshot, event:ev });
