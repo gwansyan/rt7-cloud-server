@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_3B_FACE_SINGLE_SHOT_STREAM_STABLE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_3C_FACE_ONE_RESTART_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -600,8 +600,8 @@ function rt7SendWsJsonToEsp_(obj) {
       if (isPhone && !isEsp) continue;
       try { ws.send(text); n++; } catch (_) {}
     }
-    console.log('[FACE_API][V53B][WS_CMD_RELAY] type=' + safeString(obj && obj.type) + ' sent=' + n + ' open=' + seen);
-  } catch (e) { console.warn('[FACE_API][V53B][WS_CMD_RELAY_ERR] ' + String(e && e.message || e)); }
+    console.log('[FACE_API][V53C][WS_CMD_RELAY] type=' + safeString(obj && obj.type) + ' sent=' + n + ' open=' + seen);
+  } catch (e) { console.warn('[FACE_API][V53C][WS_CMD_RELAY_ERR] ' + String(e && e.message || e)); }
   return n;
 }
 function rt7Sleep_(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -624,19 +624,19 @@ async function rt7ForceRealtimeSnapshot_() {
     if (Array.isArray(pendingCommands)) {
       pendingCommands = pendingCommands.filter(c => !(c && (c.command === 'face_snapshot_now' || c.action === 'face_snapshot_now' || c.priority === 'face_snapshot')));
     }
-  } catch (e) { console.warn('[FACE_API][V53B][CLEAR_PENDING_WARN] ' + String(e && e.message || e)); }
+  } catch (e) { console.warn('[FACE_API][V53C][CLEAR_PENDING_WARN] ' + String(e && e.message || e)); }
 
   const cmd = queueCommand({
     command:'face_snapshot_now', action:'face_snapshot_now', request_id:requestId,
     device_id:'rt7-esp32-s3-cam-01', requested_device_id:'#1', target_all:true, interval_ms:100,
     priority:'face_snapshot',
-    message:'V53B single-shot face snapshot trigger; duplicate face_snapshot_now suppressed'
+    message:'V53C single-shot face snapshot trigger; duplicate face_snapshot_now suppressed'
   });
-  const wsSentA = rt7SendWsJsonToEsp_({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V53B', time:nowIso() });
-  const wsSentB = rt7SendToEspIntercom_(JSON.stringify({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V53B', relay:'intercom_path', time:nowIso() }));
+  const wsSentA = rt7SendWsJsonToEsp_({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V53C', time:nowIso() });
+  const wsSentB = rt7SendToEspIntercom_(JSON.stringify({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V53C', relay:'intercom_path', time:nowIso() }));
   const wsSent = wsSentA + wsSentB;
   broadcast('face_snapshot_request', { ok:true, version:SERVER_VERSION, request_id:requestId, command:cmd, ws_sent:wsSent, time:nowIso() });
-  console.log('[FACE_API][V53B][SNAPSHOT_REQUEST] request_id=' + requestId + ' ws_sent=' + wsSent + ' before_time=' + (beforeMeta.time||'') + ' before_source=' + (beforeMeta.source||''));
+  console.log('[FACE_API][V53C][SNAPSHOT_REQUEST] request_id=' + requestId + ' ws_sent=' + wsSent + ' before_time=' + (beforeMeta.time||'') + ' before_source=' + (beforeMeta.source||''));
 
   let latest = null;
   for (let i=0; i<90; i++) {
@@ -658,14 +658,14 @@ async function rt7ForceRealtimeSnapshot_() {
       latest.snap_forced_realtime = true;
       latest.snap_live_frame_fallback = !(freshByTime && newerThanBefore);
       latest.snap_source = (latest.snap_source === 'raw_post' || latest.snap_source === 'json_b64') ? 'realtime_snapshot' : (latest.snap_live_frame_fallback ? 'realtime_live_ws_frame' : 'realtime_ws_frame');
-      console.log('[FACE_API][V53B][SNAPSHOT_FRESH_OR_LIVE] request_id=' + requestId + ' wait_ms=' + latest.snap_wait_ms + ' bytes=' + latest.bytes + ' hash=' + latest.snap_hash + ' age_ms=' + latest.snap_age_ms + ' source=' + latest.snap_source + ' ws_sent=' + wsSent + ' fallback=' + latest.snap_live_frame_fallback);
+      console.log('[FACE_API][V53C][SNAPSHOT_FRESH_OR_LIVE] request_id=' + requestId + ' wait_ms=' + latest.snap_wait_ms + ' bytes=' + latest.bytes + ' hash=' + latest.snap_hash + ' age_ms=' + latest.snap_age_ms + ' source=' + latest.snap_source + ' ws_sent=' + wsSent + ' fallback=' + latest.snap_live_frame_fallback);
       return latest;
     }
   }
   // V5.1C: realtime-only. Do NOT fall back to stale ws_frame/latest.jpg.
   // If ESP32 does not provide a new frame after the request, return null so face match stops before AI.
   const stale = rt7GetLatestWithMeta_();
-  console.warn('[FACE_API][V53B][SNAPSHOT_REALTIME_TIMEOUT] request_id=' + requestId + ' wait_ms=' + (Date.now() - startMs) + ' ws_sent=' + wsSent + ' last_hash=' + (stale && stale.snap_hash || '') + ' last_age_ms=' + (stale && stale.snap_age_ms || '') + ' last_source=' + (stale && stale.snap_source || ''));
+  console.warn('[FACE_API][V53C][SNAPSHOT_REALTIME_TIMEOUT] request_id=' + requestId + ' wait_ms=' + (Date.now() - startMs) + ' ws_sent=' + wsSent + ' last_hash=' + (stale && stale.snap_hash || '') + ' last_age_ms=' + (stale && stale.snap_age_ms || '') + ' last_source=' + (stale && stale.snap_source || ''));
   return {
     realtime_failed: true,
     snap_request_id: requestId,
@@ -981,7 +981,7 @@ function rt7Cosine_(a,b) {
 function rt7RailwayFaceCompare_(latest, refs, detect) {
   const t0 = Date.now();
   const cur = rt7ExtractFaceEmbedding_(latest.b64, detect);
-  if (!cur.ok) return { known_face:false, matched_name:'', confidence:0, reason:cur.reason || 'CURRENT_EMBED_FAIL', summary:'目前照片無法建立人臉特徵。', raw:'RAILWAY_FACE_MATCH_V53B', match_ms:Date.now()-t0, cache_mode:'FAST_CACHE' };
+  if (!cur.ok) return { known_face:false, matched_name:'', confidence:0, reason:cur.reason || 'CURRENT_EMBED_FAIL', summary:'目前照片無法建立人臉特徵。', raw:'RAILWAY_FACE_MATCH_V53C', match_ms:Date.now()-t0, cache_mode:'FAST_CACHE' };
   let best = null;
   let cacheHits = 0, cacheMiss = 0, compared = 0;
   for (const f of refs || []) {
@@ -996,7 +996,7 @@ function rt7RailwayFaceCompare_(latest, refs, detect) {
     if (!best || row.confidence > best.confidence) best = row;
   }
   const matchMs = Date.now() - t0;
-  if (!best) return { known_face:false, matched_name:'', confidence:0, reason:'NO_VALID_REFERENCE_EMBEDDING', summary:'註冊照片無法建立可比對的人臉特徵。', raw:'RAILWAY_FACE_MATCH_V53B', match_ms:matchMs, cache_mode:'FAST_CACHE', cache_hits:cacheHits, cache_miss:cacheMiss, compared };
+  if (!best) return { known_face:false, matched_name:'', confidence:0, reason:'NO_VALID_REFERENCE_EMBEDDING', summary:'註冊照片無法建立可比對的人臉特徵。', raw:'RAILWAY_FACE_MATCH_V53C', match_ms:matchMs, cache_mode:'FAST_CACHE', cache_hits:cacheHits, cache_miss:cacheMiss, compared };
   // threshold 72: avoids empty-room false pass while keeping current single-user tests practical.
   const pass = best.confidence >= 72;
   return {
@@ -1005,7 +1005,7 @@ function rt7RailwayFaceCompare_(latest, refs, detect) {
     confidence: best.confidence,
     reason: pass ? 'FACE_OK_RAILWAY_MATCH' : 'LOW_SIMILARITY_RAILWAY',
     summary: pass ? ('Railway 快取比對通過：' + best.name + ' / ' + best.confidence + '%') : ('Railway 已偵測到人臉，但與註冊名單相似度不足：' + best.confidence + '%'),
-    raw:'RAILWAY_FACE_MATCH_V53B cosine=' + best.cosine + ' name=' + best.name + ' match_ms=' + matchMs + ' cache_hits=' + cacheHits + ' cache_miss=' + cacheMiss,
+    raw:'RAILWAY_FACE_MATCH_V53C cosine=' + best.cosine + ' name=' + best.name + ' match_ms=' + matchMs + ' cache_hits=' + cacheHits + ' cache_miss=' + cacheMiss,
     best,
     match_ms:matchMs,
     cache_mode:'FAST_CACHE',
@@ -1021,7 +1021,7 @@ async function rt7MatchKnownFaceOnly_(latest, refs, detect) {
 }
 
 async function rt7FaceMatchLatestCore_() {
-  console.log('[FACE_API][V53B] /api/rt7/face/match CORE ENTER detect_first=1 force_realtime=1');
+  console.log('[FACE_API][V53C] /api/rt7/face/match CORE ENTER detect_first=1 force_realtime=1');
   const latest = await rt7ForceRealtimeSnapshot_();
   if (!latest || latest.realtime_failed || !latest.b64) {
     const stale = latest && latest.stale_meta || null;
@@ -1036,21 +1036,21 @@ async function rt7FaceMatchLatestCore_() {
       time:nowIso()
     };
     cloudState.last_face_match = fail; broadcast('face_match', fail);
-    console.warn('[FACE_API][V53B] stop before AI: NO_REALTIME_SNAPSHOT ws_sent=' + fail.snap_request_ws_sent + ' wait_ms=' + fail.snap_wait_ms + ' stale_hash=' + fail.snap_hash + ' stale_age_ms=' + fail.snap_age_ms);
+    console.warn('[FACE_API][V53C] stop before AI: NO_REALTIME_SNAPSHOT ws_sent=' + fail.snap_request_ws_sent + ' wait_ms=' + fail.snap_wait_ms + ' stale_hash=' + fail.snap_hash + ' stale_age_ms=' + fail.snap_age_ms);
     return fail;
   }
-  try { fs.writeFileSync(FACE_DEBUG_SNAPSHOT_FILE, Buffer.from(latest.b64, 'base64')); } catch (e) { console.warn('[FACE_API][V53B] save face debug snapshot failed', e && e.message || e); }
+  try { fs.writeFileSync(FACE_DEBUG_SNAPSHOT_FILE, Buffer.from(latest.b64, 'base64')); } catch (e) { console.warn('[FACE_API][V53C] save face debug snapshot failed', e && e.message || e); }
 
   const gate = rt7FaceGateCheck_(latest);
   if (cloudState.face_gate_enabled && !gate.pass) {
     const skip = { ok:true, version:SERVER_VERSION, api_entered:true, type:'face_match', known_face:false, face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0, confidence:0, face_quality:'SKIP', reason:gate.reason, fail_stage:'FACE_GATE', face_gate:gate, snap_time:latest.snap_time, snap_hash:latest.snap_hash, snap_age_ms:latest.snap_age_ms, latest_bytes:latest.bytes, snap_wait_ms:latest.snap_wait_ms, snap_forced_realtime:latest.snap_forced_realtime, snap_stale_warning:!!latest.snap_stale_warning, snap_request_ws_sent:latest.snap_request_ws_sent, snap_live_frame_fallback:!!latest.snap_live_frame_fallback, face_snapshot_url:'/api/rt7/face/last_snapshot.jpg?h='+latest.snap_hash, summary:'FACE_GATE 測試模式阻擋，未做 Railway 比對。' };
     cloudState.last_face_match = skip; broadcast('face_match', skip);
-    console.log('[FACE_API][V53B] FACE_GATE_SKIP hash=' + latest.snap_hash + ' reason=' + gate.reason);
+    console.log('[FACE_API][V53C] FACE_GATE_SKIP hash=' + latest.snap_hash + ' reason=' + gate.reason);
     return skip;
   }
 
   const detect = await rt7DetectFaceOnly_(latest);
-  console.log('[FACE_API][V53B] detect face_found=' + detect.face_found + ' count=' + detect.face_count + ' box=' + JSON.stringify(detect.face_box) + ' ratio=' + detect.face_ratio + ' reason=' + detect.reason + ' hash=' + latest.snap_hash);
+  console.log('[FACE_API][V53C] detect face_found=' + detect.face_found + ' count=' + detect.face_count + ' box=' + JSON.stringify(detect.face_box) + ' ratio=' + detect.face_ratio + ' reason=' + detect.reason + ' hash=' + latest.snap_hash);
   if (!detect.face_found || detect.face_count <= 0) {
     const noface = {
       ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match', stage:'DETECT_ONLY', engine:'railway_local', gpt_used:false,
@@ -1069,7 +1069,7 @@ async function rt7FaceMatchLatestCore_() {
 
   const faces = rt7ReadFaces_();
   if (!faces.length) return { ok:false, version:SERVER_VERSION, error:'NO_ENROLLED_FACE', answer:'尚未註冊人臉，請先輸入姓名後按「註冊」。', count:0 };
-  try { if (rt7RefreshFaceEmbeddingCaches_(faces)) rt7SaveFaces_(faces); } catch(e) { console.warn('[FACE_API][V53B][CACHE_REFRESH_WARN] ' + String(e && e.message || e)); }
+  try { if (rt7RefreshFaceEmbeddingCaches_(faces)) rt7SaveFaces_(faces); } catch(e) { console.warn('[FACE_API][V53C][CACHE_REFRESH_WARN] ' + String(e && e.message || e)); }
   const refs = faces.slice(0, 6);
   const match = await rt7MatchKnownFaceOnly_(latest, refs, detect);
   const confidence = Number(match.confidence || 0);
@@ -1109,7 +1109,7 @@ async function rt7FaceMatchLatestCore_() {
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V53B] result stage=' + result.stage + ' hash=' + result.snap_hash + ' face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
+  console.log('[FACE_API][V53C] result stage=' + result.stage + ' hash=' + result.snap_hash + ' face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
   broadcast('face_match', result);
   return result;
 }
@@ -1134,7 +1134,7 @@ async function rt7FaceMatchLatest_() {
       summary: base.summary || '人臉辨識進行中，已阻擋重複 face_snapshot_now。',
       time: nowIso()
     });
-    console.log('[FACE_API][V53B][SINGLE_SHOT_BUSY] reuse last result, age_ms=' + (now - rt7FaceMatchServerStartedMs_));
+    console.log('[FACE_API][V53C][SINGLE_SHOT_BUSY] reuse last result, age_ms=' + (now - rt7FaceMatchServerStartedMs_));
     return out;
   }
   if (rt7FaceMatchServerLastResult_ && (now - rt7FaceMatchServerStartedMs_) < 2200) {
@@ -1144,7 +1144,7 @@ async function rt7FaceMatchLatest_() {
       duplicate_suppressed: true,
       time: nowIso()
     });
-    console.log('[FACE_API][V53B][SINGLE_SHOT_COOLDOWN] reuse recent result, age_ms=' + (now - rt7FaceMatchServerStartedMs_));
+    console.log('[FACE_API][V53C][SINGLE_SHOT_COOLDOWN] reuse recent result, age_ms=' + (now - rt7FaceMatchServerStartedMs_));
     return out;
   }
   rt7FaceMatchServerBusy_ = true;
@@ -1190,7 +1190,7 @@ function rt7EnrollHandler_(req,res){
   try {
     const emb = rt7ExtractFaceEmbedding_(latest.b64, null);
     if (emb && emb.ok) { face.embedding_cache = rt7FaceEmbeddingToCache_(emb); face.embedding_cache_key = rt7FaceEmbeddingCacheKey_(face); }
-  } catch(e) { console.warn('[FACE_API][V53B][ENROLL_CACHE_WARN] ' + String(e && e.message || e)); }
+  } catch(e) { console.warn('[FACE_API][V53C][ENROLL_CACHE_WARN] ' + String(e && e.message || e)); }
   faces.unshift(face);
   rt7SaveFaces_(faces.slice(0, 20));
   const ev = appendEvent({ type:'face_enroll', id, name, bytes:latest.bytes, message:'enrolled face '+name });
@@ -1399,24 +1399,54 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }catch(_){ }
   }
   var rt7FaceMatchBusy=false;
+  var rt7FaceRestoreBusy=false;
+  var rt7FaceLastDoneAt=0;
+  var rt7FaceResumeTimer=null;
+  var rt7FaceResumeStarted=false;
+  function rt7FaceSetButtonBusy(faceBtn,busy){
+    try{ if(faceBtn){ faceBtn.disabled=!!busy; faceBtn.style.opacity=busy?'0.55':''; faceBtn.textContent=busy?'辨識中':'人臉辨識'; } }catch(_){}
+  }
+  function rt7FacePauseStreamOnce(){
+    // V5.3C: exactly one intentional MJPEG close before face snapshot.
+    clearLanReconnect();
+    try{ if(img){ img.onerror=null; img.onload=null; img.src='about:blank'; img.removeAttribute('src'); } }catch(_){}
+    videoWanted=false;
+    currentStreamMode='FACE_PAUSE';
+    if(badge) badge.textContent='FACE';
+  }
+  function rt7FaceResumeStreamOnce(prevMode,hold,faceBtn){
+    // V5.3C: exactly one restore after result; block focus/resize restore while doing it.
+    if(rt7FaceResumeStarted) return;
+    rt7FaceResumeStarted=true;
+    clearTimeout(rt7FaceResumeTimer);
+    rt7FaceRestoreBusy=true;
+    rt7FaceResumeTimer=setTimeout(function(){
+      try{
+        if(prevMode==='LAN') lan();
+        else if(prevMode==='CLOUD') cloud();
+        else startAuto();
+      }catch(_){ try{ startAuto(); }catch(__){} }
+      setTimeout(function(){ if(hold) setAnswer(hold); }, 180);
+      setTimeout(function(){
+        rt7FaceBusy=false; rt7FaceMatchBusy=false; rt7FaceRestoreBusy=false; rt7FaceLastDoneAt=Date.now(); rt7FaceResumeStarted=false;
+        rt7FaceSetButtonBusy(faceBtn,false);
+      }, 1500);
+    }, 650);
+  }
   async function rt7FaceMatch(){
-    if(rt7FaceMatchBusy){ setAnswer('人臉辨識進行中，請稍候...'); return; }
-    rt7FaceMatchBusy=true; rt7FaceBusy=true;
+    if(rt7FaceMatchBusy || rt7FaceRestoreBusy){ setAnswer('人臉辨識進行中，請稍候...'); return; }
+    if(Date.now() - rt7FaceLastDoneAt < 3500){ setAnswer('剛完成辨識，請稍候再按。'); return; }
+    rt7FaceMatchBusy=true; rt7FaceBusy=true; rt7FaceResumeStarted=false;
     var faceBtn=document.getElementById('btnFaceCheck');
-    try{ if(faceBtn){ faceBtn.disabled=true; faceBtn.style.opacity='0.55'; faceBtn.textContent='辨識中'; } }catch(_){ }
+    rt7FaceSetButtonBusy(faceBtn,true);
     var wasVideo = !!videoWanted;
     var prevMode = currentStreamMode || 'AUTO';
     var keepResult = '';
     try{
-      // V5.2S: 人臉辨識時只暫停一次串流，結果回來後只更新結果區與 Snapshot 區。
-      // 防止 visibility/focus/resize 背景機制在辨識期間重建 stream，避免 client closed / GET stream 連續發生。
+      // V5.3C: pause stream only once, then resume only once after result.
       if(wasVideo){
         setAnswer('暫停影像，準備人臉辨識...');
-        clearLanReconnect();
-        try{ if(img){ img.onerror=null; img.onload=null; img.src='about:blank'; img.removeAttribute('src'); } }catch(_){}
-        videoWanted=false;
-        currentStreamMode='FACE_PAUSE';
-        if(badge) badge.textContent='FACE';
+        rt7FacePauseStreamOnce();
         await new Promise(function(resolve){ setTimeout(resolve, 850); });
       }
 
@@ -1437,17 +1467,12 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer(keepResult);
     }finally{
       if(wasVideo){
-        setTimeout(function(){
-          var hold = keepResult || (answer && answer.textContent) || '';
-          try{
-            if(prevMode==='LAN') lan();
-            else if(prevMode==='CLOUD') cloud();
-            else startAuto();
-          }catch(_){}
-          setTimeout(function(){ if(hold) setAnswer(hold); }, 180);
-          setTimeout(function(){ rt7FaceBusy=false; rt7FaceMatchBusy=false; try{ if(faceBtn){ faceBtn.disabled=false; faceBtn.style.opacity=''; faceBtn.textContent='人臉辨識'; } }catch(_){} }, 1800);
-        }, 800);
-      } else { rt7FaceBusy=false; rt7FaceMatchBusy=false; try{ if(faceBtn){ faceBtn.disabled=false; faceBtn.style.opacity=''; faceBtn.textContent='人臉辨識'; } }catch(_){} }
+        var hold = keepResult || (answer && answer.textContent) || '';
+        rt7FaceResumeStreamOnce(prevMode, hold, faceBtn);
+      } else {
+        rt7FaceBusy=false; rt7FaceMatchBusy=false; rt7FaceLastDoneAt=Date.now();
+        rt7FaceSetButtonBusy(faceBtn,false);
+      }
     }
   }
   var _faceEnrollBtn=document.getElementById('btnFaceEnroll'); if(_faceEnrollBtn)_faceEnrollBtn.addEventListener('click',function(ev){ev.preventDefault();rt7FaceEnroll();});
@@ -1611,7 +1636,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{ return localStorage.getItem('RT7_V50_STREAM_MODE') || currentStreamMode || 'AUTO'; }catch(e){ return currentStreamMode || 'AUTO'; }
   }
   function rt7RestoreVideo(reason){
-    if(rt7FaceBusy) return;
+    if(rt7FaceBusy || rt7FaceRestoreBusy) return;
     if(!rt7VideoWanted()) return;
     if(rt7RestoreBusy) return;
     clearTimeout(rt7RestoreTimer);
@@ -1637,7 +1662,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }, reason==='resize' ? 800 : 350);
   }
   function rt7BackgroundIdle(reason){
-    if(rt7FaceBusy) return;
+    if(rt7FaceBusy || rt7FaceRestoreBusy) return;
     if(!rt7VideoWanted()) return;
     setDebug('background idle '+reason);
     try{ navigator.sendBeacon && navigator.sendBeacon('/api/rt7/camera/viewer/ping?state=hidden&_='+Date.now(), ''); }catch(e){}
@@ -2205,7 +2230,7 @@ app.get('/api/rt7/face/live_frame_state', (req,res)=>{
 app.get('/api/rt7/face/snapshot_trigger_test', (req,res)=>{
   const requestId = 'manual_face_snap_' + Date.now();
   const cmd = queueCommand({ command:'face_snapshot_now', action:'face_snapshot_now', request_id:requestId, device_id:'rt7-esp32-s3-cam-01', message:'manual face snapshot trigger test' });
-  const wsSent = rt7SendWsJsonToEsp_({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V53B', manual:true, time:nowIso() });
+  const wsSent = rt7SendWsJsonToEsp_({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V53C', manual:true, time:nowIso() });
   res.json({ ok:true, version:SERVER_VERSION, request_id:requestId, ws_sent:wsSent, command:cmd, state:rt7IntercomWsState_(), latest_snapshot:getSnapshotMeta_() });
 });
 
