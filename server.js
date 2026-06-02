@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2B_FACE_SNAPSHOT_COMMAND_RELAY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_2C_LIVE_FRAME_FACE_FALLBACK_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -613,7 +613,7 @@ async function rt7ForceRealtimeSnapshot_() {
   const cmd = queueCommand({
     command:'face_snapshot_now', action:'face_snapshot_now', request_id:requestId,
     device_id:'rt7-esp32-s3-cam-01', interval_ms:100,
-    message:'V52C force ESP32 realtime face snapshot trigger'
+    message:'V52C force ESP32 realtime face snapshot trigger + live frame fallback'
   });
   const wsSentA = rt7SendWsJsonToEsp_({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V52C', time:nowIso() });
   const wsSentB = rt7SendToEspIntercom_(JSON.stringify({ type:'face_snapshot_now', command:'face_snapshot_now', request_id:requestId, phase:'V52C', relay:'intercom_path', time:nowIso() }));
@@ -629,13 +629,19 @@ async function rt7ForceRealtimeSnapshot_() {
     const tMs = latest.snap_time ? new Date(latest.snap_time).getTime() : 0;
     const freshByTime = tMs >= startMs - 250;
     const newerThanBefore = !beforeTimeMs || tMs > beforeTimeMs;
-    if (freshByTime && newerThanBefore && latest.bytes >= 800) {
+    const freshByAge = latest.snap_age_ms !== null && latest.snap_age_ms <= 1800;
+    const isLiveFrame = latest.snap_source === 'ws_frame' || latest.snap_source === 'live_frame' || latest.snap_source === 'raw_post' || latest.snap_source === 'json_b64';
+    // V5.2C: in field tests WS_SENT may be 0 because the ESP32 stream client is not command-addressable,
+    // but the live stream is still uploading a fresh frame every ~100ms. Treat a very fresh live frame as
+    // realtime Snapshot, otherwise face recognition waits forever and returns NO_REALTIME_SNAPSHOT.
+    if (latest.bytes >= 800 && ((freshByTime && newerThanBefore) || (freshByAge && isLiveFrame))) {
       latest.snap_request_id = requestId;
       latest.snap_request_ws_sent = wsSent;
       latest.snap_wait_ms = Date.now() - startMs;
       latest.snap_forced_realtime = true;
-      latest.snap_source = (latest.snap_source === 'raw_post' || latest.snap_source === 'json_b64') ? 'realtime_snapshot' : 'realtime_ws_frame';
-      console.log('[FACE_API][V52C][SNAPSHOT_FRESH] request_id=' + requestId + ' wait_ms=' + latest.snap_wait_ms + ' bytes=' + latest.bytes + ' hash=' + latest.snap_hash + ' age_ms=' + latest.snap_age_ms + ' source=' + latest.snap_source);
+      latest.snap_live_frame_fallback = !(freshByTime && newerThanBefore);
+      latest.snap_source = (latest.snap_source === 'raw_post' || latest.snap_source === 'json_b64') ? 'realtime_snapshot' : (latest.snap_live_frame_fallback ? 'realtime_live_ws_frame' : 'realtime_ws_frame');
+      console.log('[FACE_API][V52C][SNAPSHOT_FRESH_OR_LIVE] request_id=' + requestId + ' wait_ms=' + latest.snap_wait_ms + ' bytes=' + latest.bytes + ' hash=' + latest.snap_hash + ' age_ms=' + latest.snap_age_ms + ' source=' + latest.snap_source + ' ws_sent=' + wsSent + ' fallback=' + latest.snap_live_frame_fallback);
       return latest;
     }
   }
@@ -946,7 +952,7 @@ async function rt7FaceMatchLatest_() {
       face_quality:'NO_REALTIME_SNAPSHOT', face_position:'UNKNOWN', fail_stage:'SNAPSHOT', reason:'NO_REALTIME_SNAPSHOT',
       summary:'未取得即時 Snapshot，已停止：不使用舊 ws_frame，也不做人臉比對。請確認 ESP32 有持續上傳最新影像。',
       snap_time: stale && stale.snap_time || '', snap_source: stale && stale.snap_source || 'none', snap_hash: stale && stale.snap_hash || '', snap_age_ms: stale && stale.snap_age_ms || null,
-      latest_bytes: stale && stale.bytes || 0, snap_wait_ms: latest && latest.snap_wait_ms || 0, snap_forced_realtime:true, snap_stale_warning:true, snap_request_ws_sent: latest && latest.snap_request_ws_sent || 0,
+      latest_bytes: stale && stale.bytes || 0, snap_wait_ms: latest && latest.snap_wait_ms || 0, snap_forced_realtime:true, snap_stale_warning:true, snap_request_ws_sent: latest && latest.snap_request_ws_sent || 0, snap_live_frame_fallback: latest && !!latest.snap_live_frame_fallback,
       debug_text:'REALTIME_ONLY=YES NO_REALTIME_SNAPSHOT STALE_HASH=' + (stale && stale.snap_hash || '') + ' AGE=' + (stale && stale.snap_age_ms || ''),
       time:nowIso()
     };
@@ -958,7 +964,7 @@ async function rt7FaceMatchLatest_() {
 
   const gate = rt7FaceGateCheck_(latest);
   if (cloudState.face_gate_enabled && !gate.pass) {
-    const skip = { ok:true, version:SERVER_VERSION, api_entered:true, type:'face_match', known_face:false, face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0, confidence:0, face_quality:'SKIP', reason:gate.reason, fail_stage:'FACE_GATE', face_gate:gate, snap_time:latest.snap_time, snap_hash:latest.snap_hash, snap_age_ms:latest.snap_age_ms, latest_bytes:latest.bytes, snap_wait_ms:latest.snap_wait_ms, snap_forced_realtime:latest.snap_forced_realtime, snap_stale_warning:!!latest.snap_stale_warning, snap_request_ws_sent:latest.snap_request_ws_sent, face_snapshot_url:'/api/rt7/face/last_snapshot.jpg?h='+latest.snap_hash, summary:'FACE_GATE 測試模式阻擋，未做 Railway 比對。' };
+    const skip = { ok:true, version:SERVER_VERSION, api_entered:true, type:'face_match', known_face:false, face_found:false, face_count:0, face_box:{x:0,y:0,w:0,h:0}, face_ratio:0, confidence:0, face_quality:'SKIP', reason:gate.reason, fail_stage:'FACE_GATE', face_gate:gate, snap_time:latest.snap_time, snap_hash:latest.snap_hash, snap_age_ms:latest.snap_age_ms, latest_bytes:latest.bytes, snap_wait_ms:latest.snap_wait_ms, snap_forced_realtime:latest.snap_forced_realtime, snap_stale_warning:!!latest.snap_stale_warning, snap_request_ws_sent:latest.snap_request_ws_sent, snap_live_frame_fallback:!!latest.snap_live_frame_fallback, face_snapshot_url:'/api/rt7/face/last_snapshot.jpg?h='+latest.snap_hash, summary:'FACE_GATE 測試模式阻擋，未做 Railway 比對。' };
     cloudState.last_face_match = skip; broadcast('face_match', skip);
     console.log('[FACE_API][V52C] FACE_GATE_SKIP hash=' + latest.snap_hash + ' reason=' + gate.reason);
     return skip;
@@ -973,7 +979,7 @@ async function rt7FaceMatchLatest_() {
       known_face:false, matched_name:'', confidence:0, backlight_tolerant:true, pass_threshold:72,
       face_quality:detect.face_quality, face_position:detect.face_position, fail_stage:'DETECT', reason:detect.reason || 'NO_FACE',
       summary:detect.summary || '即時 Snapshot 未偵測到清楚人臉，已直接結束，未做人臉比對。', count:rt7ReadFaces_().length,
-      latest_bytes:latest.bytes, snap_time:latest.snap_time, snap_source:latest.snap_source, snap_hash:latest.snap_hash, snap_age_ms:latest.snap_age_ms, snap_wait_ms:latest.snap_wait_ms, snap_forced_realtime:latest.snap_forced_realtime, snap_stale_warning:!!latest.snap_stale_warning, snap_request_ws_sent:latest.snap_request_ws_sent, face_snapshot_url:'/api/rt7/face/last_snapshot.jpg?h='+latest.snap_hash,
+      latest_bytes:latest.bytes, snap_time:latest.snap_time, snap_source:latest.snap_source, snap_hash:latest.snap_hash, snap_age_ms:latest.snap_age_ms, snap_wait_ms:latest.snap_wait_ms, snap_forced_realtime:latest.snap_forced_realtime, snap_stale_warning:!!latest.snap_stale_warning, snap_request_ws_sent:latest.snap_request_ws_sent, snap_live_frame_fallback:!!latest.snap_live_frame_fallback, face_snapshot_url:'/api/rt7/face/last_snapshot.jpg?h='+latest.snap_hash,
       debug_text:'RAILWAY_FACE=YES SNAP=' + latest.snap_time + ' HASH=' + latest.snap_hash + ' FACE_FOUND=NO COUNT=0 REASON=' + (detect.reason || 'NO_FACE'),
       time:nowIso()
     };
@@ -1250,7 +1256,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(!box||!im||!j) return;
       var h=j.snap_hash||j.snapshot_hash||''; var u=j.face_snapshot_url||('/api/rt7/face/last_snapshot.jpg?_='+(Date.now())+'&h='+encodeURIComponent(h));
       im.src=u; box.style.display='block';
-      if(meta) meta.innerHTML='SNAP='+(j.snap_time||'')+'<br>BYTES='+(j.latest_bytes||j.bytes||'')+'<br>HASH='+(h||'')+'<br>AGE='+(j.snap_age_ms!=null?j.snap_age_ms+'ms':'')+'<br>SOURCE='+(j.snap_source||'none')+'<br>FORCE='+(j.snap_forced_realtime?'YES':'NO')+'<br>WAIT='+(j.snap_wait_ms!=null?j.snap_wait_ms+'ms':'')+'<br>WS_SENT='+(j.snap_request_ws_sent!=null?j.snap_request_ws_sent:'');
+      if(meta) meta.innerHTML='SNAP='+(j.snap_time||'')+'<br>BYTES='+(j.latest_bytes||j.bytes||'')+'<br>HASH='+(h||'')+'<br>AGE='+(j.snap_age_ms!=null?j.snap_age_ms+'ms':'')+'<br>SOURCE='+(j.snap_source||'none')+'<br>FORCE='+(j.snap_forced_realtime?'YES':'NO')+'<br>WAIT='+(j.snap_wait_ms!=null?j.snap_wait_ms+'ms':'')+'<br>WS_SENT='+(j.snap_request_ws_sent!=null?j.snap_request_ws_sent:'')+'<br>LIVE_FB='+(j.snap_live_frame_fallback?'YES':'NO');
     }catch(_){ }
   }
   async function rt7FaceMatch(){
@@ -2003,6 +2009,12 @@ app.get('/api/rt7/stream/compare/state', (req, res) => {
 
 app.get('/api/rt7/intercom/ws/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, ws:rt7IntercomWsState_() }));
 app.get('/api/rt7/intercom/ws/probe', (req,res)=>{ const label=safeString(req.query.label||'probe'); const n=rt7SendToEspIntercom_(JSON.stringify({type:'intercom_probe',role:'intercom_probe_http',device_id:'#1',label,t:Date.now(),version:SERVER_VERSION})); res.json({ok:true,version:SERVER_VERSION,esp:n,state:rt7IntercomWsState_()}); });
+
+
+app.get('/api/rt7/face/live_frame_state', (req,res)=>{
+  const latest = rt7GetLatestWithMeta_();
+  res.json({ ok:true, version:SERVER_VERSION, latest, stream:liveStreamState, intercom_ws:rt7IntercomWsState_() });
+});
 
 app.get('/api/rt7/face/snapshot_trigger_test', (req,res)=>{
   const requestId = 'manual_face_snap_' + Date.now();
