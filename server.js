@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4C_FORCE_AUTO_MATCH_ON_SNAPSHOT';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4D_FACE_RESULT_POLL_UI_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1273,7 +1273,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.4A</title>
+<title>RT7 Cloud Original UI V5.4D</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1422,6 +1422,47 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(meta) meta.innerHTML='SNAP='+(j.snap_time||'')+'<br>BYTES='+(j.latest_bytes||j.bytes||'')+'<br>HASH='+(h||'')+'<br>AGE='+(j.snap_age_ms!=null?j.snap_age_ms+'ms':'')+'<br>SOURCE='+(j.snap_source||'none')+'<br>FORCE='+(j.snap_forced_realtime?'YES':'NO')+'<br>WAIT='+(j.snap_wait_ms!=null?j.snap_wait_ms+'ms':'')+'<br>WS_SENT='+(j.snap_request_ws_sent!=null?j.snap_request_ws_sent:'')+'<br>LIVE_FB='+(j.snap_live_frame_fallback?'YES':'NO')+'<br>CACHE='+(j.cache_mode||'')+'<br>MATCH_MS='+(j.match_ms!=null?j.match_ms+'ms':'');
     }catch(_){ }
   }
+
+  // V5.4D: FACE_GATE auto recognition result polling.
+  // ESP32 FACE_GATE PASS now uploads snapshot and Railway auto-matches it.
+  // The phone UI must poll the last_face_match result because no manual button callback runs.
+  var rt7AutoFaceLastKey='';
+  var rt7AutoFacePollBusy=false;
+  function rt7FaceResultText_(j, autoLabel){
+    if(!j) return '';
+    var box=j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0';
+    var prefix=autoLabel?'FACE_GATE 自動辨識：':'';
+    if(j.ok && j.known_face){
+      return prefix+'人臉通過：'+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+box+'｜RATIO='+(j.face_ratio||0)+'%｜ENGINE='+(j.engine||'railway_local');
+    }
+    if(j.ok){
+      return prefix+'人臉未通過：'+(j.reason||'UNKNOWN')+'｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+box+'｜RATIO='+(j.face_ratio||0)+'%｜FAIL='+(j.fail_stage||'-');
+    }
+    return prefix+'人臉辨識錯誤：'+(j.error||j.reason||'UNKNOWN');
+  }
+  async function rt7PollAutoFaceResult_(){
+    if(rt7AutoFacePollBusy) return;
+    if(rt7FaceBusy || rt7FaceMatchBusy || rt7FaceRestoreBusy) return;
+    rt7AutoFacePollBusy=true;
+    try{
+      var s=await rt7Json('/api/rt7/face_gate/state?_='+Date.now());
+      var m=s && s.last_face_match;
+      if(!m) return;
+      var isAuto = !!(m.auto_face_gate || m.trigger_source==='esp32_face_gate' || (m.snap_source||'').indexOf('face_gate_auto')>=0);
+      if(!isAuto) return;
+      var key=[m.snap_hash||'',m.snap_time||'',m.confidence||0,m.reason||'',m.known_face?'1':'0'].join('|');
+      if(!key || key===rt7AutoFaceLastKey) return;
+      rt7AutoFaceLastKey=key;
+      rt7ShowFaceSnapshot(m);
+      setAnswer(rt7FaceResultText_(m,true));
+      setDebug('auto face result '+key);
+    }catch(e){
+      // Keep silent to avoid disturbing normal stream UI.
+    }finally{
+      rt7AutoFacePollBusy=false;
+    }
+  }
+  setInterval(rt7PollAutoFaceResult_, 1800);
   var rt7FaceMatchBusy=false;
   var rt7FaceRestoreBusy=false;
   var rt7FaceLastDoneAt=0;
