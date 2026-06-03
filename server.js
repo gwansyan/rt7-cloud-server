@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4M_FACE_UI_MINIMAL';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4N_FACE_MATCH_RESULT_SERIAL_DEBUG';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1229,6 +1229,36 @@ app.get('/api/face/recognize', async (req,res) => {
 
 app.get('/api/rt7/face_gate/state', (req,res) => {
   res.json({ ok:true, version:SERVER_VERSION, enabled:!!cloudState.face_gate_enabled, auto_enabled:!!cloudState.face_gate_auto_enabled, auto_busy:!!cloudState.face_gate_auto_busy, auto_cooldown_ms:cloudState.face_gate_auto_cooldown_ms, last_face_gate:cloudState.last_face_gate || null, last_face_match:cloudState.last_face_match || null });
+});
+app.get('/api/rt7/face_gate/serial_result', (req,res) => {
+  const m = cloudState.last_face_match || {};
+  const g = cloudState.last_face_gate || {};
+  res.json({
+    ok:true,
+    version:SERVER_VERSION,
+    time:nowIso(),
+    has_result:!!(cloudState.last_face_match),
+    auto_face_gate:!!m.auto_face_gate,
+    trigger_source:safeString(m.trigger_source || ''),
+    known_face:!!m.known_face,
+    matched_name:safeString(m.matched_name || ''),
+    confidence:Number(m.confidence || 0),
+    face_found:!!m.face_found,
+    face_count:Number(m.face_count || 0),
+    face_box:m.face_box || {x:0,y:0,w:0,h:0},
+    face_ratio:Number(m.face_ratio || 0),
+    face_quality:safeString(m.face_quality || ''),
+    face_position:safeString(m.face_position || ''),
+    fail_stage:safeString(m.fail_stage || ''),
+    reason:safeString(m.reason || ''),
+    summary:safeString(m.summary || m.answer || '').slice(0,220),
+    snap_hash:safeString(m.snap_hash || ''),
+    snap_age_ms:Number(m.snap_age_ms || 0),
+    latest_bytes:Number(m.latest_bytes || 0),
+    gate_pass:!!g.pass,
+    gate_reason:safeString(g.reason || ''),
+    gate_score:Number(g.candidate || g.score || 0)
+  });
 });
 app.post('/api/rt7/face_gate/auto', (req,res) => {
   const mode = safeString(req.body?.mode || req.query.mode || '');
