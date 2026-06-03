@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4D_FACE_RESULT_POLL_UI_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4E_FACE_RESULT_PASS_ONLY_UI_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1450,12 +1450,25 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(!m) return;
       var isAuto = !!(m.auto_face_gate || m.trigger_source==='esp32_face_gate' || (m.snap_source||'').indexOf('face_gate_auto')>=0);
       if(!isAuto) return;
-      var key=[m.snap_hash||'',m.snap_time||'',m.confidence||0,m.reason||'',m.known_face?'1':'0'].join('|');
+      // V5.4E: PASS-only UI update.
+      // ESP32 SKIP does not POST to Railway, so the server may still hold the previous PASS result.
+      // Do not redisplay stale PASS results while current FACE_GATE samples are SKIP.
+      var t = Date.parse(m.time || m.snap_time || '');
+      var ageMs = isFinite(t) ? (Date.now() - t) : 999999;
+      if(ageMs < 0) ageMs = 0;
+      if(ageMs > 9000) {
+        if(rt7AutoFaceLastKey) {
+          rt7AutoFaceLastKey='';
+          setDebug('auto face waiting for new PASS');
+        }
+        return;
+      }
+      var key=[m.snap_hash||'',m.snap_time||m.time||'',m.confidence||0,m.reason||'',m.known_face?'1':'0'].join('|');
       if(!key || key===rt7AutoFaceLastKey) return;
       rt7AutoFaceLastKey=key;
       rt7ShowFaceSnapshot(m);
       setAnswer(rt7FaceResultText_(m,true));
-      setDebug('auto face result '+key);
+      setDebug('auto face PASS result '+key);
     }catch(e){
       // Keep silent to avoid disturbing normal stream UI.
     }finally{
