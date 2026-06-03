@@ -15,7 +15,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_5B_V50N_BASE_FACE_STAGE1';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_0N_MANUAL_END_LISTEN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -217,7 +217,6 @@ let liveStreamState = {
 let cloudState = {
   current_device_id: '#1',
   ai_enabled: false,
-  face_stage1_enabled: false,
   plugins: { motion:true, face:true, doorbell:true, intercom:true },
   last_snapshot: null,
   last_vision: null
@@ -248,32 +247,6 @@ async function proxyToEsp(req, res, espPath, method='GET') {
   }
 }
 
-
-
-// ---------- V5.5B Face Stage1 shell only ----------
-// These routes only toggle ESP32 fast-8081 state. They intentionally do NOT run FACE_GATE, Snapshot, or Railway face match.
-async function rt7Stage1Fast8081_(req, path) {
-  const dev = getCurrentDevice(req);
-  const ipOnly = String(dev.ip || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-  const url = 'http://' + ipOnly + ':8081' + path;
-  const r = await fetch(url, { method:'GET' });
-  const text = await r.text();
-  let data; try { data = JSON.parse(text); } catch (_) { data = { raw:text }; }
-  return { ok:r.ok, status:r.status, url, data };
-}
-app.get('/api/rt7/face_stage1/enable', async (req,res)=>{
-  cloudState.face_stage1_enabled = true;
-  let esp = null; try { esp = await rt7Stage1Fast8081_(req, '/api/motion/enable_fast'); } catch(e) { esp = { ok:false, error:String(e && e.message || e) }; }
-  res.json({ ok:true, version:SERVER_VERSION, face_stage1_enabled:true, heavy_face_gate:false, railway_match:false, esp });
-});
-app.get('/api/rt7/face_stage1/disable', async (req,res)=>{
-  cloudState.face_stage1_enabled = false;
-  let esp = null; try { esp = await rt7Stage1Fast8081_(req, '/api/motion/disable_fast'); } catch(e) { esp = { ok:false, error:String(e && e.message || e) }; }
-  res.json({ ok:true, version:SERVER_VERSION, face_stage1_enabled:false, heavy_face_gate:false, railway_match:false, esp });
-});
-app.get('/api/rt7/face_stage1/state', (req,res)=>{
-  res.json({ ok:true, version:SERVER_VERSION, face_stage1_enabled:!!cloudState.face_stage1_enabled, heavy_face_gate:false, railway_match:false, note:'V5.5B Stage1 only: verify V5.0N intercom audio before adding FACE_GATE.' });
-});
 
 function registerOrUpdateDevice(dev) {
   const devices = readDevices();
@@ -323,8 +296,8 @@ table{width:100%;border-collapse:collapse;background:white}th,td{border-bottom:1
 </style>`;
 
 app.get('/', (req, res) => {
-  res.type('html').send(htmlShell('RT7 Cloud Server V5.5B', `${baseCss}
-<header class="top"><h1>RT7 CLOUD SERVER V5.5B</h1><p>Doorbell + Snapshot + Event Logger + Device Registry + WebSocket</p></header>
+  res.type('html').send(htmlShell('RT7 Cloud Server V4.3', `${baseCss}
+<header class="top"><h1>RT7 CLOUD SERVER V4.3</h1><p>Doorbell + Snapshot + Event Logger + Device Registry + WebSocket</p></header>
 <main class="wrap">
 <section class="card"><h2 class="ok">Server OK</h2><p>Railway Node.js Server is running.</p>
 <a class="btn" href="/rt7_cloud_original_ui_doorbell">原始 UI 雲端門鈴</a>
@@ -590,8 +563,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
-<section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_STAGE1_ON':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
+<section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'AI_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
+<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用AI</button><button id="btnAiOff" class="vbtn vred" type="button">關閉AI</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle ${aiOn?'aiActive':''}" type="button">🎙️</button>AI語音助理</div></section>
@@ -619,16 +592,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
   bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio);
-  bind('btnAiOn', async function(){
-    setAiUi(true,'人臉 Stage1 啟用中（不做辨識，只測音質）');
-    try{ var r=await j('/api/rt7/face_stage1/enable'); setAnswer('人臉 Stage1 已啟用：不做 FACE_GATE、不送 Snapshot'); setDebug('face stage1 on '+JSON.stringify(r).slice(0,180)); }
-    catch(e){ setAnswer('啟用人臉 Stage1 失敗：'+(e.message||e)); }
-  });
-  bind('btnAiOff', async function(){
-    setAiUi(false,'人臉 Stage1 關閉中');
-    try{ var r=await j('/api/rt7/face_stage1/disable'); setAnswer('人臉 Stage1 已關閉'); setDebug('face stage1 off '+JSON.stringify(r).slice(0,180)); }
-    catch(e){ setAnswer('關閉人臉 Stage1 失敗：'+(e.message||e)); }
-  });
+  bind('btnAiOn', function(){ setAiUi(true,'AI 已啟用'); setDebug('ai on'); });
+  bind('btnAiOff', function(){ setAiUi(false,'AI 已關閉'); setDebug('ai off'); });
   bind('btnOpenDoor', async function(){
     setAnswer('開門命令送出中...');
     if(currentStreamMode==='LAN'){
@@ -650,7 +615,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     ai=!!on;
     var b=document.getElementById('aiBadge');
     var v=document.getElementById('btnAiVoice');
-    if(b){ b.textContent=ai?'FACE_STAGE1_ON':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
+    if(b){ b.textContent=ai?'AI_ENABLE':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
     if(v){ if(ai)v.classList.add('aiActive'); else v.classList.remove('aiActive'); }
     if(msg) setAnswer(msg);
   }
