@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4W_FACE_GATE_FAST8081_DISABLE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4W_FACE_GATE_FAST8081_DISABLE_COMPILE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1364,20 +1364,16 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function rt7FaceGateEspEnable(on, silent){
     try{ localStorage.setItem('RT7_FACE_MODE', on ? '1' : '0'); }catch(e){}
     if(on){
-      // V5.4W: enable through 8081 during LAN stream, plus port-80 fallback when idle.
-      rt7EspFast8081('/api/motion/enable_fast');
+      // V5.4W: enable only when the user explicitly presses 啟用人臉.
       rt7EspImgBeacon('/api/motion/config?threshold=1500&cooldown=8000&warmup=1000&face_gate=1&face_threshold=2100&face_min_jpeg=3800&face_center_min_jpeg=3800&face_center_min_motion=1800&face_center_min_candidate=2100&step=31');
       rt7EspImgBeacon('/api/motion/enable');
       try{ rt7Json('/api/rt7/face_gate/auto?mode=on',{method:'POST'}); }catch(_){ }
       try{ rt7Json('/api/rt7/face_gate/toggle?mode=on',{method:'POST'}); }catch(_){ }
     } else {
-      // V5.4W: hard OFF through 8081 while LAN MJPEG occupies port 80; keep port-80 fallback.
-      rt7EspFast8081('/api/motion/disable_fast');
-      rt7EspFast8081('/api/face_gate/off');
+      // V5.4W: hard OFF. Send disable twice/order-safe so stream restart cannot leave FACE_GATE running.
       rt7EspImgBeacon('/api/motion/disable');
       rt7EspImgBeacon('/api/motion/config?enabled=0&face_gate=0');
-      setTimeout(function(){ rt7EspFast8081('/api/motion/disable_fast'); rt7EspFast8081('/api/face_gate/off'); rt7EspImgBeacon('/api/motion/disable'); rt7EspImgBeacon('/api/motion/config?enabled=0&face_gate=0'); }, 250);
-      setTimeout(function(){ rt7EspFast8081('/api/motion/disable_fast'); rt7EspImgBeacon('/api/motion/disable'); }, 900);
+      setTimeout(function(){ rt7EspImgBeacon('/api/motion/disable'); rt7EspImgBeacon('/api/motion/config?enabled=0&face_gate=0'); }, 350);
       try{ rt7Json('/api/rt7/face_gate/auto?mode=off',{method:'POST'}); }catch(_){ }
       try{ rt7Json('/api/rt7/face_gate/toggle?mode=off',{method:'POST'}); }catch(_){ }
       rt7AutoFaceLastKey='';
