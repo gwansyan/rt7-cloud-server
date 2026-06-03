@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4O_FACE_MATCH_THRESHOLD_TUNING';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4P_INTERCOM_FAST_RX_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1414,7 +1414,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7WsIc=null, rt7WsIcOn=false, rt7WsTxActive=false, rt7WsListenActive=false;
   var rt7WsMicStream=null, rt7WsMicCtx=null, rt7WsMicSource=null, rt7WsMicProc=null;
   var rt7WsTxBytes=[], rt7WsSent=0, rt7WsBeginMs=0, rt7WsListenTimer=null;
-  var rt7RxAudioCtx=null, rt7RxPlayAt=0, rt7RxPackets=0, rt7RxBytes=0;
+  var rt7RxAudioCtx=null, rt7RxPlayAt=0, rt7RxPackets=0, rt7RxBytes=0, rt7RxLastMs=0, rt7RxJitterMaxMs=0;
   async function rt7Json(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{})); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }
   async function rt7FaceEnroll(){
     try{
@@ -1617,9 +1617,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       for(var i=0;i<n;i++){ var lo=u8[i*2], hi=u8[i*2+1]; var s=(hi<<8)|lo; if(s&0x8000)s-=0x10000; f[i]=Math.max(-1,Math.min(1,s/32768)); }
       var buf=rt7RxAudioCtx.createBuffer(1,n,16000); buf.copyToChannel(f,0);
       var src=rt7RxAudioCtx.createBufferSource(); src.buffer=buf; src.connect(rt7RxAudioCtx.destination);
-      var now=rt7RxAudioCtx.currentTime; if(!rt7RxPlayAt || rt7RxPlayAt<now+0.04) rt7RxPlayAt=now+0.04;
+      var wall=Date.now(); var dt=rt7RxLastMs?(wall-rt7RxLastMs):0; rt7RxLastMs=wall; if(dt>rt7RxJitterMaxMs)rt7RxJitterMaxMs=dt;
+      var now=rt7RxAudioCtx.currentTime;
+      // V5.4P: adaptive low-latency jitter buffer for ESP32 -> phone audio.
+      // Keep a small cushion when packet timing is unstable, but do not rebuild audio nodes.
+      var cushion=(dt>80||rt7RxJitterMaxMs>120)?0.11:0.06;
+      if(!rt7RxPlayAt || rt7RxPlayAt<now+cushion) rt7RxPlayAt=now+cushion;
+      if(rt7RxPlayAt>now+0.35) rt7RxPlayAt=now+0.18;
       src.start(rt7RxPlayAt); rt7RxPlayAt += n/16000;
-      rt7RxPackets++; rt7RxBytes+=u8.length; if(rt7RxPackets<=5||rt7RxPackets%20===0)setDebug('ESP32→手機 PCM packets='+rt7RxPackets+' bytes='+rt7RxBytes);
+      rt7RxPackets++; rt7RxBytes+=u8.length; if(rt7RxPackets<=5||rt7RxPackets%20===0)setDebug('ESP32→手機 PCM packets='+rt7RxPackets+' bytes='+rt7RxBytes+' jitterMax='+rt7RxJitterMaxMs+'ms');
     }catch(e){ setDebug('rx play failed '+(e.message||e)); }
   }
   var rt7WsPausedVideoMode=null;
@@ -1666,7 +1672,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
     var paused=false;
     if(!rt7WsIcOn){ paused=rt7RememberAndPauseVideoForTalk(); if(paused) await rt7Delay(260); }
-    rt7WsIcOn=true; rt7WsTxActive=true; rt7WsListenActive=false; rt7WsSent=0; rt7WsTxBytes=[]; rt7RxPackets=0; rt7RxBytes=0; rt7RxPlayAt=0;
+    rt7WsIcOn=true; rt7WsTxActive=true; rt7WsListenActive=false; rt7WsSent=0; rt7WsTxBytes=[]; rt7RxPackets=0; rt7RxBytes=0; rt7RxPlayAt=0; rt7RxLastMs=0; rt7RxJitterMaxMs=0;
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.add('talking');
     rt7SetTalkIcon_('talk'); setAnswer('對講中：手機 → ESP32，放開後接收 ESP32 聲音');
     var ok=await rt7WsEnsureSocket(label||'ptt_down'); if(!ok){ setAnswer('對講連線失敗'); return; }
