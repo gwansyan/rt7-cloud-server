@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4R_INTERCOM_ESP_TX_512_FRAME_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4V_FACE_GATE_BOOT_OFF_PERSIST_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -221,8 +221,8 @@ let cloudState = {
   plugins: { motion:true, face:true, doorbell:true, intercom:true },
   last_snapshot: null,
   last_vision: null,
-  face_gate_enabled: true,
-  face_gate_auto_enabled: true,
+  face_gate_enabled: false,
+  face_gate_auto_enabled: false,
   face_gate_auto_busy: false,
   face_gate_auto_last_ms: 0,
   face_gate_auto_cooldown_ms: 8000,
@@ -1330,7 +1330,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
-  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var ai=${aiOn?'true':'false'}; var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
+  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
+  // V5.4V: FACE_GATE is default OFF and persistent. UI state alone must never re-enable it.
+  setTimeout(function(){ setAiUi(ai); rt7FaceGateEspEnable(ai, true); }, 600);
   function setAnswer(t){ if(answer) answer.textContent=t; }
   function setDoorText(t, bell){ var d=document.getElementById('doorText'); var box=d?d.closest('.door'):null; if(d)d.textContent=t; if(box){ if(bell) box.classList.add('bellNow'); else box.classList.remove('bellNow'); } }
   function showDoorbellInline(){ setDoorText('⚠️ 有人按門鈴', true); setAnswer('收到門鈴提示音'); playDingdong(); setTimeout(function(){ setDoorText('最後：'+new Date().toLocaleTimeString('zh-TW'), false); }, 8000); }
@@ -1350,15 +1352,22 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function startAuto(){ try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','AUTO');}catch(e){} if(videoWanted && (currentStreamMode==='LAN' || currentStreamMode==='CLOUD')){ setAnswer(currentStreamMode==='LAN'?'內網直連影像模式':'雲端遠端影像模式'); return; } videoWanted=true; currentStreamMode='AUTO'; clearLanReconnect(); setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先用單張 snapshot 測內網，成功才開啟 LAN 串流'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done||!videoWanted)return; done=true; try{probe.src='about:blank'}catch(e){} cloud(); },1800); probe.onload=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} lan(); }; probe.onerror=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} cloud(); }; probe.src='http://'+ip+'/api/camera/snapshot?_probe_once='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function rt7EspImgBeacon(path){ try{ var im=new Image(); im.src='http://'+ip+path+(path.indexOf('?')>=0?'&':'?')+'_='+Date.now(); }catch(e){} }
-  function rt7FaceGateEspEnable(on){
+  function rt7FaceGateEspEnable(on, silent){
+    try{ localStorage.setItem('RT7_FACE_MODE', on ? '1' : '0'); }catch(e){}
     if(on){
+      // V5.4V: enable only when the user explicitly presses 啟用人臉.
       rt7EspImgBeacon('/api/motion/config?threshold=1500&cooldown=8000&warmup=1000&face_gate=1&face_threshold=2100&face_min_jpeg=3800&face_center_min_jpeg=3800&face_center_min_motion=1800&face_center_min_candidate=2100&step=31');
       rt7EspImgBeacon('/api/motion/enable');
       try{ rt7Json('/api/rt7/face_gate/auto?mode=on',{method:'POST'}); }catch(_){ }
+      try{ rt7Json('/api/rt7/face_gate/toggle?mode=on',{method:'POST'}); }catch(_){ }
     } else {
-      rt7EspImgBeacon('/api/motion/config?face_gate=0');
+      // V5.4V: hard OFF. Send disable twice/order-safe so stream restart cannot leave FACE_GATE running.
       rt7EspImgBeacon('/api/motion/disable');
+      rt7EspImgBeacon('/api/motion/config?enabled=0&face_gate=0');
+      setTimeout(function(){ rt7EspImgBeacon('/api/motion/disable'); rt7EspImgBeacon('/api/motion/config?enabled=0&face_gate=0'); }, 350);
       try{ rt7Json('/api/rt7/face_gate/auto?mode=off',{method:'POST'}); }catch(_){ }
+      try{ rt7Json('/api/rt7/face_gate/toggle?mode=off',{method:'POST'}); }catch(_){ }
+      rt7AutoFaceLastKey='';
     }
   }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
@@ -1384,7 +1393,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     // V5.4L: this top button controls FACE_GATE auto recognition only, not AI voice.
-    ai=!!on;
+    ai=!!on; try{localStorage.setItem('RT7_FACE_MODE', ai?'1':'0');}catch(e){}
     var b=document.getElementById('aiBadge');
     if(b){ b.textContent=ai?'FACE_ENABLE':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
     if(msg) setAnswer(msg);
@@ -1404,10 +1413,10 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer('AI語音助理失敗：'+e.message);
       setDebug('voice_vision failed');
     }finally{
-      setAiUi(false);
+      // V5.4V: AI voice must not change FACE_GATE mode.
     }
   }
-  function startVoiceAsk(){ setAiUi(true,'請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
+  function startVoiceAsk(){ setAnswer('請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
 
   // V5.0K: 雙向 PTT WebSocket 對講。
@@ -1477,6 +1486,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   async function rt7PollAutoFaceResult_(){
     if(rt7AutoFacePollBusy) return;
+    if(!ai) return;
     if(rt7FaceBusy || rt7FaceMatchBusy || rt7FaceRestoreBusy) return;
     rt7AutoFacePollBusy=true;
     try{
