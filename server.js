@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4L_FACE_MODE_UI_CLEANUP';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_4M_FACE_UI_MINIMAL';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1290,9 +1290,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnFaceCheck" class="vbtn vgreen" type="button">人臉辨識</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
+<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
-<section id="faceSnapBox" class="faceSnapBox"><div class="faceSnapTitle">辨識使用 Snapshot</div><img id="faceSnapImg" alt="face snapshot"><div id="faceSnapMeta" class="faceSnapMeta"></div></section>
+
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
@@ -1413,6 +1413,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
 
   function rt7ShowFaceSnapshot(j){
+    // V5.4M: UI minimal mode - hide Snapshot debug block on phone page.
+    return;
+
     try{
       var box=document.getElementById('faceSnapBox'); var im=document.getElementById('faceSnapImg'); var meta=document.getElementById('faceSnapMeta');
       if(!box||!im||!j) return;
