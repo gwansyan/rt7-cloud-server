@@ -1356,6 +1356,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7EspImgBeacon('/api/motion/enable');
       try{ rt7Json('/api/rt7/face_gate/auto?mode=on',{method:'POST'}); }catch(_){ }
     } else {
+      rt7EspImgBeacon('/api/motion/config?face_gate=0');
       rt7EspImgBeacon('/api/motion/disable');
       try{ rt7Json('/api/rt7/face_gate/auto?mode=off',{method:'POST'}); }catch(_){ }
     }
