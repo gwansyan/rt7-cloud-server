@@ -18,7 +18,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E1_MUSIC_MP3_BROWSER_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E2_MUSIC_WAV_PCM_PROXY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1539,8 +1539,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var r=await j('/api/rt7/music/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:q,device_id:selectedDeviceId||'#1'})});
       if(!r.ok){ setAnswer('音樂準備失敗：'+(r.error||'unknown')); return; }
       var urls=[];
-      if(r.mp3_url) urls.push(['MP3',r.mp3_url]);
       if(r.wav_url) urls.push(['WAV',r.wav_url]);
+      if(r.mp3_url) urls.push(['MP3',r.mp3_url]);
       if(!urls.length) urls.push(['MP3','/api/music/mp3?q='+encodeURIComponent(q)]);
       var lastErr=null;
       for(var i=0;i<urls.length;i++){
@@ -2425,6 +2425,49 @@ function rt7ResolveFfmpegBin_() {
   try { const f = require('ffmpeg-static'); if (f) return f; } catch(_) {}
   return 'ffmpeg';
 }
+
+function rt7Pcm16ToWav_(pcmBuf, sampleRate=16000, channels=1) {
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * channels * bitsPerSample / 8;
+  const blockAlign = channels * bitsPerSample / 8;
+  const h = Buffer.alloc(44);
+  h.write('RIFF',0); h.writeUInt32LE(36 + pcmBuf.length,4); h.write('WAVE',8);
+  h.write('fmt ',12); h.writeUInt32LE(16,16); h.writeUInt16LE(1,20);
+  h.writeUInt16LE(channels,22); h.writeUInt32LE(sampleRate,24); h.writeUInt32LE(byteRate,28);
+  h.writeUInt16LE(blockAlign,32); h.writeUInt16LE(bitsPerSample,34);
+  h.write('data',36); h.writeUInt32LE(pcmBuf.length,40);
+  return Buffer.concat([h, pcmBuf]);
+}
+
+async function rt7FetchMusicProxy_(q, format) {
+  // Node-RED V35 主要提供 /api/music/pcm。瀏覽器不能直接播放裸 PCM，
+  // 所以 Railway 端把 PCM 包成 WAV，手機 Chrome 才能播放。
+  const enc = encodeURIComponent(q);
+  const candidates = [];
+  if (format === 'pcm') candidates.push({ fmt:'pcm', url:MUSIC_PROXY_BASE_URL + '/api/music/pcm?q=' + enc });
+  else if (format === 'wav') {
+    candidates.push({ fmt:'wav', url:MUSIC_PROXY_BASE_URL + '/api/music/wav?q=' + enc });
+    candidates.push({ fmt:'pcm_as_wav', url:MUSIC_PROXY_BASE_URL + '/api/music/pcm?q=' + enc });
+  } else if (format === 'mp3') {
+    candidates.push({ fmt:'mp3', url:MUSIC_PROXY_BASE_URL + '/api/music/mp3?q=' + enc });
+    candidates.push({ fmt:'wav_as_mp3_fallback', url:MUSIC_PROXY_BASE_URL + '/api/music/wav?q=' + enc });
+    candidates.push({ fmt:'pcm_as_wav_fallback', url:MUSIC_PROXY_BASE_URL + '/api/music/pcm?q=' + enc });
+  }
+  let lastErr = null;
+  for (const c of candidates) {
+    try {
+      const r = await fetch(c.url, { cache:'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const b = Buffer.from(await r.arrayBuffer());
+      if (b.length < 4096) throw new Error('payload too small');
+      if (c.fmt.indexOf('pcm_as_wav') >= 0) return { buffer: rt7Pcm16ToWav_(b), actual:'wav_from_pcm' };
+      if (c.fmt === 'wav_as_mp3_fallback') return { buffer:b, actual:'wav' };
+      return { buffer:b, actual:c.fmt };
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr || new Error('music proxy failed');
+}
+
 function rt7Run_(cmd, args, opt={}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, Object.assign({ windowsHide:true }, opt));
@@ -2446,14 +2489,12 @@ async function rt7EnsureMusicCached_(q, format) {
     return { file:target, cache:'hit', query:q };
   }
   if (MUSIC_PROXY_BASE_URL) {
-    const url = MUSIC_PROXY_BASE_URL + (format === 'mp3' ? '/api/music/mp3?q=' : (format === 'wav' ? '/api/music/wav?q=' : '/api/music/pcm?q=')) + encodeURIComponent(q);
-    const r = await fetch(url, { cache:'no-store' });
-    if (!r.ok) throw new Error('music proxy HTTP ' + r.status);
-    const b = Buffer.from(await r.arrayBuffer());
-    if (b.length < 4096) throw new Error('music proxy payload too small');
-    fs.writeFileSync(target, b);
+    const gotProxy = await rt7FetchMusicProxy_(q, format);
+    const actualExt = gotProxy.actual === 'wav_from_pcm' || gotProxy.actual === 'wav' ? 'wav' : (gotProxy.actual === 'mp3' ? 'mp3' : ext);
+    const actualTarget = actualExt === ext ? target : rt7MusicFile_(q, actualExt);
+    fs.writeFileSync(actualTarget, gotProxy.buffer);
     rt7CleanupMusicCache_();
-    return { file:target, cache:'proxy', query:q };
+    return { file:actualTarget, cache:'proxy_'+gotProxy.actual, query:q, actual:actualExt };
   }
   const work = path.join(MUSIC_CACHE_DIR, 'work_' + Date.now() + '_' + rt7MusicSafeName_(q));
   fs.mkdirSync(work, { recursive:true });
@@ -2488,9 +2529,11 @@ async function rt7MusicStream_(req, res, format) {
     res.setHeader('Content-Length', String(stat.size));
     res.setHeader('X-RT7-Music-Query', encodeURIComponent(got.query));
     res.setHeader('X-RT7-Music-Cache', got.cache);
-    if (format === 'mp3') res.setHeader('Content-Type','audio/mpeg');
-    else if (format === 'wav') res.setHeader('Content-Type','audio/wav');
+    const outExt = (got.actual || format || '').toLowerCase();
+    if (outExt === 'mp3' || (format === 'mp3' && !got.actual)) res.setHeader('Content-Type','audio/mpeg');
+    else if (outExt === 'wav' || outExt === 'wav_from_pcm' || format === 'wav') res.setHeader('Content-Type','audio/wav');
     else { res.setHeader('Content-Type','application/octet-stream'); res.setHeader('X-DAZI-Audio','pcm_s16le;rate=16000;channels=1'); }
+    res.setHeader('X-RT7-Music-Actual-Format', outExt || format);
     fs.createReadStream(got.file).pipe(res);
   } catch (e) {
     appendEvent({ type:'music_error', query:q, format, message:String(e.message||e).slice(0,240) });
@@ -2498,7 +2541,7 @@ async function rt7MusicStream_(req, res, format) {
   }
 }
 app.get('/api/music/health', (req,res)=>{
-  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E music: AI voice command -> /api/music/wav or /api/music/pcm; cache hit -> direct response; cache miss -> yt-dlp -> ffmpeg -> cache', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_mp3:'/api/music/mp3?q=歌曲名稱', endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
+  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E2 music: AI voice command -> browser WAV; Node-RED V35 PCM proxy can be wrapped to WAV; cache hit -> direct response', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_mp3:'/api/music/mp3?q=歌曲名稱', endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
 });
 app.get('/api/music/mp3', (req,res)=>rt7MusicStream_(req,res,'mp3'));
 app.get('/api/music/pcm', (req,res)=>rt7MusicStream_(req,res,'pcm'));
@@ -2510,7 +2553,7 @@ app.post('/api/rt7/music/play', async (req,res)=>{
   const q = rt7NormalizeMusicQuery_(req.body?.q || req.body?.song || req.query.q || req.query.song || '');
   if (!q) return res.json({ ok:false, version:SERVER_VERSION, mode:'MUSIC', error:'missing q', answer:'請說要播放的歌曲名稱。' });
   appendEvent({ type:'music_play', query:q, message:'AI music play '+q });
-  res.json({ ok:true, version:SERVER_VERSION, mode:'MUSIC', query:q, answer:'準備播放：'+q, mp3_url:'/api/music/mp3?q='+encodeURIComponent(q), wav_url:'/api/music/wav?q='+encodeURIComponent(q), pcm_url:'/api/music/pcm?q='+encodeURIComponent(q), note:'手機頁優先使用 MP3 播放；ESP32 可用 PCM endpoint。' });
+  res.json({ ok:true, version:SERVER_VERSION, mode:'MUSIC', query:q, answer:'準備播放：'+q, mp3_url:'/api/music/mp3?q='+encodeURIComponent(q), wav_url:'/api/music/wav?q='+encodeURIComponent(q), pcm_url:'/api/music/pcm?q='+encodeURIComponent(q), note:'手機頁優先使用 WAV 播放；Node-RED V35 的 PCM 會由 Railway 包成 WAV。' });
 });
 
 async function openAiChat(messages, max_tokens=360) {
