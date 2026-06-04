@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_5A_MERGE_V50N_INTERCOM_FACE_GATE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_5C_RAILWAY_AUDIO_QUEUE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1646,8 +1646,16 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     setDebug('WS PTT mic ready sr='+Math.round(rt7WsMicCtx.sampleRate));
   }
   function rt7RxEnsureAudio(){ var AC=window.AudioContext||window.webkitAudioContext; if(!rt7RxAudioCtx) rt7RxAudioCtx=new AC({sampleRate:16000}); if(rt7RxAudioCtx.state!=='running') rt7RxAudioCtx.resume().catch(function(){}); }
+  function rt7RxResetQueue_(){
+    // V5.5C: Railway phone player fix. Reset scheduled playback tail so old PCM
+    // does not play again after PTT release/stop, which sounded like echo.
+    rt7RxPlayAt=0; rt7RxLastMs=0; rt7RxJitterMaxMs=0;
+  }
   function rt7RxPlayPcm(ab){
     try{
+      // V5.5C: play ESP32->phone PCM only in listen mode. During phone TX or after stop,
+      // discard late binary frames instead of scheduling them into AudioContext.
+      if(!rt7WsListenActive){ rt7RxResetQueue_(); return; }
       rt7RxEnsureAudio();
       var u8=new Uint8Array(ab); var n=(u8.length/2)|0; if(n<=0)return;
       var f=new Float32Array(n);
@@ -1656,13 +1664,13 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var src=rt7RxAudioCtx.createBufferSource(); src.buffer=buf; src.connect(rt7RxAudioCtx.destination);
       var wall=Date.now(); var dt=rt7RxLastMs?(wall-rt7RxLastMs):0; rt7RxLastMs=wall; if(dt>rt7RxJitterMaxMs)rt7RxJitterMaxMs=dt;
       var now=rt7RxAudioCtx.currentTime;
-      // V5.4P: adaptive low-latency jitter buffer for ESP32 -> phone audio.
-      // Keep a small cushion when packet timing is unstable, but do not rebuild audio nodes.
-      var cushion=(dt>80||rt7RxJitterMaxMs>120)?0.11:0.06;
+      // V5.5C: fixed low-latency queue like the Node-RED player; do not let adaptive
+      // cushion accumulate 0.1s+ tails that cause tremble/echo after speech ends.
+      var cushion=0.02;
       if(!rt7RxPlayAt || rt7RxPlayAt<now+cushion) rt7RxPlayAt=now+cushion;
-      if(rt7RxPlayAt>now+0.35) rt7RxPlayAt=now+0.18;
+      if(rt7RxPlayAt>now+0.12) rt7RxPlayAt=now+0.04;
       src.start(rt7RxPlayAt); rt7RxPlayAt += n/16000;
-      rt7RxPackets++; rt7RxBytes+=u8.length; if(rt7RxPackets<=5||rt7RxPackets%20===0)setDebug('ESP32→手機 PCM packets='+rt7RxPackets+' bytes='+rt7RxBytes+' jitterMax='+rt7RxJitterMaxMs+'ms');
+      rt7RxPackets++; rt7RxBytes+=u8.length; if(rt7RxPackets<=5||rt7RxPackets%20===0)setDebug('ESP32→手機 PCM[V55C] packets='+rt7RxPackets+' bytes='+rt7RxBytes+' dt='+dt+' jitterMax='+rt7RxJitterMaxMs+'ms');
     }catch(e){ setDebug('rx play failed '+(e.message||e)); }
   }
   var rt7WsPausedVideoMode=null;
@@ -1701,7 +1709,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7WsIc.onopen=function(){ setDebug('WS duplex open'); rt7WsSendJson({role:'phone_pcm',type:'intercom_probe',device_id:'#1',label:label||'open',t:Date.now(),phase:'V50P'}); finish(true); };
       rt7WsIc.onmessage=function(ev){ try{ if(typeof ev.data==='string'){ if(ev.data.indexOf('trace')>=0||ev.data.indexOf('relay')>=0) setDebug(ev.data.slice(0,180)); } else if(ev.data){ rt7RxPlayPcm(ev.data); } }catch(e){ setDebug('ws msg err '+(e.message||e)); } };
       rt7WsIc.onerror=function(){ setDebug('WS duplex error'); finish(false); };
-      rt7WsIc.onclose=function(){ rt7WsIcOn=false; rt7WsTxActive=false; rt7WsListenActive=false; rt7WsStopMic(); var a=document.getElementById('btnEndTalk'); if(a)a.classList.remove('talking'); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); };
+      rt7WsIc.onclose=function(){ rt7WsIcOn=false; rt7WsTxActive=false; rt7WsListenActive=false; rt7RxResetQueue_(); rt7WsStopMic(); var a=document.getElementById('btnEndTalk'); if(a)a.classList.remove('talking'); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); };
       setTimeout(function(){ finish(rt7WsIc&&rt7WsIc.readyState===1); }, 2200);
     });
   }
@@ -1709,7 +1717,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
     var paused=false;
     if(!rt7WsIcOn){ paused=rt7RememberAndPauseVideoForTalk(); if(paused) await rt7Delay(260); }
-    rt7WsIcOn=true; rt7WsTxActive=true; rt7WsListenActive=false; rt7WsSent=0; rt7WsTxBytes=[]; rt7RxPackets=0; rt7RxBytes=0; rt7RxPlayAt=0; rt7RxLastMs=0; rt7RxJitterMaxMs=0;
+    rt7WsIcOn=true; rt7WsTxActive=true; rt7WsListenActive=false; rt7WsSent=0; rt7WsTxBytes=[]; rt7RxPackets=0; rt7RxBytes=0; rt7RxResetQueue_();
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.add('talking');
     rt7SetTalkIcon_('talk'); setAnswer('對講中：手機 → ESP32，放開後接收 ESP32 聲音');
     var ok=await rt7WsEnsureSocket(label||'ptt_down'); if(!ok){ setAnswer('對講連線失敗'); return; }
@@ -1721,7 +1729,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     rt7WsTxActive=false; rt7WsStopMic();
     rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'ptt_up',sent:rt7WsSent,t:Date.now(),phase:'V50P'});
     rt7WsSendJson({role:'phone_pcm',type:'esp_begin',device_id:'#1',label:label||'ptt_up_listen',t:Date.now(),phase:'V50P'});
-    rt7WsListenActive=true; rt7RxEnsureAudio();
+    rt7WsListenActive=true; rt7RxResetQueue_(); rt7RxEnsureAudio();
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.remove('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.remove('talking');
     rt7SetTalkIcon_('listen'); setAnswer('接收中：ESP32 → 手機；按下 ◼ 對講 才結束');
     if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
@@ -1731,6 +1739,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function rt7WsPttStop(label){
     if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
     rt7WsTxActive=false; rt7WsListenActive=false;
+    rt7RxResetQueue_();
     rt7WsSendJson({role:'phone_pcm',type:'esp_end',device_id:'#1',label:label||'stop',t:Date.now(),phase:'V50P'});
     rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'stop',sent:rt7WsSent,t:Date.now(),phase:'V50P'});
     setTimeout(function(){ try{ if(rt7WsIc)rt7WsIc.close(); }catch(_){} rt7WsIc=null; rt7WsStopMic(); rt7WsIcOn=false; rt7RestoreVideoAfterTalk(); },120);
