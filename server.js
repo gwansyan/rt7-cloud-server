@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_5C_RAILWAY_AUDIO_QUEUE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_5D_RAILWAY_RX_SOFT_NOISE_GATE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1659,7 +1659,27 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7RxEnsureAudio();
       var u8=new Uint8Array(ab); var n=(u8.length/2)|0; if(n<=0)return;
       var f=new Float32Array(n);
-      for(var i=0;i<n;i++){ var lo=u8[i*2], hi=u8[i*2+1]; var s=(hi<<8)|lo; if(s&0x8000)s-=0x10000; f[i]=Math.max(-1,Math.min(1,s/32768)); }
+      // V5.5D: phone-side soft noise gate for ESP32->phone receive path only.
+      // Keep V5.5C queue fix, but suppress very low-level mic noise when ESP32 side is quiet.
+      var sum2=0, peak=0;
+      for(var i=0;i<n;i++){
+        var lo=u8[i*2], hi=u8[i*2+1];
+        var s=(hi<<8)|lo; if(s&0x8000)s-=0x10000;
+        var x=Math.max(-1,Math.min(1,s/32768));
+        f[i]=x;
+        var ax=Math.abs(x); if(ax>peak)peak=ax; sum2 += x*x;
+      }
+      var rms=Math.sqrt(sum2/Math.max(1,n));
+      // Do not schedule near-silent packets; this removes the small hiss heard while listening.
+      if(rms < 0.0045 && peak < 0.018){
+        rt7RxPackets++; rt7RxBytes+=u8.length;
+        if(rt7RxPackets<=5||rt7RxPackets%30===0)setDebug('ESP32→手機 PCM[V55D] muted noise rms='+(rms*1000).toFixed(1)+' peak='+(peak*1000).toFixed(1));
+        return;
+      }
+      // Soft knee: quiet packets are attenuated rather than hard-cut, preserving speech starts.
+      var gain=1.0;
+      if(rms < 0.012){ gain = Math.max(0.18, Math.min(1.0, (rms-0.0045)/(0.012-0.0045))); }
+      if(gain < 0.999){ for(var gi=0; gi<n; gi++) f[gi] *= gain; }
       var buf=rt7RxAudioCtx.createBuffer(1,n,16000); buf.copyToChannel(f,0);
       var src=rt7RxAudioCtx.createBufferSource(); src.buffer=buf; src.connect(rt7RxAudioCtx.destination);
       var wall=Date.now(); var dt=rt7RxLastMs?(wall-rt7RxLastMs):0; rt7RxLastMs=wall; if(dt>rt7RxJitterMaxMs)rt7RxJitterMaxMs=dt;
@@ -1670,7 +1690,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(!rt7RxPlayAt || rt7RxPlayAt<now+cushion) rt7RxPlayAt=now+cushion;
       if(rt7RxPlayAt>now+0.12) rt7RxPlayAt=now+0.04;
       src.start(rt7RxPlayAt); rt7RxPlayAt += n/16000;
-      rt7RxPackets++; rt7RxBytes+=u8.length; if(rt7RxPackets<=5||rt7RxPackets%20===0)setDebug('ESP32→手機 PCM[V55C] packets='+rt7RxPackets+' bytes='+rt7RxBytes+' dt='+dt+' jitterMax='+rt7RxJitterMaxMs+'ms');
+      rt7RxPackets++; rt7RxBytes+=u8.length; if(rt7RxPackets<=5||rt7RxPackets%20===0)setDebug('ESP32→手機 PCM[V55D] packets='+rt7RxPackets+' bytes='+rt7RxBytes+' dt='+dt+' jitterMax='+rt7RxJitterMaxMs+'ms');
     }catch(e){ setDebug('rx play failed '+(e.message||e)); }
   }
   var rt7WsPausedVideoMode=null;
