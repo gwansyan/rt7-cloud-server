@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F1_MOBILE_MUSIC_AUTOPLAY_LINK';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F2_MUSIC_PLAYER_AUTO_RETURN';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1331,7 +1331,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6F Mobile Music</title>
+<title>RT7 Cloud Original UI V5.6F2 Music Auto Return</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1518,17 +1518,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }catch(e){
       setDebug('music first video fallback search '+e.message);
     }
-    var opened=null;
-    try{ opened=window.open(url,'_blank'); }catch(e){}
-    if(!opened){
-      setAnswer('手機播放音樂：'+query+'。請點這裡開啟：'+url);
-      try{ location.href=url; }catch(e){}
+    var vid='';
+    try{ var mm=String(url||'').match(/[?&]v=([a-zA-Z0-9_-]{11})/); if(mm) vid=mm[1]; }catch(e){}
+    if(vid){
+      var playerUrl='/rt7_music_player?video_id='+encodeURIComponent(vid)+'&q='+encodeURIComponent(query)+'&return='+encodeURIComponent('/rt7_cloud_original_ui_doorbell');
+      setAnswer('已找到第一個 YouTube 影片，進入 RT7 音樂播放器。播放結束會自動返回門禁頁。');
+      try{ location.href=playerUrl; }catch(e){ window.open(playerUrl,'_blank'); }
     }else{
-      if(url.indexOf('/watch?v=')>=0){
-        setAnswer('已開啟第一個 YouTube 影片：'+query+'。若手機限制自動播放，請在 YouTube 畫面按一次播放。');
-      }else{
-        setAnswer('無法取得第一個影片，已開啟 YouTube 搜尋：'+query);
-      }
+      setAnswer('無法取得第一個影片，改開 YouTube 搜尋：'+query);
+      try{ location.href=url; }catch(e){ window.open(url,'_blank'); }
     }
   }
   async function routeVoiceQuestion(text){
@@ -2439,6 +2437,58 @@ app.get('/api/rt7/music/mobile', async (req, res) => {
   const ev = appendEvent({ type:'mobile_music', query:q, target:watch?'watch':'search', message:(watch?'mobile music first video opened: ':'mobile music search opened: ') + q });
   broadcast('mobile_music', ev);
   res.json({ ok:true, version:SERVER_VERSION, action:'mobile_music', query:q, url, watch_url:watch, youtube_url:yt, youtube_music_url:ytm, fallback:!watch, event:ev });
+});
+
+
+// V5.6F2: RT7 internal YouTube player page. It can detect video end and return to the doorbell page.
+app.get('/rt7_music_player', (req, res) => {
+  const videoId = safeString(req.query.video_id || req.query.v || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 11);
+  const q = safeString(req.query.q || '').slice(0, 120);
+  const returnUrlRaw = safeString(req.query.return || '/rt7_cloud_original_ui_doorbell');
+  const returnUrl = returnUrlRaw.startsWith('/') ? returnUrlRaw : '/rt7_cloud_original_ui_doorbell';
+  if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return res.status(400).send('missing video_id');
+  const h = (v) => String(v || '').replace(/[&<>\"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]));
+  appendEvent({ type:'mobile_music_player', video_id:videoId, query:q, message:'RT7 music player opened: '+(q||videoId) });
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>RT7 Music Player V5.6F2</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;padding:0;background:#06191d;color:#fff;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;min-height:100vh}body{display:flex;flex-direction:column}.top{height:64px;background:#0b252b;display:flex;align-items:center;gap:10px;padding:0 14px}.back{border:0;border-radius:10px;background:#334155;color:#fff;font-size:16px;font-weight:900;padding:10px 14px}.title{font-weight:900;line-height:1.2}.sub{font-size:12px;color:#cbd5e1}.wrap{flex:1;display:flex;flex-direction:column;padding:12px;gap:12px}.playerBox{position:relative;width:100%;background:#000;border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.35);aspect-ratio:16/9}.playerBox iframe,.playerBox #player{position:absolute;inset:0;width:100%;height:100%}.card{background:#102a31;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;line-height:1.45}.btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{border:0;border-radius:12px;color:#fff;font-weight:900;font-size:17px;padding:13px 10px}.green{background:#16a34a}.gray{background:#475569}.red{background:#dc2626}.status{font-weight:900;color:#bbf7d0}.small{font-size:13px;color:#cbd5e1;margin-top:6px}.ytlink{color:#93c5fd;word-break:break-all}
+</style></head><body>
+<header class="top"><button class="back" onclick="goBack()">← 返回</button><div><div class="title">RT7 音樂播放器</div><div class="sub">播放結束會自動返回手機門禁頁</div></div></header>
+<main class="wrap">
+  <section class="playerBox"><div id="player"></div></section>
+  <section class="card"><div class="status" id="status">正在載入 YouTube 播放器...</div><div class="small">歌曲：${h(q || videoId)}</div><div class="small">若手機禁止自動播放，請在影片中按一次播放；播放結束後仍會自動返回。</div></section>
+  <section class="btns"><button class="btn green" onclick="tryPlay()">播放</button><button class="btn red" onclick="goBack()">停止並返回</button></section>
+  <section class="card small">備用連結：<br><a class="ytlink" href="https://www.youtube.com/watch?v=${videoId}">https://www.youtube.com/watch?v=${videoId}</a></section>
+</main>
+<script>
+var VIDEO_ID=${JSON.stringify(videoId)};
+var RETURN_URL=${JSON.stringify(returnUrl)};
+var player=null;
+var returned=false;
+function setStatus(t){var el=document.getElementById('status'); if(el) el.textContent=t;}
+function goBack(){ if(returned) return; returned=true; try{ if(player && player.stopVideo) player.stopVideo(); }catch(e){} location.href=RETURN_URL; }
+function tryPlay(){ try{ if(player && player.playVideo){ player.playVideo(); setStatus('播放中。播放結束後會自動返回。'); } }catch(e){ setStatus('請按影片中央播放鍵。'); } }
+function onYouTubeIframeAPIReady(){
+  player=new YT.Player('player',{
+    videoId:VIDEO_ID,
+    playerVars:{autoplay:1,playsinline:1,rel:0,enablejsapi:1,origin:location.origin},
+    events:{
+      onReady:function(ev){ setStatus('播放器已就緒，嘗試自動播放...'); try{ ev.target.playVideo(); }catch(e){ setStatus('手機可能禁止自動播放，請按一次播放。'); } },
+      onStateChange:function(ev){
+        if(ev.data===YT.PlayerState.PLAYING) setStatus('播放中。播放結束後會自動返回。');
+        if(ev.data===YT.PlayerState.PAUSED) setStatus('已暫停，可繼續播放或返回。');
+        if(ev.data===YT.PlayerState.ENDED){ setStatus('播放結束，正在返回 RT7 門禁頁...'); setTimeout(goBack,700); }
+      },
+      onError:function(ev){ setStatus('YouTube 播放錯誤：'+ev.data+'。請使用備用連結或返回。'); }
+    }
+  });
+}
+var tag=document.createElement('script'); tag.src='https://www.youtube.com/iframe_api'; document.head.appendChild(tag);
+setTimeout(function(){ if(!player) setStatus('YouTube API 載入較慢，請稍候或按返回。'); },7000);
+</script>
+</body></html>`);
 });
 
 app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
