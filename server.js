@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_5D_RAILWAY_RX_SOFT_NOISE_GATE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6A_MULTI_DEVICE_SELECTOR';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -109,10 +109,19 @@ function rt7IsEspPcmRole_(role) {
 function rt7IsEspPcmClient_(c) {
   return !!c && (rt7IsEspPcmRole_(c.rt7Role) || rt7IsEspPcmRole_(c.rt7PcmRole) || c.rt7PcmClient === true);
 }
-function rt7SendToEspIntercom_(payload, opts) {
+function rt7NormDeviceId_(v) { return safeString(v || '').trim() || ''; }
+function rt7DeviceMatches_(clientDeviceId, targetDeviceId) {
+  const t = rt7NormDeviceId_(targetDeviceId);
+  if (!t) return true;
+  const c = rt7NormDeviceId_(clientDeviceId);
+  if (!c) return true; // legacy ESP32 clients without device_id remain compatible
+  return c === t;
+}
+function rt7SendToEspIntercom_(payload, opts, targetDeviceId) {
   let n = 0;
   for (const c of wss.clients) {
     if (c.readyState !== WebSocket.OPEN) continue;
+    if (!rt7DeviceMatches_(c.rt7DeviceId, targetDeviceId)) continue;
     if (rt7IsEspPcmClient_(c)) {
       try { c.send(payload, opts || {}); n++; } catch (_) {}
     }
@@ -121,11 +130,12 @@ function rt7SendToEspIntercom_(payload, opts) {
 }
 
 // V5.0N: Relay ESP32 mic PCM back only to phone/intercom clients.
-// This is required for release-to-listen duplex mode.
-function rt7SendToPhoneIntercom_(payload, opts) {
+// V5.6A: If both sides carry device_id, relay only to phones watching the same device.
+function rt7SendToPhoneIntercom_(payload, opts, targetDeviceId) {
   let n = 0;
   for (const c of wss.clients) {
     if (c.readyState !== WebSocket.OPEN) continue;
+    if (!rt7DeviceMatches_(c.rt7DeviceId, targetDeviceId)) continue;
     if (rt7IsPhonePcmRole_(c.rt7Role)) {
       try { c.send(payload, opts || {}); n++; } catch (_) {}
     }
@@ -1305,13 +1315,13 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.4L</title>
+<title>RT7 Cloud Original UI V5.6A</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
 a,button,input,select{pointer-events:auto!important;touch-action:manipulation!important}.noTouch,.video img,.emptyVideo,.badge{pointer-events:none!important}
 .top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900}.hamb{font-size:34px}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:34px}
-.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}
+.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827;flex:1;min-width:0}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}.deviceAdd{height:42px;width:46px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-weight:900;font-size:22px}
 .video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22)}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
@@ -1320,7 +1330,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
-<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
+<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="#1">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div><button id="btnAddDevice" class="deviceAdd" type="button">＋</button></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
@@ -1330,13 +1340,53 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
-  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
+  var ip=${JSON.stringify(ip)}; var currentDeviceId="#1"; var DEVICES=[]; var mode=${JSON.stringify(mode)}; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
   // V5.4W: FACE_GATE is default OFF and persistent. UI state alone must never re-enable it.
   setTimeout(function(){ setAiUi(ai); rt7FaceGateEspEnable(ai, true); }, 600);
   function setAnswer(t){ if(answer) answer.textContent=t; }
   function setDoorText(t, bell){ var d=document.getElementById('doorText'); var box=d?d.closest('.door'):null; if(d)d.textContent=t; if(box){ if(bell) box.classList.add('bellNow'); else box.classList.remove('bellNow'); } }
   function showDoorbellInline(){ setDoorText('⚠️ 有人按門鈴', true); setAnswer('收到門鈴提示音'); playDingdong(); setTimeout(function(){ setDoorText('最後：'+new Date().toLocaleTimeString('zh-TW'), false); }, 8000); }
   function setDebug(t){ /* V5.0E: hidden debug; no UI repaint */ }
+  function rt7CurrentDevice(){
+    for(var i=0;i<DEVICES.length;i++){ if((DEVICES[i].id||'')===currentDeviceId) return DEVICES[i]; }
+    return {id:currentDeviceId||'#1', name:'RT7 ESP32-S3-CAM', ip:ip};
+  }
+  function rt7DeviceParam(){ return 'device_id='+encodeURIComponent(currentDeviceId||'#1'); }
+  function rt7DeviceLabel(d){ return (d.id||'')+' / '+(d.name||'RT7')+(d.ip?' / '+d.ip:''); }
+  function rt7ApplyDevice(d, restartVideo){
+    if(!d) return;
+    currentDeviceId=(d.id||'#1');
+    if(d.ip) ip=String(d.ip).replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+    try{ localStorage.setItem('RT7_DEVICE_ID', currentDeviceId); localStorage.setItem('RT7_DEVICE_IP_'+currentDeviceId, ip); }catch(e){}
+    try{ rt7Json('/api/rt7/device/set?device_id='+encodeURIComponent(currentDeviceId), {method:'POST'}); }catch(e){}
+    setAnswer('已選擇 '+rt7DeviceLabel(d));
+    if(videoWanted && restartVideo){ stopVideo(); setTimeout(startAuto, 180); }
+  }
+  async function rt7LoadDevices(){
+    try{
+      var j=await rt7Json('/api/devices');
+      DEVICES=(j.devices||[]).filter(function(d){return d && (d.id||d.ip);});
+    }catch(e){ DEVICES=[]; }
+    if(!DEVICES.length) DEVICES=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true},{id:'#2',name:'#2 影像對講門禁',ip:'',enabled:true},{id:'#3',name:'#3 影像對講門禁',ip:'',enabled:true},{id:'#4',name:'#4 影像對講門禁',ip:'',enabled:true}];
+    try{ currentDeviceId=localStorage.getItem('RT7_DEVICE_ID')||currentDeviceId||'#1'; }catch(e){}
+    var sel=document.getElementById('deviceSel');
+    if(sel){
+      sel.innerHTML=DEVICES.map(function(d){ return '<option value="'+(d.id||'')+'">'+rt7DeviceLabel(d)+'</option>'; }).join('');
+      if(!DEVICES.some(function(d){return (d.id||'')===currentDeviceId;})) currentDeviceId=(DEVICES[0].id||'#1');
+      sel.value=currentDeviceId;
+      var d=rt7CurrentDevice(); if(d.ip) ip=String(d.ip).replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+      sel.onchange=function(){ var id=sel.value; var d=DEVICES.find(function(x){return (x.id||'')===id;}); rt7ApplyDevice(d,true); };
+    }
+  }
+  async function rt7AddDevice(){
+    var id=prompt('輸入設備編號，例如 #2：','#2'); if(!id) return; id=id.trim();
+    var name=prompt('輸入設備名稱：', id+' 影像對講門禁')||id;
+    var newIp=prompt('輸入 ESP32 IP，例如 192.168.0.180：','')||''; newIp=newIp.trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+    var list=DEVICES.filter(function(d){return (d.id||'')!==id;});
+    list.push({id:id,name:name,ip:newIp,enabled:true});
+    try{ var r=await rt7Json('/api/devices/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({devices:list})}); DEVICES=r.devices||list; }catch(e){ DEVICES=list; }
+    currentDeviceId=id; await rt7LoadDevices(); rt7ApplyDevice(rt7CurrentDevice(),true);
+  }
   function tone(freq, delay, dur){ if(!audioCtx) return; try{ setTimeout(function(){ var o=audioCtx.createOscillator(); var g=audioCtx.createGain(); o.frequency.value=freq; g.gain.value=0.22; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(function(){try{o.stop()}catch(e){}}, dur); }, delay); }catch(e){} }
   function playDingdong(){ if(!audioOK) return; tone(880,0,180); tone(660,260,220); }
   async function enableDoorbellAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume(); audioOK=true; audioTried=true; setAnswer('門鈴提示音已啟用'); setDebug('audio enabled'); playDingdong(); return true; }catch(e){ setAnswer('提示音啟用失敗：'+(e.message||e)); setDebug('audio failed'); return false; } }
@@ -1346,8 +1396,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var videoWanted=false; var currentStreamMode='IDLE'; var lanReconnectTimer=null; var lanRetryCount=0; var lanProbeDone=false;
   function clearLanReconnect(){ if(lanReconnectTimer){ clearTimeout(lanReconnectTimer); lanReconnectTimer=null; } }
   function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='等待影像串流<br><span class="small">自動判斷：內網直連 / Railway 雲端</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
-  function cloud(){ videoWanted=true; currentStreamMode='CLOUD'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','CLOUD');}catch(e){} clearLanReconnect(); if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img){ img.onerror=function(){ if(!videoWanted || currentStreamMode!=='CLOUD') return; setAnswer('雲端影像暫停，5 秒後重連'); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(videoWanted && currentStreamMode==='CLOUD'){ img.src='/api/rt7/camera/stream.mjpg?_cloud_re='+Date.now(); } },5000); }; img.onload=function(){ setDebug('cloud mjpeg loaded'); }; img.src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now(); } setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
-  function lan(){ videoWanted=true; currentStreamMode='LAN'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','LAN');}catch(e){} clearLanReconnect(); lanRetryCount=0; if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ img.style.backgroundImage='url("/api/rt7/camera/latest.jpg?_hold='+Date.now()+'")'; img.style.backgroundSize='cover'; img.style.backgroundPosition='center'; img.onerror=function(){ if(!videoWanted || currentStreamMode!=='LAN') return; lanRetryCount++; setAnswer('LAN 串流暫停，5 秒後重連（保留畫面，不清空黑屏）'); setDebug('lan onerror retry='+lanRetryCount); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(!videoWanted || currentStreamMode!=='LAN') return; // Do NOT clear img.src here. Clearing src causes Android Chrome black screen. Replace source directly.
+  function cloud(){ videoWanted=true; currentStreamMode='CLOUD'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','CLOUD');}catch(e){} clearLanReconnect(); if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img){ img.onerror=function(){ if(!videoWanted || currentStreamMode!=='CLOUD') return; setAnswer('雲端影像暫停，5 秒後重連'); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(videoWanted && currentStreamMode==='CLOUD'){ img.src='/api/rt7/camera/stream.mjpg?'+rt7DeviceParam()+'&_cloud_re='+Date.now(); } },5000); }; img.onload=function(){ setDebug('cloud mjpeg loaded'); }; img.src='/api/rt7/camera/stream.mjpg?'+rt7DeviceParam()+'&_cloud='+Date.now(); } setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
+  function lan(){ videoWanted=true; currentStreamMode='LAN'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','LAN');}catch(e){} clearLanReconnect(); lanRetryCount=0; if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ img.style.backgroundImage='url("/api/rt7/camera/latest.jpg?'+rt7DeviceParam()+'&_hold='+Date.now()+'")'; img.style.backgroundSize='cover'; img.style.backgroundPosition='center'; img.onerror=function(){ if(!videoWanted || currentStreamMode!=='LAN') return; lanRetryCount++; setAnswer('LAN 串流暫停，5 秒後重連（保留畫面，不清空黑屏）'); setDebug('lan onerror retry='+lanRetryCount); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(!videoWanted || currentStreamMode!=='LAN') return; // Do NOT clear img.src here. Clearing src causes Android Chrome black screen. Replace source directly.
         var next='http://'+ip+'/api/camera/stream?_lan_re='+Date.now(); try{ img.src=next; }catch(e){} },5000); }; img.onload=function(){ lanRetryCount=0; setDebug('lan mjpeg loaded'); }; var first='http://'+ip+'/api/camera/stream?_lan='+Date.now(); try{ img.src=first; }catch(e){} } setAnswer('內網直連影像模式'); setDebug('lan stream '+ip); }
   function startAuto(){ try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','AUTO');}catch(e){} if(videoWanted && (currentStreamMode==='LAN' || currentStreamMode==='CLOUD')){ setAnswer(currentStreamMode==='LAN'?'內網直連影像模式':'雲端遠端影像模式'); return; } videoWanted=true; currentStreamMode='AUTO'; clearLanReconnect(); setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先用單張 snapshot 測內網，成功才開啟 LAN 串流'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done||!videoWanted)return; done=true; try{probe.src='about:blank'}catch(e){} cloud(); },1800); probe.onload=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} lan(); }; probe.onerror=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} cloud(); }; probe.src='http://'+ip+'/api/camera/snapshot?_probe_once='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
@@ -1397,7 +1447,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
   }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
-  bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio);
+  bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio); bind('btnAddDevice', rt7AddDevice); rt7LoadDevices();
   bind('btnAiOn', async function(){ setAiUi(true,'人臉辨識已啟用：靠近鏡頭會自動辨識'); rt7FaceGateEspEnable(true); setDebug('face mode on'); });
   bind('btnAiOff', async function(){ setAiUi(false,'人臉辨識已關閉'); rt7FaceGateEspEnable(false); setDebug('face mode off'); });
   bind('btnOpenDoor', async function(){
@@ -1414,7 +1464,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
         return;
       }catch(e){ setDebug('fast 8081 failed '+e.message); }
     }
-    try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent('#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
+    try{ var r=await j('/api/rt7/door/open?'+rt7DeviceParam()); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
   });
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
@@ -1456,7 +1506,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{
       var name=(document.getElementById('regName')&&document.getElementById('regName').value||'').trim()||'未命名';
       setAnswer('人臉註冊中：'+name);
-      var j=await rt7Json('/api/rt7/face/enroll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,device_id:'#1'})});
+      var j=await rt7Json('/api/rt7/face/enroll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,device_id:currentDeviceId||'#1'})});
       setAnswer(j.ok ? ('已註冊人臉：'+(j.enrolled&&j.enrolled.name||name)) : ('註冊失敗：'+(j.answer||j.error||'NO_SNAPSHOT')));
     }catch(e){ setAnswer('註冊失敗：'+(e.message||e)); }
   }
@@ -1516,7 +1566,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7FaceBusy || rt7FaceMatchBusy || rt7FaceRestoreBusy) return;
     rt7AutoFacePollBusy=true;
     try{
-      var s=await rt7Json('/api/rt7/face_gate/state?_='+Date.now());
+      var s=await rt7Json('/api/rt7/face_gate/state?'+rt7DeviceParam()+'&_='+Date.now());
       var m=s && s.last_face_match;
       if(!m) return;
       var isAuto = !!(m.auto_face_gate || m.trigger_source==='esp32_face_gate' || (m.snap_source||'').indexOf('face_gate_auto')>=0);
@@ -1600,7 +1650,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       }
 
       setAnswer('人臉辨識中...');
-      var j=await rt7Json('/api/rt7/face/match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pause_stream:true,no_stream_reload:true,mode:'face_result_no_stream_reload_v52n'})});
+      var j=await rt7Json('/api/rt7/face/match?'+rt7DeviceParam(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pause_stream:true,no_stream_reload:true,mode:'face_result_no_stream_reload_v52n',device_id:currentDeviceId||'#1'})});
       rt7ShowFaceSnapshot(j);
       if(j.ok && j.known_face) {
         keepResult=((j.reason==='BACKLIGHT_PASS')?'逆光但人臉通過：':'人臉通過：')+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜SNAP='+(j.snap_hash||'')+'｜ENGINE='+(j.engine||'railway_local')+'｜CACHE='+(j.cache_mode||'')+'｜MS='+(j.match_ms||'')+'｜REASON='+(j.reason||'FACE_OK');
@@ -1724,9 +1774,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function rt7WsEnsureSocket(label){
     if(rt7WsIc && rt7WsIc.readyState===1) return true;
     return new Promise(function(resolve){
-      rt7WsIc=new WebSocket(rt7WsUrl()+'?role=phone_pcm&device_id=%231&phase=V50P'); rt7WsIc.binaryType='arraybuffer';
+      rt7WsIc=new WebSocket(rt7WsUrl()+'?role=phone_pcm&device_id='+encodeURIComponent(currentDeviceId||'#1')+'&phase=V56A'); rt7WsIc.binaryType='arraybuffer';
       var done=false; function finish(ok){ if(done)return; done=true; resolve(ok); }
-      rt7WsIc.onopen=function(){ setDebug('WS duplex open'); rt7WsSendJson({role:'phone_pcm',type:'intercom_probe',device_id:'#1',label:label||'open',t:Date.now(),phase:'V50P'}); finish(true); };
+      rt7WsIc.onopen=function(){ setDebug('WS duplex open'); rt7WsSendJson({role:'phone_pcm',type:'intercom_probe',device_id:currentDeviceId||'#1',label:label||'open',t:Date.now(),phase:'V56A'}); finish(true); };
       rt7WsIc.onmessage=function(ev){ try{ if(typeof ev.data==='string'){ if(ev.data.indexOf('trace')>=0||ev.data.indexOf('relay')>=0) setDebug(ev.data.slice(0,180)); } else if(ev.data){ rt7RxPlayPcm(ev.data); } }catch(e){ setDebug('ws msg err '+(e.message||e)); } };
       rt7WsIc.onerror=function(){ setDebug('WS duplex error'); finish(false); };
       rt7WsIc.onclose=function(){ rt7WsIcOn=false; rt7WsTxActive=false; rt7WsListenActive=false; rt7RxResetQueue_(); rt7WsStopMic(); var a=document.getElementById('btnEndTalk'); if(a)a.classList.remove('talking'); var b=document.getElementById('btnVoice'); if(b)b.classList.remove('talking'); };
@@ -1741,14 +1791,14 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.add('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.add('talking');
     rt7SetTalkIcon_('talk'); setAnswer('對講中：手機 → ESP32，放開後接收 ESP32 聲音');
     var ok=await rt7WsEnsureSocket(label||'ptt_down'); if(!ok){ setAnswer('對講連線失敗'); return; }
-    rt7WsSendJson({role:'phone_pcm',type:'intercom_begin',device_id:'#1',label:label||'ptt_down',t:Date.now(),phase:'V50P'});
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_begin',device_id:currentDeviceId||'#1',label:label||'ptt_down',t:Date.now(),phase:'V56A'});
     try{ await rt7WsStartMic(); }catch(err){ setAnswer('手機麥克風啟用失敗：'+(err.message||err)); rt7WsPttStop('mic_failed'); }
   }
   function rt7WsPttUp(label){
     if(!rt7WsIcOn) return;
     rt7WsTxActive=false; rt7WsStopMic();
-    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'ptt_up',sent:rt7WsSent,t:Date.now(),phase:'V50P'});
-    rt7WsSendJson({role:'phone_pcm',type:'esp_begin',device_id:'#1',label:label||'ptt_up_listen',t:Date.now(),phase:'V50P'});
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:currentDeviceId||'#1',label:label||'ptt_up',sent:rt7WsSent,t:Date.now(),phase:'V56A'});
+    rt7WsSendJson({role:'phone_pcm',type:'esp_begin',device_id:currentDeviceId||'#1',label:label||'ptt_up_listen',t:Date.now(),phase:'V56A'});
     rt7WsListenActive=true; rt7RxResetQueue_(); rt7RxEnsureAudio();
     var e=document.getElementById('btnEndTalk'); if(e)e.classList.remove('talking'); var vm=document.getElementById('btnVoice'); if(vm)vm.classList.remove('talking');
     rt7SetTalkIcon_('listen'); setAnswer('接收中：ESP32 → 手機；按下 ◼ 對講 才結束');
@@ -1760,8 +1810,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7WsListenTimer){ clearTimeout(rt7WsListenTimer); rt7WsListenTimer=null; }
     rt7WsTxActive=false; rt7WsListenActive=false;
     rt7RxResetQueue_();
-    rt7WsSendJson({role:'phone_pcm',type:'esp_end',device_id:'#1',label:label||'stop',t:Date.now(),phase:'V50P'});
-    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:'#1',label:label||'stop',sent:rt7WsSent,t:Date.now(),phase:'V50P'});
+    rt7WsSendJson({role:'phone_pcm',type:'esp_end',device_id:currentDeviceId||'#1',label:label||'stop',t:Date.now(),phase:'V56A'});
+    rt7WsSendJson({role:'phone_pcm',type:'intercom_end',device_id:currentDeviceId||'#1',label:label||'stop',sent:rt7WsSent,t:Date.now(),phase:'V56A'});
     setTimeout(function(){ try{ if(rt7WsIc)rt7WsIc.close(); }catch(_){} rt7WsIc=null; rt7WsStopMic(); rt7WsIcOn=false; rt7RestoreVideoAfterTalk(); },120);
     rt7SetTalkIcon_('idle'); setAnswer('對講結束');
   }
@@ -2550,7 +2600,7 @@ wss.on('connection', (ws, req) => {
           rt7WsTrace.espPcmPackets++;
           rt7WsTrace.espPcmBytes += buf.length;
           rt7WsTrace.lastEspPcmTime = nowIso();
-          const pn = rt7SendToPhoneIntercom_(buf, { binary:true });
+          const pn = rt7SendToPhoneIntercom_(buf, { binary:true }, ws.rt7DeviceId);
           if (pn > 0) {
             rt7WsTrace.phoneRxPackets++;
             rt7WsTrace.phoneRxBytes += buf.length;
@@ -2570,7 +2620,7 @@ wss.on('connection', (ws, req) => {
           rt7WsTrace.phonePcmPackets++;
           rt7WsTrace.phonePcmBytes += buf.length;
           rt7WsTrace.lastPhonePcmTime = nowIso();
-          const n = rt7SendToEspIntercom_(buf, { binary:true });
+          const n = rt7SendToEspIntercom_(buf, { binary:true }, ws.rt7DeviceId);
           if (n > 0) {
             rt7WsTrace.relayPcmPackets++;
             rt7WsTrace.relayPcmBytes += buf.length;
@@ -2598,7 +2648,7 @@ wss.on('connection', (ws, req) => {
       if (msg && rt7IsPhonePcmRole_(ws.rt7Role) && (msg.type === 'intercom_begin' || msg.type === 'intercom_end' || msg.type === 'intercom_ping' || msg.type === 'intercom_probe' || msg.type === 'esp_begin' || msg.type === 'esp_end' || msg.type === 'intercom_listen')) {
         if (msg.type === 'intercom_begin') rt7AudioHold_(8000);
         if (msg.type === 'intercom_end') rt7AudioHold_(3500);
-        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg)));
+        const n = rt7SendToEspIntercom_(JSON.stringify(Object.assign({ relay_time:Date.now() }, msg)), undefined, ws.rt7DeviceId || msg.device_id || msg.device);
         try { ws.send(JSON.stringify({ ok:true, type:'intercom_control_relay', control:msg.type, esp:n, state:rt7IntercomWsState_() })); } catch (_) {}
       }
     } catch (e) {
