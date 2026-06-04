@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F2_MUSIC_PLAYER_AUTO_RETURN';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G_MAIN_DOOR_FAST_BELL_FAST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -410,8 +410,8 @@ app.post('/api/rt7/doorbell/event', (req, res) => handleDoorbell(req, res, 'comp
 app.get('/api/rt7/doorbell/event', (req, res) => handleDoorbell(req, res, 'compat_rt7_event_get'));
 app.post('/api/doorbell', (req, res) => handleDoorbell(req, res, 'cloud_v3'));
 app.get('/api/doorbell', (req, res) => handleDoorbell(req, res, 'cloud_v3_get'));
-app.get('/api/rt7/doorbell/state', (req, res) => res.json({ ok: true, state: doorbellState }));
-app.get('/api/doorbell/state', (req, res) => res.json({ ok: true, state: doorbellState }));
+app.get('/api/rt7/doorbell/state', (req, res) => { res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate'); res.json({ ok: true, state: doorbellState }); });
+app.get('/api/doorbell/state', (req, res) => { res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate'); res.json({ ok: true, state: doorbellState }); });
 
 // ---------- Event Logger ----------
 app.post('/api/events/log', (req, res) => {
@@ -1471,22 +1471,39 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio);
   bind('btnAiOn', async function(){ setAiUi(true,'人臉辨識已啟用：靠近鏡頭會自動辨識'); rt7FaceGateEspEnable(true); setDebug('face mode on'); });
   bind('btnAiOff', async function(){ setAiUi(false,'人臉辨識已關閉'); rt7FaceGateEspEnable(false); setDebug('face mode off'); });
-  bind('btnOpenDoor', async function(){
-    setAnswer('開門命令送出中...');
-    if(currentStreamMode==='LAN'){
-      // HTTPS page cannot reliably fetch() HTTP ESP32 due mixed-content rules.
-      // Use an Image beacon; browsers allow LAN image GET and ESP32 8081 handles it while MJPEG occupies port 80.
-      try{
-        var beacon=new Image();
-        beacon.onload=function(){ setDebug('door fast 8081 beacon loaded'); };
-        beacon.onerror=function(){ setDebug('door fast 8081 beacon sent/error ok'); };
-        beacon.src='http://'+ip+':8081/api/door/open_fast?_door='+Date.now();
-        setAnswer('內網開門');
-        return;
-      }catch(e){ setDebug('fast 8081 failed '+e.message); }
+  function rt7DoorOpenBeacon_(url, tag){
+    try{
+      var im=new Image();
+      im.onload=function(){ setDebug('door beacon ok '+tag); };
+      im.onerror=function(){ setDebug('door beacon sent '+tag); };
+      im.src=url+(url.indexOf('?')>=0?'&':'?')+'_door='+Date.now()+'&tag='+encodeURIComponent(tag||'mobile');
+      return true;
+    }catch(e){ setDebug('door beacon failed '+tag+' '+(e.message||e)); return false; }
+  }
+  var rt7DoorLastTapMs=0;
+  async function rt7OpenDoorFastMain_(){
+    var now=Date.now();
+    if(now-rt7DoorLastTapMs<900) return;
+    rt7DoorLastTapMs=now;
+    setAnswer('開門命令已送出');
+    var host=rt7CleanHost(ip);
+    if(host){
+      // V5.6G: main-page fast path. Send LAN beacons immediately; do not wait for Railway queue.
+      // 8081 is ticked inside ESP32 MJPEG/intercom loop and is the most immediate path while streaming.
+      rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open_fast','lan8081_open_fast');
+      setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open','lan8081_open'); }, 80);
+      // Port 80 fallback for cases where stream is not occupying the camera server.
+      setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+'/api/door/open','lan80_open'); }, 160);
+      setAnswer('內網快速開門命令已送出');
+    } else {
+      setAnswer('找不到目前設備 IP，改用雲端開門');
     }
-    try{ var r=await j('/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')); setAnswer('外網開門'); setDebug('door open cloud '+JSON.stringify(r).slice(0,160)); }catch(e){ setAnswer('開門失敗：'+e.message); }
-  });
+    // Cloud queue is only backup; it must not block the button response.
+    try{
+      fetch('/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&fast_backup=1&_='+Date.now(),{cache:'no-store',keepalive:true}).catch(function(){});
+    }catch(e){}
+  }
+  bind('btnOpenDoor', rt7OpenDoorFastMain_);
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     // V5.4L: this top button controls FACE_GATE auto recognition only, not AI voice.
@@ -1896,8 +1913,39 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     endBtn.addEventListener('pointerup', stop, {passive:false});
   })();
   var lastCount=null;
-  async function pollDoor(){ try{ var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'}); var jj=await r.json(); var st=jj.state||jj; if(st&&typeof st.count==='number'){ if(lastCount===null) lastCount=st.count; if(st.count!==lastCount){ lastCount=st.count; showDoorbellInline(); } } }catch(e){} setTimeout(pollDoor,2500); }
-  pollDoor();
+  function rt7HandleDoorbellFast_(payload){
+    try{
+      var p=payload&&payload.payload?payload.payload:payload;
+      var c=Number((p&&p.count) || (p&&p.state&&p.state.count) || 0);
+      if(c && (lastCount===null || c>lastCount)) lastCount=c;
+      showDoorbellInline();
+    }catch(e){ showDoorbellInline(); }
+  }
+  async function pollDoor(){
+    try{
+      var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'});
+      var jj=await r.json(); var st=jj.state||jj;
+      if(st&&typeof st.count==='number'){
+        if(lastCount===null) lastCount=st.count;
+        else if(st.count!==lastCount){ lastCount=st.count; showDoorbellInline(); }
+      }
+    }catch(e){}
+    setTimeout(pollDoor,500);
+  }
+  function rt7DoorbellWsFast_(){
+    try{
+      var w=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?role=viewer&device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&fast=doorbell');
+      w.onmessage=function(ev){
+        try{
+          if(typeof ev.data!=='string') return;
+          var m=JSON.parse(ev.data);
+          if(m && m.type==='doorbell') rt7HandleDoorbellFast_(m);
+        }catch(e){}
+      };
+      w.onclose=function(){ setTimeout(rt7DoorbellWsFast_,1200); };
+    }catch(e){ setTimeout(rt7DoorbellWsFast_,2500); }
+  }
+  pollDoor(); rt7DoorbellWsFast_();
 
   // V5.0D: Phone sleep / foreground-background auto recovery, based on original Node-RED design.
   // - Uses Screen Wake Lock when user starts video or taps page.
