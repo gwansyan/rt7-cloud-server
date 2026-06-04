@@ -18,7 +18,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E2_MUSIC_WAV_PCM_PROXY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E3_MUSIC_DIRECT_DEVICE_PLAY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1530,26 +1530,67 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     rt7MusicAudio.onerror=function(){ setAnswer('音樂播放失敗：瀏覽器無法播放 '+label+' 音訊'); };
     await rt7MusicAudio.play();
   }
+  function rt7CurrentDeviceIp_(){
+    try{
+      var sel=document.getElementById('deviceSelect');
+      if(sel && sel.selectedIndex>=0){
+        var opt=sel.options[sel.selectedIndex];
+        var dip=(opt && (opt.getAttribute('data-ip')||opt.dataset.ip)) || '';
+        if(dip) return String(dip).replace(/^https?:\/\//i,'').replace(/\/.*$/,'');
+      }
+    }catch(e){}
+    return String(ip||'').replace(/^https?:\/\//i,'').replace(/\/.*$/,'');
+  }
+  async function rt7TryDeviceMusicPlay(q){
+    // Railway 在雲端，不能直接連回家中 192.168.x.x 的 Node-RED/ESP32。
+    // 因此 Railway 下載失敗時，改由手機瀏覽器直接呼叫目前選擇設備的 /api/music/play。
+    var dip=rt7CurrentDeviceIp_();
+    if(!dip) throw new Error('no device ip');
+    var enc=encodeURIComponent(q);
+    var urls=[];
+    try{ var saved=localStorage.getItem('RT7_MUSIC_BASE_URL')||''; if(saved) urls.push(saved.replace(/\/$/,'') + '/api/music/play?q=' + enc); }catch(e){}
+    urls.push('https://' + dip + '/api/music/play?q=' + enc);
+    urls.push('http://' + dip + '/api/music/play?q=' + enc);
+    var lastErr=null;
+    for(var i=0;i<urls.length;i++){
+      try{
+        setDebug('device music play '+urls[i]);
+        var r=await fetch(urls[i] + (urls[i].indexOf('?')>=0?'&':'?') + '_=' + Date.now(), { cache:'no-store', mode:'cors' });
+        var txt=await r.text().catch(function(){return ''});
+        if(!r.ok) throw new Error('HTTP '+r.status+' '+txt.slice(0,80));
+        try{ var jj=JSON.parse(txt); if(jj && jj.ok===false) throw new Error(jj.error||jj.message||'device music failed'); }catch(parseErr){ if(String(parseErr.message||'').indexOf('device music failed')>=0) throw parseErr; }
+        setAnswer('已送出播放音樂到目前設備：'+q);
+        return true;
+      }catch(e){ lastErr=e; setDebug('device music failed '+(e.message||e)); }
+    }
+    throw lastErr || new Error('device music play failed');
+  }
   async function rt7PlayMusic(q){
     q=(q||'').trim();
     if(!q){ setAnswer('請說歌曲名稱，例如：播放 五月天 溫柔'); return; }
     setAnswer('準備播放音樂：'+q+'（第一次可能需要等待下載快取）');
     setDebug('music request '+q);
+    var lastErr=null;
     try{
       var r=await j('/api/rt7/music/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:q,device_id:selectedDeviceId||'#1'})});
-      if(!r.ok){ setAnswer('音樂準備失敗：'+(r.error||'unknown')); return; }
-      var urls=[];
-      if(r.wav_url) urls.push(['WAV',r.wav_url]);
-      if(r.mp3_url) urls.push(['MP3',r.mp3_url]);
-      if(!urls.length) urls.push(['MP3','/api/music/mp3?q='+encodeURIComponent(q)]);
-      var lastErr=null;
-      for(var i=0;i<urls.length;i++){
-        try{ await rt7TryAudioPlay(urls[i][1],q,urls[i][0]); return; }catch(e){ lastErr=e; setDebug('music '+urls[i][0]+' failed '+(e.message||e)); }
+      if(r && r.ok){
+        var urls=[];
+        if(r.wav_url) urls.push(['WAV',r.wav_url]);
+        if(r.mp3_url) urls.push(['MP3',r.mp3_url]);
+        if(!urls.length) urls.push(['MP3','/api/music/mp3?q='+encodeURIComponent(q)]);
+        for(var i=0;i<urls.length;i++){
+          try{ await rt7TryAudioPlay(urls[i][1],q,urls[i][0]); return; }catch(e){ lastErr=e; setDebug('music '+urls[i][0]+' failed '+(e.message||e)); }
+        }
+      }else{
+        lastErr=new Error((r && (r.error||r.message)) || 'cloud music prepare failed');
       }
-      throw lastErr || new Error('no supported source');
-    }catch(e){
-      setAnswer('音樂播放失敗：'+(e.message||e)+'。若 Railway 無法下載 YouTube，請在 Railway Variables 設定 MUSIC_PROXY_BASE_URL 指向 Node-RED，例如 http://你的電腦IP:1880');
-      setDebug('music failed '+(e.message||e));
+    }catch(e){ lastErr=e; setDebug('cloud music failed '+(e.message||e)); }
+    try{
+      await rt7TryDeviceMusicPlay(q);
+      return;
+    }catch(e2){
+      setAnswer('音樂播放失敗：Railway 無法下載 YouTube，且目前設備 /api/music/play 也無法呼叫。請確認目前設備或 Node-RED V35 音樂服務已開啟。最後錯誤：'+((e2&&e2.message)||e2||lastErr));
+      setDebug('music failed cloud='+(lastErr&&lastErr.message||lastErr)+' device='+(e2&&e2.message||e2));
     }
   }
   async function routeVoiceQuestion(text){
@@ -2537,11 +2578,11 @@ async function rt7MusicStream_(req, res, format) {
     fs.createReadStream(got.file).pipe(res);
   } catch (e) {
     appendEvent({ type:'music_error', query:q, format, message:String(e.message||e).slice(0,240) });
-    res.status(503).json({ ok:false, version:SERVER_VERSION, error:String(e.message||e), hint:'Railway 需可執行 yt-dlp 與 ffmpeg，或設定 MUSIC_PROXY_BASE_URL 指向既有 Node-RED 音樂服務。' });
+    res.status(503).json({ ok:false, version:SERVER_VERSION, error:String(e.message||e), hint:'Railway 需可執行 yt-dlp 與 ffmpeg；若 Railway 無法下載，手機頁會改由瀏覽器直接呼叫目前設備 /api/music/play。' });
   }
 }
 app.get('/api/music/health', (req,res)=>{
-  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E2 music: AI voice command -> browser WAV; Node-RED V35 PCM proxy can be wrapped to WAV; cache hit -> direct response', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_mp3:'/api/music/mp3?q=歌曲名稱', endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
+  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E3 music: cloud WAV/MP3 first, then browser direct device /api/music/play fallback', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_mp3:'/api/music/mp3?q=歌曲名稱', endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
 });
 app.get('/api/music/mp3', (req,res)=>rt7MusicStream_(req,res,'mp3'));
 app.get('/api/music/pcm', (req,res)=>rt7MusicStream_(req,res,'pcm'));
