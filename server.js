@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F_MOBILE_MUSIC_PLAYER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F1_MOBILE_MUSIC_AUTOPLAY_LINK';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1507,18 +1507,28 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   async function rt7MobileMusicPlay(query){
     query=(query||'').trim();
     if(!query){ setAnswer('請說：播放 歌曲名稱'); return; }
-    setAnswer('手機播放音樂：'+query+'，正在開啟 YouTube 搜尋...');
-    setDebug('mobile music '+query);
-    try{ await j('/api/rt7/music/mobile?q='+encodeURIComponent(query)+'&mode=youtube'); }catch(e){}
-    var url='https://www.youtube.com/results?search_query='+encodeURIComponent(query);
-    // Open in a new tab/app when possible. If blocked, leave a visible link for manual tap.
+    setAnswer('手機播放音樂：'+query+'，正在搜尋第一個 YouTube 影片...');
+    setDebug('mobile music first video '+query);
+    var searchUrl='https://www.youtube.com/results?search_query='+encodeURIComponent(query);
+    var url=searchUrl;
+    try{
+      var r=await j('/api/rt7/music/mobile?q='+encodeURIComponent(query)+'&mode=watch');
+      if(r && r.watch_url) url=r.watch_url;
+      else if(r && r.url) url=r.url;
+    }catch(e){
+      setDebug('music first video fallback search '+e.message);
+    }
     var opened=null;
     try{ opened=window.open(url,'_blank'); }catch(e){}
     if(!opened){
-      setAnswer('手機播放音樂：'+query+'。請點這裡開啟 YouTube：'+url);
+      setAnswer('手機播放音樂：'+query+'。請點這裡開啟：'+url);
       try{ location.href=url; }catch(e){}
     }else{
-      setAnswer('已開啟手機 YouTube 搜尋：'+query+'。不需要 Node-RED。');
+      if(url.indexOf('/watch?v=')>=0){
+        setAnswer('已開啟第一個 YouTube 影片：'+query+'。若手機限制自動播放，請在 YouTube 畫面按一次播放。');
+      }else{
+        setAnswer('無法取得第一個影片，已開啟 YouTube 搜尋：'+query);
+      }
     }
   }
   async function routeVoiceQuestion(text){
@@ -2389,18 +2399,46 @@ app.post('/api/rt7/vision/qa', handleVisionQa);
 app.get('/api/rt7/phase9d/vision_qa_ping', (req,res)=>res.json({ok:true, version:SERVER_VERSION, openai_key:!!safeString(process.env.OPENAI_API_KEY).trim(), latest_snapshot:getSnapshotMeta_(), last_vision:cloudState.last_vision}));
 app.get('/api/rt7/vision/state', (req,res)=>res.json({ok:true, version:SERVER_VERSION, openai_key:!!safeString(process.env.OPENAI_API_KEY).trim(), latest_snapshot:getSnapshotMeta_(), last_vision:cloudState.last_vision}));
 
-// V5.6F: Mobile music player.  No Node-RED required.
-// The phone opens YouTube search / YouTube Music search from the AI voice command.
-app.get('/api/rt7/music/mobile', (req, res) => {
+// V5.6F1: Mobile music player first-video link.  No Node-RED required.
+// The phone asks Railway to resolve the first YouTube video, then opens the watch page.
+async function rt7FindFirstYoutubeVideo_(q) {
+  q = safeString(q).trim();
+  if (!q) return '';
+  const searchUrl = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(q);
+  try {
+    const r = await fetch(searchUrl, {
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'accept-language': 'zh-TW,zh;q=0.9,en;q=0.8'
+      }
+    });
+    const html = await r.text();
+    const ids = [];
+    let m;
+    const re1 = /\"videoId\":\"([a-zA-Z0-9_-]{11})\"/g;
+    while ((m = re1.exec(html)) && ids.length < 20) ids.push(m[1]);
+    const re2 = /watch\?v=([a-zA-Z0-9_-]{11})/g;
+    while ((m = re2.exec(html)) && ids.length < 20) ids.push(m[1]);
+    for (const id of ids) {
+      if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return 'https://www.youtube.com/watch?v=' + id;
+    }
+  } catch (e) {
+    console.log('[MUSIC][YT_FIRST] fail', e.message);
+  }
+  return '';
+}
+app.get('/api/rt7/music/mobile', async (req, res) => {
   const q = safeString(req.query.q || req.query.query || '').trim();
-  const mode = safeString(req.query.mode || 'youtube').toLowerCase();
+  const mode = safeString(req.query.mode || 'watch').toLowerCase();
   if (!q) return res.status(400).json({ ok:false, version:SERVER_VERSION, error:'missing q' });
   const yt = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(q);
   const ytm = 'https://music.youtube.com/search?q=' + encodeURIComponent(q);
-  const url = mode === 'ytmusic' ? ytm : yt;
-  const ev = appendEvent({ type:'mobile_music', query:q, target:mode, message:'mobile music search opened: ' + q });
+  let watch = '';
+  if (mode === 'watch' || mode === 'first' || mode === 'youtube') watch = await rt7FindFirstYoutubeVideo_(q);
+  const url = watch || (mode === 'ytmusic' ? ytm : yt);
+  const ev = appendEvent({ type:'mobile_music', query:q, target:watch?'watch':'search', message:(watch?'mobile music first video opened: ':'mobile music search opened: ') + q });
   broadcast('mobile_music', ev);
-  res.json({ ok:true, version:SERVER_VERSION, action:'mobile_music', query:q, url, youtube_url:yt, youtube_music_url:ytm, event:ev });
+  res.json({ ok:true, version:SERVER_VERSION, action:'mobile_music', query:q, url, watch_url:watch, youtube_url:yt, youtube_music_url:ytm, fallback:!watch, event:ev });
 });
 
 app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
