@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
 const jpeg = require('jpeg-js');
+const { spawn } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,7 +18,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6D1_C1_BASE_EVENT_DEVICE_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E_AI_MUSIC_PLAYER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1331,7 +1332,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6C</title>
+<title>RT7 Cloud Original UI V5.6E Music</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1495,13 +1496,48 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(b){ b.textContent=ai?'FACE_ENABLE':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
     if(msg) setAnswer(msg);
   }
+  var rt7MusicAudio=null;
+  function rt7IsMusicText(text){
+    text=String(text||'').trim();
+    return /播放音樂|放音樂|播放歌曲|放歌曲|播放|放一首|聽歌|我想聽|想聽|音樂/.test(text);
+  }
+  function rt7MusicQueryFromText(text){
+    var q=String(text||'').trim();
+    q=q.replace(/^請幫我播放|^幫我播放|^請播放|^播放|^放一首|^放|^我想聽|^想聽/g,' ')
+       .replace(/音樂$/g,' ').replace(/歌曲$/g,' ').replace(/這首歌$/g,' ').replace(/一首歌$/g,' ')
+       .replace(/播放|音樂|歌曲|我想聽|想聽|放一首|放/g,' ')
+       .replace(/\s+/g,' ').trim();
+    return q || String(text||'').trim();
+  }
+  async function rt7PlayMusic(q){
+    q=(q||'').trim();
+    if(!q){ setAnswer('請說歌曲名稱，例如：播放 五月天 溫柔'); return; }
+    setAnswer('準備播放音樂：'+q+'（第一次可能需要等待下載快取）');
+    setDebug('music request '+q);
+    try{
+      var r=await j('/api/rt7/music/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:q,device_id:selectedDeviceId||'#1'})});
+      if(!r.ok){ setAnswer('音樂準備失敗：'+(r.error||'unknown')); return; }
+      if(rt7MusicAudio){ try{ rt7MusicAudio.pause(); rt7MusicAudio.src=''; }catch(e){} }
+      rt7MusicAudio=new Audio((r.wav_url||('/api/music/wav?q='+encodeURIComponent(q)))+'&_='+Date.now());
+      rt7MusicAudio.preload='auto';
+      rt7MusicAudio.onplaying=function(){ setAnswer('正在播放：'+q); };
+      rt7MusicAudio.onended=function(){ setAnswer('音樂播放完成：'+q); };
+      rt7MusicAudio.onerror=function(){ setAnswer('音樂播放失敗，請確認 Railway 可執行 yt-dlp/ffmpeg，或設定 MUSIC_PROXY_BASE_URL。'); };
+      await rt7MusicAudio.play();
+    }catch(e){
+      setAnswer('音樂播放失敗：'+e.message);
+      setDebug('music failed '+e.message);
+    }
+  }
   async function routeVoiceQuestion(text){
     text=(text||'').trim();
     if(!text){ setAnswer('沒有收到語音內容，請再按一次 AI語音助理後說話'); setDebug('voice empty'); return; }
+    if(rt7IsMusicText(text)){ await rt7PlayMusic(rt7MusicQueryFromText(text)); return; }
     setAnswer('你說：'+text+'，AI 分析中...');
     setDebug('voice question: '+text);
     try{
       var r=await j('/api/rt7/phase9j/voice_vision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,mode:'auto'})});
+      if(r.mode==='MUSIC' && (r.query||r.wav_url)){ await rt7PlayMusic(r.query||text); return; }
       var ans=r.answer||r.error||'AI 無回應';
       setAnswer(ans);
       speakAnswer(ans);
@@ -2306,6 +2342,149 @@ app.get('/api/rt7/return_fix2/enable', (req,res)=>{ cloudState.ai_enabled=true; 
 app.post('/api/rt7/return_fix2/enable', (req,res)=>{ cloudState.ai_enabled=true; res.json({ok:true, ai_enabled:true}); });
 app.get('/api/rt7/return_fix2/disable', (req,res)=>{ cloudState.ai_enabled=false; res.json({ok:true, ai_enabled:false}); });
 
+
+// ---------- V5.6E AI Music Player (Railway / optional Node-RED compatible) ----------
+const MUSIC_CACHE_DIR = process.env.RT7_MUSIC_CACHE_DIR || path.join(DATA_DIR, 'music_cache');
+const MUSIC_KEEP_COUNT = Number(process.env.RT7_MUSIC_KEEP_COUNT || 20);
+const MUSIC_PROXY_BASE_URL = safeString(process.env.MUSIC_PROXY_BASE_URL || process.env.NODE_RED_MUSIC_BASE_URL || '').replace(/\/$/, '');
+
+function rt7EnsureMusicDir_() {
+  ensureDataDir();
+  if (!fs.existsSync(MUSIC_CACHE_DIR)) fs.mkdirSync(MUSIC_CACHE_DIR, { recursive:true });
+}
+function rt7MusicSafeName_(q) {
+  return safeString(q).trim()
+    .replace(/[^\u4e00-\u9fffa-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60) || 'music';
+}
+function rt7NormalizeMusicQuery_(q) {
+  return safeString(q).trim()
+    .replace(/[^\u4e00-\u9fff\u3400-\u4dbfa-zA-Z0-9\s_\-().，。！？!?'"]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function rt7DetectMusicCommand_(text) {
+  let t = safeString(text).trim();
+  if (!t) return { isMusic:false, query:'' };
+  const low = t.toLowerCase();
+  const words = ['播放音樂','放音樂','播放歌曲','放歌曲','播放','放一首','聽歌','我想聽','想聽','唱歌','音樂'];
+  let hit = words.some(w => t.includes(w) || low.includes(w.toLowerCase()));
+  if (!hit) return { isMusic:false, query:'' };
+  let q = t;
+  const pats = [/^請幫我播放/, /^幫我播放/, /^請播放/, /^播放/, /^放一首/, /^放/, /^我想聽/, /^想聽/, /音樂$/g, /歌曲$/g, /這首歌$/g, /一首歌$/g];
+  for (const p of pats) q = q.replace(p, ' ');
+  q = q.replace(/\s+/g, ' ').trim();
+  if (!q || q === t) q = t.replace(/播放|音樂|歌曲|我想聽|想聽|放一首|放/g, ' ').replace(/\s+/g,' ').trim();
+  return { isMusic:true, query:rt7NormalizeMusicQuery_(q || t) };
+}
+function rt7MusicFile_(q, ext) {
+  rt7EnsureMusicDir_();
+  return path.join(MUSIC_CACHE_DIR, rt7MusicSafeName_(q) + '_16000_mono_s16le.' + ext);
+}
+function rt7CleanupMusicCache_() {
+  try {
+    const files = fs.readdirSync(MUSIC_CACHE_DIR)
+      .filter(f => /\.(pcm|wav)$/i.test(f))
+      .map(f => ({ f, p:path.join(MUSIC_CACHE_DIR,f), t:fs.statSync(path.join(MUSIC_CACHE_DIR,f)).mtimeMs }))
+      .sort((a,b)=>b.t-a.t);
+    const keep = Math.max(2, MUSIC_KEEP_COUNT) * 2;
+    for (const x of files.slice(keep)) { try { fs.unlinkSync(x.p); } catch(_){} }
+  } catch (_) {}
+}
+function rt7ResolveYtdlpBin_() {
+  if (process.env.YTDLP_BIN) return process.env.YTDLP_BIN;
+  try { const y = require('youtube-dl-exec'); if (y && y.binary) return y.binary; } catch(_) {}
+  return 'yt-dlp';
+}
+function rt7ResolveFfmpegBin_() {
+  if (process.env.FFMPEG_BIN) return process.env.FFMPEG_BIN;
+  try { const f = require('ffmpeg-static'); if (f) return f; } catch(_) {}
+  return 'ffmpeg';
+}
+function rt7Run_(cmd, args, opt={}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, Object.assign({ windowsHide:true }, opt));
+    let out='', err='';
+    child.stdout.on('data', d => { out += d.toString(); });
+    child.stderr.on('data', d => { err += d.toString(); });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve({ out, err }) : reject(new Error(cmd + ' exit ' + code + ': ' + (err || out).slice(0, 1000))));
+  });
+}
+async function rt7EnsureMusicCached_(q, format) {
+  q = rt7NormalizeMusicQuery_(q);
+  if (!q) throw new Error('missing music query');
+  rt7EnsureMusicDir_();
+  const ext = format === 'wav' ? 'wav' : 'pcm';
+  const target = rt7MusicFile_(q, ext);
+  if (fs.existsSync(target) && fs.statSync(target).size >= 4096) {
+    try { fs.utimesSync(target, new Date(), new Date()); } catch(_) {}
+    return { file:target, cache:'hit', query:q };
+  }
+  if (MUSIC_PROXY_BASE_URL) {
+    const url = MUSIC_PROXY_BASE_URL + (format === 'wav' ? '/api/music/wav?q=' : '/api/music/pcm?q=') + encodeURIComponent(q);
+    const r = await fetch(url, { cache:'no-store' });
+    if (!r.ok) throw new Error('music proxy HTTP ' + r.status);
+    const b = Buffer.from(await r.arrayBuffer());
+    if (b.length < 4096) throw new Error('music proxy payload too small');
+    fs.writeFileSync(target, b);
+    rt7CleanupMusicCache_();
+    return { file:target, cache:'proxy', query:q };
+  }
+  const work = path.join(MUSIC_CACHE_DIR, 'work_' + Date.now() + '_' + rt7MusicSafeName_(q));
+  fs.mkdirSync(work, { recursive:true });
+  const audio = path.join(work, 'audio.m4a');
+  const ytdlp = rt7ResolveYtdlpBin_();
+  const ffmpeg = rt7ResolveFfmpegBin_();
+  try {
+    await rt7Run_(ytdlp, ['--no-playlist','--default-search','ytsearch','--retries','3','--fragment-retries','3','--socket-timeout','20','-f','bestaudio[ext=m4a]/bestaudio/best','-o',audio,'ytsearch1:'+q]);
+    if (!fs.existsSync(audio) || fs.statSync(audio).size < 4096) throw new Error('audio.m4a not created');
+    const args = format === 'wav'
+      ? ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','pcm_s16le','-f','wav','-ac','1','-ar','16000',target]
+      : ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','pcm_s16le','-f','s16le','-ac','1','-ar','16000',target];
+    await rt7Run_(ffmpeg, args);
+    if (!fs.existsSync(target) || fs.statSync(target).size < 4096) throw new Error(ext + ' output too small');
+    rt7CleanupMusicCache_();
+    return { file:target, cache:'miss', query:q };
+  } finally {
+    try { fs.rmSync(work, { recursive:true, force:true }); } catch(_) {}
+  }
+}
+async function rt7MusicStream_(req, res, format) {
+  const rawQ = req.query.q || req.query.song || req.query.music || req.body?.q || req.body?.song || '';
+  const q = rt7NormalizeMusicQuery_(rawQ);
+  if (!q) return res.status(400).json({ ok:false, version:SERVER_VERSION, error:'missing q' });
+  try {
+    appendEvent({ type:'music_request', query:q, format, message:'music request '+q });
+    const got = await rt7EnsureMusicCached_(q, format);
+    const stat = fs.statSync(got.file);
+    res.setHeader('Cache-Control','no-store');
+    res.setHeader('Content-Length', String(stat.size));
+    res.setHeader('X-RT7-Music-Query', encodeURIComponent(got.query));
+    res.setHeader('X-RT7-Music-Cache', got.cache);
+    if (format === 'wav') res.setHeader('Content-Type','audio/wav');
+    else { res.setHeader('Content-Type','application/octet-stream'); res.setHeader('X-DAZI-Audio','pcm_s16le;rate=16000;channels=1'); }
+    fs.createReadStream(got.file).pipe(res);
+  } catch (e) {
+    appendEvent({ type:'music_error', query:q, format, message:String(e.message||e).slice(0,240) });
+    res.status(503).json({ ok:false, version:SERVER_VERSION, error:String(e.message||e), hint:'Railway 需可執行 yt-dlp 與 ffmpeg，或設定 MUSIC_PROXY_BASE_URL 指向既有 Node-RED 音樂服務。' });
+  }
+}
+app.get('/api/music/health', (req,res)=>{
+  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E music: AI voice command -> /api/music/wav or /api/music/pcm; cache hit -> direct response; cache miss -> yt-dlp -> ffmpeg -> cache', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
+});
+app.get('/api/music/pcm', (req,res)=>rt7MusicStream_(req,res,'pcm'));
+app.get('/api/music/wav', (req,res)=>rt7MusicStream_(req,res,'wav'));
+app.get('/api/rt7/music/pcm', (req,res)=>rt7MusicStream_(req,res,'pcm'));
+app.get('/api/rt7/music/wav', (req,res)=>rt7MusicStream_(req,res,'wav'));
+app.post('/api/rt7/music/play', async (req,res)=>{
+  const q = rt7NormalizeMusicQuery_(req.body?.q || req.body?.song || req.query.q || req.query.song || '');
+  if (!q) return res.json({ ok:false, version:SERVER_VERSION, mode:'MUSIC', error:'missing q', answer:'請說要播放的歌曲名稱。' });
+  appendEvent({ type:'music_play', query:q, message:'AI music play '+q });
+  res.json({ ok:true, version:SERVER_VERSION, mode:'MUSIC', query:q, answer:'準備播放：'+q, wav_url:'/api/music/wav?q='+encodeURIComponent(q), pcm_url:'/api/music/pcm?q='+encodeURIComponent(q), note:'手機頁使用 WAV 串流播放；ESP32 可用 PCM endpoint。' });
+});
+
 async function openAiChat(messages, max_tokens=360) {
   const key = safeString(process.env.OPENAI_API_KEY).replace(/^Bearer\s+/i,'').trim();
   if (!key) throw new Error('OPENAI_API_KEY missing');
@@ -2366,12 +2545,17 @@ app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
     const mode = safeString(req.body?.mode || 'auto').toLowerCase();
     const text = req.body?.text ? safeString(req.body.text).trim() : await transcribeAudioB64(req.body?.audio_b64 || '', req.body?.mime || 'audio/webm');
     if (!text) return res.json({ok:false, error:'NO_TRANSCRIPT', answer:'沒有辨識到文字。'});
+    const music = rt7DetectMusicCommand_(text);
     const visionWords = ['鏡頭','畫面','看到','看見','門口','人臉','有人','誰在','照片','影像','辨識'];
     const isVision = mode === 'vision' || (mode !== 'chat' && visionWords.some(w=>text.includes(w)));
     let result;
-    if (isVision) result = await analyzeLatestSnapshot(text);
+    if (music.isMusic && mode !== 'vision') {
+      result = { ok:true, mode:'MUSIC', text, query:music.query, answer:'準備播放：' + music.query, wav_url:'/api/music/wav?q=' + encodeURIComponent(music.query), pcm_url:'/api/music/pcm?q=' + encodeURIComponent(music.query) };
+      appendEvent({ type:'music_voice_route', query:music.query, text, message:'voice routed to music' });
+    }
+    else if (isVision) result = await analyzeLatestSnapshot(text);
     else {
-      const answer = await openAiChat([{role:'system', content:'你是 RT7 AI 語音助理。請用繁體中文、口語、簡潔回答。'}, {role:'user', content:text}], 420);
+      const answer = await openAiChat([{role:'system', content:'你是 RT7 AI 語音助理。請用繁體中文、口語、簡潔回答。若使用者要播放歌曲或音樂，請回覆他可以說「播放 歌曲名稱」。'}, {role:'user', content:text}], 420);
       result = { ok:true, mode:'CHAT', text, answer };
     }
     cloudState.last_voice = Object.assign({ time:nowIso(), ms:Date.now()-started }, result);
