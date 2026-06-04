@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6D1_C1_BASE_EVENT_DEVICE_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E5_D1_SAFE_AI_MUSIC_ADDON';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -441,6 +441,7 @@ app.post('/api/device/register', (req, res) => {
 });
 
 app.get('/api/devices', (req, res) => res.json({ ok: true, version:SERVER_VERSION, devices: readDevices(), file:'data/devices.json' }));
+app.get('/api/music/health', (req, res) => res.json({ ok:true, version:SERVER_VERSION, mode:'D1 safe client-side music add-on; mobile AI voice plays selected local device /api/music/play without changing RT7 buttons', endpoints:['/api/music/health'], note:'說：播放 五月天 溫柔' }));
 app.post('/api/devices/save', (req, res) => {
   const devices = saveDevices(req.body?.devices || req.body || []);
   const event = appendEvent({ type: 'devices_save', device_count: devices.length, message: 'devices saved' });
@@ -1495,51 +1496,64 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(b){ b.textContent=ai?'FACE_ENABLE':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
     if(msg) setAnswer(msg);
   }
-  function rt7IsMusicCmd(text){
-    text=String(text||'').replace(/\s+/g,' ').trim();
-    return /^(請)?(幫我)?(播放|放|聽|我要聽|想聽)\s+/.test(text) || text.indexOf('播放音樂')>=0;
+  function rt7MusicTitleFromText(text){
+    var t=String(text||'').trim();
+    if(!t) return '';
+    var m=t.match(/(?:播放|放一首|我想聽|我要聽|聽)(?:音樂|歌曲|歌)?[：:\s]*(.+)$/);
+    if(m && m[1]) return m[1].replace(/[。.!！?？]$/,'').trim();
+    return '';
   }
-  function rt7MusicQuery(text){
-    var q=String(text||'').replace(/播放音樂/g,' ').replace(/^(請)?(幫我)?(播放|放|聽|我要聽|想聽)\s*/,'').trim();
-    q=q.replace(/[。.!！?？]$/,'').trim();
-    return q || String(text||'').trim();
+  function rt7TryMusicUrl(url, label){
+    return new Promise(function(resolve){
+      try{
+        var a=new Audio();
+        a.preload='auto';
+        a.crossOrigin='anonymous';
+        var done=false;
+        var timer=setTimeout(function(){ if(done)return; done=true; try{a.pause();}catch(e){} resolve(false); }, 4500);
+        function ok(){ if(done)return; done=true; clearTimeout(timer); resolve(true); }
+        function fail(){ if(done)return; done=true; clearTimeout(timer); try{a.pause();}catch(e){} resolve(false); }
+        a.oncanplay=ok; a.onplaying=ok; a.onerror=fail;
+        a.src=url;
+        var pr=a.play();
+        if(pr && pr.catch) pr.catch(function(){ fail(); });
+      }catch(e){ resolve(false); }
+    });
   }
-  function rt7CallByImage(url){
+  async function rt7PlayMusicByVoice(title){
+    title=String(title||'').trim();
+    if(!title){ setAnswer('請說：播放 歌曲名稱'); return true; }
+    setAnswer('準備播放音樂：'+title);
+    setDebug('music request '+title+' ip='+ip);
     try{
-      var im=new Image();
-      im.onload=function(){};
-      im.onerror=function(){};
-      im.src=url + (url.indexOf('?')>=0?'&':'?') + '_=' + Date.now();
-    }catch(e){}
-  }
-  function rt7PlayMusicDirect(q){
-    q=(q||'').trim();
-    if(!q){ setAnswer('請說：播放 歌名'); return; }
-    setAnswer('音樂播放命令送出：'+q);
-    setDebug('music direct '+q);
-    var enc=encodeURIComponent(q);
-    var urls=[];
-    try{
-      var saved=localStorage.getItem('RT7_MUSIC_BASE_URL')||'';
-      if(saved) urls.push(saved.replace(/\/$/,'') + '/api/music/play?q=' + enc);
-    }catch(e){}
-    if(ip){
-      urls.push('https://' + ip + '/api/music/play?q=' + enc);
-      urls.push('http://' + ip + '/api/music/play?q=' + enc);
-      urls.push('http://' + ip + ':1880/api/music/play?q=' + enc);
+      // D1 safe add-on: do not change existing buttons or event binding.
+      // Try the selected local RT7/Node-RED device first.  HTTPS is tried before HTTP for Android Chrome.
+      var q=encodeURIComponent(title);
+      var urls=[
+        'https://'+ip+'/api/music/play?q='+q,
+        'https://'+ip+'/api/music/wav?q='+q,
+        'https://'+ip+'/api/music/pcm?q='+q,
+        'http://'+ip+'/api/music/play?q='+q,
+        'http://'+ip+':1880/api/music/play?q='+q,
+        'http://'+ip+':1880/api/music/pcm?q='+q
+      ];
+      for(var i=0;i<urls.length;i++){
+        setDebug('music try '+urls[i]);
+        var ok=await rt7TryMusicUrl(urls[i], 'music');
+        if(ok){ setAnswer('正在播放：'+title); return true; }
+      }
+      setAnswer('音樂播放失敗：請確認目前設備 '+ip+' 可開啟 /api/music/play?q='+title+'，或 Node-RED 音樂服務已啟動。');
+      return true;
+    }catch(e){
+      setAnswer('音樂播放失敗：'+e.message);
+      return true;
     }
-    urls.push('https://192.168.0.222/api/music/play?q=' + enc);
-    urls.push('http://192.168.0.222:1880/api/music/play?q=' + enc);
-    for(var i=0;i<urls.length;i++) rt7CallByImage(urls[i]);
-    try{
-      fetch('/api/rt7/music/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:q,device_id:selectedDeviceId||'#1',device_ip:ip||''})}).catch(function(){});
-    }catch(e){}
-    speakAnswer('開始播放 '+q);
   }
   async function routeVoiceQuestion(text){
     text=(text||'').trim();
     if(!text){ setAnswer('沒有收到語音內容，請再按一次 AI語音助理後說話'); setDebug('voice empty'); return; }
-    if(rt7IsMusicCmd(text)){ rt7PlayMusicDirect(rt7MusicQuery(text)); return; }
+    var musicTitle=rt7MusicTitleFromText(text);
+    if(musicTitle){ await rt7PlayMusicByVoice(musicTitle); return; }
     setAnswer('你說：'+text+'，AI 分析中...');
     setDebug('voice question: '+text);
     try{
@@ -2772,20 +2786,6 @@ wss.on('connection', (ws, req) => {
   });
   ws.on('close', () => { ws.rt7Closed = true; });
 });
-
-
-app.get('/api/music/health', (req, res) => {
-  res.json({ ok:true, version:'RT7_CLOUD_SERVER_V5_6E4_D1_SAFE_MUSIC_NO_BUTTON_BREAK', mode:'safe direct LAN trigger from browser; server only logs music commands' });
-});
-
-app.post('/api/rt7/music/play', (req, res) => {
-  const q = safeString((req.body && (req.body.q || req.body.query || req.body.song)) || '').trim();
-  const device_id = safeString((req.body && req.body.device_id) || '').trim() || '#1';
-  const device_ip = safeString((req.body && req.body.device_ip) || '').trim();
-  appendEvent({ event:'music_play', device:device_id, ip:device_ip, content:q || 'music command' });
-  res.json({ ok:true, version:'RT7_CLOUD_SERVER_V5_6E4_D1_SAFE_MUSIC_NO_BUTTON_BREAK', q, device_id, device_ip, note:'phone browser triggers LAN /api/music/play directly; Railway logs only' });
-});
-
 
 ensureDataDir();
 const port = process.env.PORT || 3000;
