@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6B_DEVICE_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6B1_DEVICE_MANAGER_JS_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -2432,7 +2432,7 @@ app.get('/rt7_cloud_phase10_no_nodered', (req,res)=>{
 </div></div>
 <script>
 let DEVICES=[], audioCtx=null, audioOK=false, lastCount=null; const $=id=>document.getElementById(id);
-function log(o){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+(typeof o==='string'?o:JSON.stringify(o,null,2))+'\n'+$('log').textContent}
+function log(o){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+(typeof o==='string'?o:JSON.stringify(o,null,2))+'\\n'+$('log').textContent}
 async function j(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{}));const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
 function beep(f,d,t){if(!audioCtx)return;const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.frequency.value=f;g.gain.value=.18;o.connect(g);g.connect(audioCtx.destination);o.start(audioCtx.currentTime+t);o.stop(audioCtx.currentTime+t+d)}
 function ding(){if(audioOK){beep(880,.18,0);beep(660,.22,.26)}}
@@ -2457,7 +2457,7 @@ app.get('/rt7_device_manager', (req,res)=>{
 <style>
 .dmTop{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.dmGrid{display:grid;grid-template-columns:72px 1.1fr 1.3fr 80px;gap:8px;align-items:center}.dmHead{font-weight:900;color:#334155}.dmGrid input{width:100%;height:42px;border:1px solid #94a3b8;border-radius:10px;padding:0 10px;font-size:15px}.dmGrid label{display:flex;gap:6px;align-items:center;font-weight:900}.dmGrid input[type=checkbox]{width:22px;height:22px}.preview{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.devCard{border:1px solid #d8e0e8;border-radius:12px;padding:12px;background:#f8fafc}.devCard b{font-size:17px}.devCard .ip{font-family:ui-monospace,Consolas,monospace;color:#0f172a;word-break:break-all}.current{outline:3px solid #22c55e;background:#ecfdf5}@media(max-width:640px){.dmGrid{grid-template-columns:54px 1fr}.dmHead{display:none}.span2{grid-column:span 2}.dmGrid input{height:44px}.dmTop .btn{width:100%}}
 </style>
-<header class="top"><h1>RT7 V5.6B DEVICE MANAGER</h1><p>Railway 設備名稱 / IP 管理：#1 ~ #4</p></header>
+<header class="top"><h1>RT7 V5.6B1 DEVICE MANAGER</h1><p>Railway 設備名稱 / IP 管理：#1 ~ #4</p></header>
 <main class="wrap">
 <section class="card dmTop"><div><h2 style="margin:0">設備管理頁</h2><div class="muted">儲存位置：<code>data/devices.json</code></div></div><div><a class="btn gray" href="/rt7_cloud_original_ui_doorbell">回手機門禁頁</a><a class="btn" href="/rt7_cloud_admin">管理頁</a></div></section>
 <section class="card"><h3>編輯 #1 ~ #4 設備</h3><div class="dmGrid" id="devForm"><div class="dmHead">編號</div><div class="dmHead">設備名稱</div><div class="dmHead">ESP32 IP / Host</div><div class="dmHead">啟用</div></div><p class="muted">IP 請填 <code>192.168.x.x</code> 或主機名稱，不需要加 <code>http://</code>。</p><button class="btn green" onclick="saveDevices()">儲存 devices.json</button><button class="btn" onclick="loadDevices()">重新載入</button><button class="btn gray" onclick="resetDefaults()">恢復預設 #1~#4</button></section>
@@ -2467,7 +2467,7 @@ app.get('/rt7_device_manager', (req,res)=>{
 <script>
 const IDS=['#1','#2','#3','#4']; let DEVICES=[]; const $=id=>document.getElementById(id);
 function esc(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function log(x){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+(typeof x==='string'?x:JSON.stringify(x,null,2))+'\n'+$('log').textContent.slice(0,5000)}
+function log(x){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+(typeof x==='string'?x:JSON.stringify(x,null,2))+'\\n'+$('log').textContent.slice(0,5000)}
 async function j(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{}));const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,status:r.status,raw:t}}}
 function defaults(){return IDS.map((id,i)=>({id,name:i===0?'RT7 ESP32-S3-CAM':id,ip:'',enabled:true,note:''}))}
 function norm(list){const m=new Map((list||[]).map(d=>[d.id,d]));return IDS.map((id,i)=>Object.assign(defaults()[i],m.get(id)||{}));}
@@ -2566,7 +2566,7 @@ app.get('/rt7_auto_stream_test', (req, res) => {
 <div class="card"><b>說明</b><div class="small">LAN = 手機直接讀 ESP32 <code>/api/camera/stream</code>，流暢。CLOUD = Railway <code>/api/rt7/camera/stream.mjpg</code>，遠端可用但 FPS 較低。</div></div>
 <pre id="log">ready</pre></div><script>
 const $=id=>document.getElementById(id); let wanted=false;
-function log(s){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+s+'\n'+$('log').textContent.slice(0,3000)}
+function log(s){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+s+'\\n'+$('log').textContent.slice(0,3000)}
 async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store'});const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}}}
 function setMode(m){$('mode').textContent=m;$('mode').className='badge '+(m==='LAN'?'lan':m==='CLOUD'?'cloud':'')}
 function lanUrl(){return 'http://'+$('ip').value.trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'')+'/api/camera/stream'}
