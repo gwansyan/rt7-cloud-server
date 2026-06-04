@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E5_D1_SAFE_AI_MUSIC_ADDON';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E6_D1_SAFE_MUSIC_BEACON_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -347,6 +347,14 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, version: SERVER_VERSION, time: nowIso() }));
+app.get('/api/music/health', (req, res) => res.json({
+  ok:true,
+  version:SERVER_VERSION,
+  mode:'safe beacon trigger only; does not alter RT7 button bindings',
+  note:'Mobile AI voice sends GET beacon to selected/all device music endpoint. Say: 播放 五月天 溫柔',
+  endpoints:['http://DEVICE_IP/api/music/play?q=...', 'http://DEVICE_IP:1880/api/music/play?q=...', 'https://DEVICE_IP/api/music/play?q=...'],
+  current_devices: readDevices().map(d => ({id:d.id, name:d.name, ip:d.ip, enabled:d.enabled}))
+}));
 
 // V4.9A product system status: one endpoint for user support and maintenance.
 app.get('/api/rt7/system/status', (req, res) => {
@@ -441,7 +449,6 @@ app.post('/api/device/register', (req, res) => {
 });
 
 app.get('/api/devices', (req, res) => res.json({ ok: true, version:SERVER_VERSION, devices: readDevices(), file:'data/devices.json' }));
-app.get('/api/music/health', (req, res) => res.json({ ok:true, version:SERVER_VERSION, mode:'D1 safe client-side music add-on; mobile AI voice plays selected local device /api/music/play without changing RT7 buttons', endpoints:['/api/music/health'], note:'說：播放 五月天 溫柔' }));
 app.post('/api/devices/save', (req, res) => {
   const devices = saveDevices(req.body?.devices || req.body || []);
   const event = appendEvent({ type: 'devices_save', device_count: devices.length, message: 'devices saved' });
@@ -1357,7 +1364,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
-  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
+  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var rt7DeviceList=[]; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
   // V5.4W: FACE_GATE is default OFF and persistent. UI state alone must never re-enable it.
   setTimeout(function(){ setAiUi(ai); rt7FaceGateEspEnable(ai, true); }, 600);
   function setAnswer(t){ if(answer) answer.textContent=t; }
@@ -1387,6 +1394,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       }
       var list=(d.devices||[]).filter(function(x){return x && x.enabled!==false;});
       if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true}];
+      rt7DeviceList=list;
       var sel=document.getElementById('deviceSel'); if(!sel) return;
       sel.innerHTML=list.map(function(x){
         var id=x.id||'#1'; var name=x.name||'RT7'; var dip=rt7CleanHost(x.ip||'');
@@ -1503,51 +1511,42 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(m && m[1]) return m[1].replace(/[。.!！?？]$/,'').trim();
     return '';
   }
-  function rt7TryMusicUrl(url, label){
-    return new Promise(function(resolve){
-      try{
-        var a=new Audio();
-        a.preload='auto';
-        a.crossOrigin='anonymous';
-        var done=false;
-        var timer=setTimeout(function(){ if(done)return; done=true; try{a.pause();}catch(e){} resolve(false); }, 4500);
-        function ok(){ if(done)return; done=true; clearTimeout(timer); resolve(true); }
-        function fail(){ if(done)return; done=true; clearTimeout(timer); try{a.pause();}catch(e){} resolve(false); }
-        a.oncanplay=ok; a.onplaying=ok; a.onerror=fail;
-        a.src=url;
-        var pr=a.play();
-        if(pr && pr.catch) pr.catch(function(){ fail(); });
-      }catch(e){ resolve(false); }
-    });
+  function rt7UniquePush(arr, v){ v=rt7CleanHost(v); if(v && arr.indexOf(v)<0) arr.push(v); }
+  function rt7MusicHosts(){
+    var hosts=[];
+    try{ rt7UniquePush(hosts, localStorage.getItem('RT7_MUSIC_HOST')||''); }catch(e){}
+    rt7UniquePush(hosts, ip);
+    try{
+      (rt7DeviceList||[]).forEach(function(d){ if(d && d.enabled!==false) rt7UniquePush(hosts, d.ip||''); });
+    }catch(e){}
+    return hosts;
+  }
+  function rt7SendMusicBeacon(url){
+    try{
+      var im=new Image();
+      im.onload=function(){};
+      im.onerror=function(){};
+      im.src=url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now();
+    }catch(e){}
+    try{ fetch(url+(url.indexOf('?')>=0?'&':'?')+'_f='+Date.now(),{mode:'no-cors',cache:'no-store',keepalive:true}).catch(function(){}); }catch(e){}
   }
   async function rt7PlayMusicByVoice(title){
     title=String(title||'').trim();
     if(!title){ setAnswer('請說：播放 歌曲名稱'); return true; }
-    setAnswer('準備播放音樂：'+title);
-    setDebug('music request '+title+' ip='+ip);
-    try{
-      // D1 safe add-on: do not change existing buttons or event binding.
-      // Try the selected local RT7/Node-RED device first.  HTTPS is tried before HTTP for Android Chrome.
-      var q=encodeURIComponent(title);
-      var urls=[
-        'https://'+ip+'/api/music/play?q='+q,
-        'https://'+ip+'/api/music/wav?q='+q,
-        'https://'+ip+'/api/music/pcm?q='+q,
-        'http://'+ip+'/api/music/play?q='+q,
-        'http://'+ip+':1880/api/music/play?q='+q,
-        'http://'+ip+':1880/api/music/pcm?q='+q
-      ];
-      for(var i=0;i<urls.length;i++){
-        setDebug('music try '+urls[i]);
-        var ok=await rt7TryMusicUrl(urls[i], 'music');
-        if(ok){ setAnswer('正在播放：'+title); return true; }
-      }
-      setAnswer('音樂播放失敗：請確認目前設備 '+ip+' 可開啟 /api/music/play?q='+title+'，或 Node-RED 音樂服務已啟動。');
-      return true;
-    }catch(e){
-      setAnswer('音樂播放失敗：'+e.message);
-      return true;
-    }
+    var q=encodeURIComponent(title);
+    var hosts=rt7MusicHosts();
+    if(!hosts.length){ setAnswer('音樂播放失敗：沒有設備 IP'); return true; }
+    var urls=[];
+    hosts.forEach(function(h){
+      urls.push('http://'+h+'/api/music/play?q='+q);
+      urls.push('http://'+h+':1880/api/music/play?q='+q);
+      urls.push('https://'+h+'/api/music/play?q='+q);
+    });
+    urls=urls.filter(function(u,i,a){return a.indexOf(u)===i;});
+    urls.forEach(rt7SendMusicBeacon);
+    setAnswer('音樂播放命令已送出：'+title+'。若未播放，請確認 Node-RED /api/music/play 已啟動，或設定 localStorage RT7_MUSIC_HOST。');
+    setDebug('music beacon sent '+urls.length+' urls title='+title);
+    return true;
   }
   async function routeVoiceQuestion(text){
     text=(text||'').trim();
