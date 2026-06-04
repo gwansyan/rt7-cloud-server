@@ -2453,35 +2453,52 @@ app.get('/rt7_face_guard', (req,res)=>res.redirect(307,'/rt7_cloud_phase10_no_no
 app.get('/rt7_admin_home', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
 
 app.get('/rt7_device_manager', (req,res)=>{
-  res.type('html').send(htmlShell('RT7 V5.6B2 Device Manager', `${baseCss}
+  const page = String.raw`${baseCss}
 <style>
 .dmTop{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.dmGrid{display:grid;grid-template-columns:72px 1.1fr 1.3fr 80px;gap:8px;align-items:center}.dmHead{font-weight:900;color:#334155}.dmGrid input{width:100%;height:42px;border:1px solid #94a3b8;border-radius:10px;padding:0 10px;font-size:15px}.dmGrid label{display:flex;gap:6px;align-items:center;font-weight:900}.dmGrid input[type=checkbox]{width:22px;height:22px}.preview{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.devCard{border:1px solid #d8e0e8;border-radius:12px;padding:12px;background:#f8fafc}.devCard b{font-size:17px}.devCard .ip{font-family:ui-monospace,Consolas,monospace;color:#0f172a;word-break:break-all}.current{outline:3px solid #22c55e;background:#ecfdf5}@media(max-width:640px){.dmGrid{grid-template-columns:54px 1fr}.dmHead{display:none}.span2{grid-column:span 2}.dmGrid input{height:44px}.dmTop .btn{width:100%}}
 </style>
-<header class="top"><h1>RT7 V5.6B2 DEVICE MANAGER</h1><p>Railway 設備名稱 / IP 管理：#1 ~ #4</p></header>
+<header class="top"><h1>RT7 V5.6B3 DEVICE MANAGER</h1><p>Railway 設備名稱 / IP 管理：#1 ~ #4</p></header>
 <main class="wrap">
 <section class="card dmTop"><div><h2 style="margin:0">設備管理頁</h2><div class="muted">儲存位置：<code>data/devices.json</code></div></div><div><a class="btn gray" href="/rt7_cloud_original_ui_doorbell">回手機門禁頁</a><a class="btn" href="/rt7_cloud_admin">管理頁</a></div></section>
-<section class="card"><h3>編輯 #1 ~ #4 設備</h3><div class="dmGrid" id="devForm"><div class="dmHead">編號</div><div class="dmHead">設備名稱</div><div class="dmHead">ESP32 IP / Host</div><div class="dmHead">啟用</div></div><p class="muted">IP 請填 <code>192.168.x.x</code> 或主機名稱，不需要加 <code>http://</code>。</p><button class="btn green" onclick="saveDevices()">儲存 devices.json</button><button class="btn" onclick="loadDevices()">重新載入</button><button class="btn gray" onclick="resetDefaults()">恢復預設 #1~#4</button></section>
+<section class="card"><h3>編輯 #1 ~ #4 設備</h3><div class="dmGrid" id="devForm"><div class="dmHead">編號</div><div class="dmHead">設備名稱</div><div class="dmHead">ESP32 IP / Host</div><div class="dmHead">啟用</div></div><p class="muted">IP 請填 <code>192.168.x.x</code> 或主機名稱，不需要加 <code>http://</code>。</p><button class="btn green" id="saveBtn">儲存 devices.json</button><button class="btn" id="reloadBtn">重新載入</button><button class="btn gray" id="resetBtn">恢復預設 #1~#4</button></section>
 <section class="card"><h3>手機頁面自動載入預覽</h3><div id="preview" class="preview"></div></section>
-<section class="card"><h3>測試</h3><button class="btn green" onclick="openPhone()">開啟手機門禁頁</button><button class="btn" onclick="readState()">讀取目前設備狀態</button><pre class="status" id="log">ready</pre></section>
+<section class="card"><h3>測試</h3><button class="btn green" id="phoneBtn">開啟手機門禁頁</button><button class="btn" id="stateBtn">讀取目前設備狀態</button><pre class="status" id="log">ready</pre></section>
 </main>
 <script>
-const IDS=['#1','#2','#3','#4']; let DEVICES=[]; const $=id=>document.getElementById(id);
-function esc(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function log(x){$('log').textContent='['+new Date().toLocaleTimeString()+'] '+(typeof x==='string'?x:JSON.stringify(x,null,2))+'\\n'+$('log').textContent.slice(0,5000)}
-async function j(url,opt){const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{}));const t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,status:r.status,raw:t}}}
-function defaults(){return IDS.map((id,i)=>({id,name:i===0?'RT7 ESP32-S3-CAM':id,ip:'',enabled:true,note:''}))}
-function norm(list){const m=new Map((list||[]).map(d=>[d.id,d]));return IDS.map((id,i)=>Object.assign(defaults()[i],m.get(id)||{}));}
-function render(){DEVICES=norm(DEVICES); const root=$('devForm'); root.innerHTML='<div class="dmHead">編號</div><div class="dmHead">設備名稱</div><div class="dmHead">ESP32 IP / Host</div><div class="dmHead">啟用</div>'+DEVICES.map((d,i)=>'<div><b>'+esc(d.id)+'</b></div><div><input id="name'+i+'" value="'+esc(d.name)+'" placeholder="設備名稱"></div><div class="span2"><input id="ip'+i+'" value="'+esc(d.ip)+'" placeholder="例如 192.168.0.179"></div><div><label><input id="en'+i+'" type="checkbox" '+(d.enabled!==false?'checked':'')+'> ON</label></div>').join(''); renderPreview();}
-function collect(){return IDS.map((id,i)=>({id,name:($('name'+i).value||id).trim(),ip:($('ip'+i).value||'').trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,''),enabled:$('en'+i).checked,note:'',version:(DEVICES[i]&&DEVICES[i].version)||'',last_online:(DEVICES[i]&&DEVICES[i].last_online)||''}));}
-function renderPreview(){const cur=(localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'); $('preview').innerHTML=DEVICES.map((d,i)=>'<div class="devCard '+(d.id===cur?'current':'')+'"><b>'+esc(d.id)+' '+esc(d.name)+'</b><div class="ip">'+(d.ip?esc(d.ip):'<span class="muted">尚未設定 IP</span>')+'</div><div>'+(d.enabled!==false?'✅ 啟用':'⏸ 關閉')+'</div><button class="btn green" data-dev-id="'+esc(d.id)+'">切換到 '+esc(d.id)+'</button></div>').join(''); Array.from($('preview').querySelectorAll('button[data-dev-id]')).forEach(b=>b.onclick=()=>selectDevice(b.getAttribute('data-dev-id')));}
-async function loadDevices(){const d=await j('/api/rt7/devices/list');DEVICES=norm(d.devices||[]);render();log(d)}
-async function saveDevices(){const payload={devices:collect()};const d=await j('/api/rt7/devices/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});DEVICES=norm(d.devices||payload.devices);render();log(d)}
-async function selectDevice(id){localStorage.setItem('RT7_CURRENT_DEVICE_ID',id); await j('/api/rt7/device/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:id})}); renderPreview(); log('目前手機頁預設設備：'+id)}
-function resetDefaults(){DEVICES=defaults();render();log('已恢復畫面預設，按「儲存 devices.json」才會寫入。')}
-function openPhone(){location.href='/rt7_cloud_original_ui_doorbell'}
-async function readState(){log(await j('/api/rt7/device/state'))}
+const IDS = ['#1','#2','#3','#4'];
+let DEVICES = [];
+function E(id){ return document.getElementById(id); }
+function esc(s){ return String(s || '').replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
+function log(x){ var line = '[' + new Date().toLocaleTimeString() + '] ' + (typeof x === 'string' ? x : JSON.stringify(x,null,2)); E('log').textContent = line + String.fromCharCode(10) + E('log').textContent.slice(0,5000); }
+async function j(url,opt){ var r = await fetch(url + (url.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now(), Object.assign({cache:'no-store'}, opt || {})); var t = await r.text(); try { return JSON.parse(t); } catch(e) { return {ok:r.ok,status:r.status,raw:t}; } }
+function defaults(){ return IDS.map(function(id,i){ return {id:id,name:i===0?'RT7 ESP32-S3-CAM':id,ip:'',enabled:true,note:''}; }); }
+function norm(list){ var m = new Map((list || []).map(function(d){ return [d.id,d]; })); return IDS.map(function(id,i){ return Object.assign(defaults()[i], m.get(id) || {}); }); }
+function render(){
+  DEVICES = norm(DEVICES);
+  var root = E('devForm');
+  var html = '<div class="dmHead">編號</div><div class="dmHead">設備名稱</div><div class="dmHead">ESP32 IP / Host</div><div class="dmHead">啟用</div>';
+  DEVICES.forEach(function(d,i){
+    html += '<div><b>'+esc(d.id)+'</b></div>';
+    html += '<div><input id="name'+i+'" value="'+esc(d.name)+'" placeholder="設備名稱"></div>';
+    html += '<div class="span2"><input id="ip'+i+'" value="'+esc(d.ip)+'" placeholder="例如 192.168.0.179"></div>';
+    html += '<div><label><input id="en'+i+'" type="checkbox" '+(d.enabled!==false?'checked':'')+'> ON</label></div>';
+  });
+  root.innerHTML = html;
+  renderPreview();
+}
+function cleanIp(v){ v = String(v || '').trim(); v = v.replace('http://','').replace('https://',''); var slash = v.indexOf('/'); if(slash >= 0) v = v.slice(0, slash); return v; }
+function collect(){ return IDS.map(function(id,i){ return {id:id,name:(E('name'+i).value || id).trim(),ip:cleanIp(E('ip'+i).value),enabled:E('en'+i).checked,note:'',version:(DEVICES[i]&&DEVICES[i].version)||'',last_online:(DEVICES[i]&&DEVICES[i].last_online)||''}; }); }
+function renderPreview(){ var cur = localStorage.getItem('RT7_CURRENT_DEVICE_ID') || '#1'; E('preview').innerHTML = DEVICES.map(function(d){ return '<div class="devCard '+(d.id===cur?'current':'')+'"><b>'+esc(d.id)+' '+esc(d.name)+'</b><div class="ip">'+(d.ip?esc(d.ip):'<span class="muted">尚未設定 IP</span>')+'</div><div>'+(d.enabled!==false?'✅ 啟用':'⏸ 關閉')+'</div><button class="btn green" data-dev-id="'+esc(d.id)+'">切換到 '+esc(d.id)+'</button></div>'; }).join(''); Array.from(E('preview').querySelectorAll('button[data-dev-id]')).forEach(function(b){ b.onclick = function(){ selectDevice(b.getAttribute('data-dev-id')); }; }); }
+async function loadDevices(){ try{ var d = await j('/api/rt7/devices/list'); DEVICES = norm(d.devices || []); render(); log(d); }catch(e){ log('載入失敗：'+e.message); DEVICES = defaults(); render(); } }
+async function saveDevices(){ var payload = {devices:collect()}; var d = await j('/api/rt7/devices/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); DEVICES = norm(d.devices || payload.devices); render(); log(d); }
+async function selectDevice(id){ localStorage.setItem('RT7_CURRENT_DEVICE_ID',id); await j('/api/rt7/device/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:id})}); renderPreview(); log('目前手機頁預設設備：'+id); }
+function resetDefaults(){ DEVICES = defaults(); render(); log('已恢復畫面預設，按「儲存 devices.json」才會寫入。'); }
+function openPhone(){ location.href='/rt7_cloud_original_ui_doorbell'; }
+async function readState(){ log(await j('/api/rt7/device/state')); }
+E('saveBtn').onclick = saveDevices; E('reloadBtn').onclick = loadDevices; E('resetBtn').onclick = resetDefaults; E('phoneBtn').onclick = openPhone; E('stateBtn').onclick = readState;
 loadDevices();
-</script>`));
+</script>`;
+  res.type('html').send(htmlShell('RT7 V5.6B3 Device Manager', page));
 });
 
 app.get('/rt7_log_viewer', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
