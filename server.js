@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G_MAIN_DOOR_FAST_BELL_FAST';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G1_MAIN_DOOR_CLOUD_QUEUE_PRIORITY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1488,7 +1488,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     setAnswer('開門命令已送出');
     var host=rt7CleanHost(ip);
     if(host){
-      // V5.6G: main-page fast path. Send LAN beacons immediately; do not wait for Railway queue.
+      // V5.6G1: main-page fast path. Send LAN beacons immediately; do not wait for Railway queue.
       // 8081 is ticked inside ESP32 MJPEG/intercom loop and is the most immediate path while streaming.
       rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open_fast','lan8081_open_fast');
       setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open','lan8081_open'); }, 80);
@@ -1498,10 +1498,18 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     } else {
       setAnswer('找不到目前設備 IP，改用雲端開門');
     }
-    // Cloud queue is only backup; it must not block the button response.
+    // V5.6G11: Cloud queue is REQUIRED for外網. Send it as a same-origin request and also as an image beacon.
+    // LAN beacons give immediate inner-network open; Railway queue gives outer-network open when ESP32 polls /commands/next.
+    var cloudUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button&cloud_required=1&_='+Date.now();
+    try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue'); }catch(e){}
     try{
-      fetch('/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&fast_backup=1&_='+Date.now(),{cache:'no-store',keepalive:true}).catch(function(){});
-    }catch(e){}
+      fetch(cloudUrl,{cache:'no-store',keepalive:true})
+        .then(function(r){ return r.text(); })
+        .then(function(tx){
+          try{ var j=JSON.parse(tx); if(j&&j.ok){ setDebug('cloud door queued '+(j.normalized_device_id||'')); if(!host) setAnswer('外網雲端開門命令已送出，等待 ESP32 輪詢'); } }catch(e){}
+        })
+        .catch(function(){ if(!host) setAnswer('外網雲端開門命令送出失敗，請重試'); });
+    }catch(e){ if(!host) setAnswer('外網雲端開門命令送出失敗'); }
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
@@ -2588,6 +2596,8 @@ function enqueueDoorOpen(req, res, endpointName) {
   const dev = getCurrentDevice(req);
   const requestedDeviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
   const deviceId = normalizeDoorCommandDeviceId_(requestedDeviceId);
+  // V5.6G11: external open must not be blocked by stale older door commands for the same device.
+  pendingCommands = pendingCommands.filter(c => !(commandMatchesDevice_(c, deviceId) && (c.command === 'door_open' || c.action === 'door_open')));
   const cmd = queueCommand({
     command:'door_open',
     action:'door_open',
@@ -2611,10 +2621,11 @@ app.get('/api/rt7/device/commands', (req,res)=>{ const id=normalizeDoorCommandDe
 app.get('/api/rt7/device/commands/next', (req,res)=>{
   const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||'');
   const matches=pendingCommands.filter(c=>commandMatchesDevice_(c,id));
-  // V5.2D: face snapshot has priority, otherwise older queued items can hide it.
+  // V5.6G11: door_open also has priority. Old stream/intercom/debug commands must not block external open.
   const faceCmd=matches.find(c=>c && (c.command==='face_snapshot_now' || c.action==='face_snapshot_now' || c.priority==='face_snapshot'));
-  const cmd=faceCmd || matches[0] || null;
-  res.json({ok:true, version:SERVER_VERSION, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, matching:matches.length, face_priority:!!faceCmd, state:doorOpenQueueState});
+  const doorCmd=matches.find(c=>c && (c.command==='door_open' || c.action==='door_open'));
+  const cmd=faceCmd || doorCmd || matches[0] || null;
+  res.json({ok:true, version:SERVER_VERSION, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, matching:matches.length, face_priority:!!faceCmd, door_priority:!!doorCmd, state:doorOpenQueueState});
 });
 function ackCommand(req,res){ const id=safeString(req.body?.id||req.query.id); const status=safeString(req.body?.status||req.query.status||'done'); const idx=pendingCommands.findIndex(c=>c.id===id); let cmd=null; if(idx>=0){cmd=pendingCommands[idx]; pendingCommands.splice(idx,1);} doorOpenQueueState.acked+=1; doorOpenQueueState.last_ack={id, status, time:nowIso(), found:!!cmd, command:cmd}; appendEvent({type:'command_ack', id, status, found:!!cmd}); res.json({ok:true, id, status, found:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); }
 app.get('/api/rt7/device/commands/ack', ackCommand);
