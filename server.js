@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6B1_DEVICE_MANAGER_JS_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6C_MOBILE_DEVICE_SELECTOR_BIND';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1331,7 +1331,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.4L</title>
+<title>RT7 Cloud Original UI V5.6C</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1366,23 +1366,39 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function rt7Esc(s){ return String(s||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
   async function rt7LoadDeviceSelector(){
     try{
-      var r=await fetch('/api/rt7/devices/list?_='+Date.now(),{cache:'no-store'}); var d=await r.json();
+      // V5.6C: mobile page is bound to Device Manager. Use /api/devices as source of truth.
+      var d=null;
+      try{
+        var r=await fetch('/api/devices?_='+Date.now(),{cache:'no-store'});
+        d=await r.json();
+      }catch(e1){
+        var r2=await fetch('/api/rt7/devices/list?_='+Date.now(),{cache:'no-store'});
+        d=await r2.json();
+      }
       var list=(d.devices||[]).filter(function(x){return x && x.enabled!==false;});
-      if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip}];
+      if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true}];
       var sel=document.getElementById('deviceSel'); if(!sel) return;
-      sel.innerHTML=list.map(function(x){return '<option value="'+rt7Esc(x.id||'#1')+'" data-ip="'+rt7Esc(x.ip||'')+'">'+rt7Esc((x.id||'#1')+' / '+(x.name||'RT7')+(x.ip?' / '+x.ip:''))+'</option>';}).join('');
+      sel.innerHTML=list.map(function(x){
+        var id=x.id||'#1'; var name=x.name||'RT7'; var dip=(x.ip||'').replace(/^https?:\/\//i,'').replace(/\/.*$/,'');
+        return '<option value="'+rt7Esc(id)+'" data-ip="'+rt7Esc(dip)+'" data-name="'+rt7Esc(name)+'">'+rt7Esc(id+' / '+name+(dip?' / '+dip:''))+'</option>';
+      }).join('');
       var want=selectedDeviceId||d.current_device_id||'#1'; sel.value=want; if(sel.value!==want) sel.selectedIndex=0;
       rt7ApplySelectedDevice(false);
+      setDebug('devices loaded count='+list.length+' selected='+selectedDeviceId+' ip='+ip);
     }catch(e){ setDebug('device load failed '+(e.message||e)); }
   }
   function rt7ApplySelectedDevice(save){
     var sel=document.getElementById('deviceSel'); if(!sel || !sel.options.length) return;
     var opt=sel.options[sel.selectedIndex]; selectedDeviceId=sel.value||'#1';
     var nextIp=(opt&&opt.getAttribute('data-ip')||'').trim(); if(nextIp) ip=nextIp.replace(/^https?:\/\//i,'').replace(/\/.*$/,'');
-    try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',selectedDeviceId);}catch(e){}
-    if(save){ fetch('/api/rt7/device/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:selectedDeviceId})}).catch(function(){}); setAnswer('已切換設備 '+selectedDeviceId); }
+    var nextName=(opt&&opt.getAttribute('data-name')||'').trim();
+    try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',selectedDeviceId); localStorage.setItem('RT7_CURRENT_DEVICE_IP',ip); localStorage.setItem('RT7_CURRENT_DEVICE_NAME',nextName);}catch(e){}
+    if(save){
+      fetch('/api/rt7/device/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:selectedDeviceId})}).catch(function(){});
+      setAnswer('已切換設備 '+selectedDeviceId+(nextName?' '+nextName:'')+(ip?' / '+ip:''));
+    }
   }
-  setTimeout(function(){ var sel=document.getElementById('deviceSel'); if(sel){sel.addEventListener('change',function(){rt7ApplySelectedDevice(true); stopVideo();});} rt7LoadDeviceSelector(); }, 50);
+  setTimeout(function(){ var sel=document.getElementById('deviceSel'); if(sel){sel.addEventListener('change',function(){rt7ApplySelectedDevice(true); stopVideo(); setAnswer('已切換設備 '+selectedDeviceId+' / '+ip+'，請按開始影像');});} rt7LoadDeviceSelector(); }, 50);
   function tone(freq, delay, dur){ if(!audioCtx) return; try{ setTimeout(function(){ var o=audioCtx.createOscillator(); var g=audioCtx.createGain(); o.frequency.value=freq; g.gain.value=0.22; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(function(){try{o.stop()}catch(e){}}, dur); }, delay); }catch(e){} }
   function playDingdong(){ if(!audioOK) return; tone(880,0,180); tone(660,260,220); }
   async function enableDoorbellAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume(); audioOK=true; audioTried=true; setAnswer('門鈴提示音已啟用'); setDebug('audio enabled'); playDingdong(); return true; }catch(e){ setAnswer('提示音啟用失敗：'+(e.message||e)); setDebug('audio failed'); return false; } }
@@ -1392,8 +1408,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var videoWanted=false; var currentStreamMode='IDLE'; var lanReconnectTimer=null; var lanRetryCount=0; var lanProbeDone=false;
   function clearLanReconnect(){ if(lanReconnectTimer){ clearTimeout(lanReconnectTimer); lanReconnectTimer=null; } }
   function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='等待影像串流<br><span class="small">自動判斷：內網直連 / Railway 雲端</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
-  function cloud(){ videoWanted=true; currentStreamMode='CLOUD'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','CLOUD');}catch(e){} clearLanReconnect(); if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img){ img.onerror=function(){ if(!videoWanted || currentStreamMode!=='CLOUD') return; setAnswer('雲端影像暫停，5 秒後重連'); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(videoWanted && currentStreamMode==='CLOUD'){ img.src='/api/rt7/camera/stream.mjpg?_cloud_re='+Date.now(); } },5000); }; img.onload=function(){ setDebug('cloud mjpeg loaded'); }; img.src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now(); } setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
-  function lan(){ videoWanted=true; currentStreamMode='LAN'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','LAN');}catch(e){} clearLanReconnect(); lanRetryCount=0; if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ img.style.backgroundImage='url("/api/rt7/camera/latest.jpg?_hold='+Date.now()+'")'; img.style.backgroundSize='cover'; img.style.backgroundPosition='center'; img.onerror=function(){ if(!videoWanted || currentStreamMode!=='LAN') return; lanRetryCount++; setAnswer('LAN 串流暫停，5 秒後重連（保留畫面，不清空黑屏）'); setDebug('lan onerror retry='+lanRetryCount); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(!videoWanted || currentStreamMode!=='LAN') return; // Do NOT clear img.src here. Clearing src causes Android Chrome black screen. Replace source directly.
+  function cloud(){ videoWanted=true; currentStreamMode='CLOUD'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','CLOUD');}catch(e){} clearLanReconnect(); if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img){ img.onerror=function(){ if(!videoWanted || currentStreamMode!=='CLOUD') return; setAnswer('雲端影像暫停，5 秒後重連'); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(videoWanted && currentStreamMode==='CLOUD'){ img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud_re='+Date.now(); } },5000); }; img.onload=function(){ setDebug('cloud mjpeg loaded'); }; img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud='+Date.now(); } setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
+  function lan(){ videoWanted=true; currentStreamMode='LAN'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','LAN');}catch(e){} clearLanReconnect(); lanRetryCount=0; if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ img.style.backgroundImage='url("/api/rt7/camera/latest.jpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_hold='+Date.now()+'")'; img.style.backgroundSize='cover'; img.style.backgroundPosition='center'; img.onerror=function(){ if(!videoWanted || currentStreamMode!=='LAN') return; lanRetryCount++; setAnswer('LAN 串流暫停，5 秒後重連（保留畫面，不清空黑屏）'); setDebug('lan onerror retry='+lanRetryCount); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(!videoWanted || currentStreamMode!=='LAN') return; // Do NOT clear img.src here. Clearing src causes Android Chrome black screen. Replace source directly.
         var next='http://'+ip+'/api/camera/stream?_lan_re='+Date.now(); try{ img.src=next; }catch(e){} },5000); }; img.onload=function(){ lanRetryCount=0; setDebug('lan mjpeg loaded'); }; var first='http://'+ip+'/api/camera/stream?_lan='+Date.now(); try{ img.src=first; }catch(e){} } setAnswer('內網直連影像模式'); setDebug('lan stream '+ip); }
   function startAuto(){ try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','AUTO');}catch(e){} if(videoWanted && (currentStreamMode==='LAN' || currentStreamMode==='CLOUD')){ setAnswer(currentStreamMode==='LAN'?'內網直連影像模式':'雲端遠端影像模式'); return; } videoWanted=true; currentStreamMode='AUTO'; clearLanReconnect(); setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先用單張 snapshot 測內網，成功才開啟 LAN 串流'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done||!videoWanted)return; done=true; try{probe.src='about:blank'}catch(e){} cloud(); },1800); probe.onload=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} lan(); }; probe.onerror=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} cloud(); }; probe.src='http://'+ip+'/api/camera/snapshot?_probe_once='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
@@ -1882,7 +1898,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
         if(m==='LAN' && currentStreamMode==='LAN'){
           if(img) img.src='http://'+ip+'/api/camera/stream?_fg='+Date.now();
         }else if(m==='CLOUD' && currentStreamMode==='CLOUD'){
-          if(img) img.src='/api/rt7/camera/stream.mjpg?_fg='+Date.now();
+          if(img) img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_fg='+Date.now();
         }else{
           startAuto();
         }
@@ -2559,7 +2575,7 @@ async function loadDevices(){const d=await j('/api/devices');const devs=d.device
 function saveIp(){espIp=($('espIp').value||$('deviceSel').value||espIp).trim().replace(/^https?:\/\//,'').replace(/\/.*/,'');$('espIp').value=espIp;log('ESP32 IP = '+espIp)}
 $('deviceSel').addEventListener('change',()=>{if($('deviceSel').value){$('espIp').value=$('deviceSel').value;saveIp();}})
 function startLan(){saveIp();$('lanEmpty').style.display='none';$('lanImg').onerror=()=>{$('lanInfo').innerHTML='<span class="warn">內網直連失敗：請確認手機與 ESP32 同 Wi-Fi，或瀏覽器是否擋 HTTP 私網影像。</span>';};$('lanImg').onload=()=>{$('lanInfo').innerHTML='<span class="ok">內網直連已啟動。</span> 這一路徑不經 Railway。';};$('lanImg').src='http://'+espIp+'/api/camera/stream?_lan='+Date.now();$('lanInfo').textContent='連線中： http://'+espIp+'/api/camera/stream';}
-async function startCloud(){await j('/api/rt7/camera/stream/start');$('cloudEmpty').style.display='none';$('cloudImg').onerror=()=>{$('cloudInfo').innerHTML='<span class="warn">Railway MJPEG 載入失敗</span>';};$('cloudImg').onload=()=>{$('cloudInfo').innerHTML='<span class="ok">Railway 雲端串流已啟動。</span>';};$('cloudImg').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();$('cloudInfo').textContent='連線中：/api/rt7/camera/stream.mjpg';}
+async function startCloud(){await j('/api/rt7/camera/stream/start');$('cloudEmpty').style.display='none';$('cloudImg').onerror=()=>{$('cloudInfo').innerHTML='<span class="warn">Railway MJPEG 載入失敗</span>';};$('cloudImg').onload=()=>{$('cloudInfo').innerHTML='<span class="ok">Railway 雲端串流已啟動。</span>';};$('cloudImg').src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud='+Date.now();$('cloudInfo').textContent='連線中：/api/rt7/camera/stream.mjpg';}
 function startBoth(){startLan();startCloud();}
 async function stopAll(){$('lanImg').removeAttribute('src');$('lanImg').src='';$('cloudImg').removeAttribute('src');$('cloudImg').src='';$('lanEmpty').style.display='block';$('cloudEmpty').style.display='block';await j('/api/rt7/camera/stream/stop');log('stopped')}
 async function loadState(){const s=await j('/api/rt7/camera/stream/state');log(s)}
@@ -2588,7 +2604,7 @@ async function j(u){const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.no
 function setMode(m){$('mode').textContent=m;$('mode').className='badge '+(m==='LAN'?'lan':m==='CLOUD'?'cloud':'')}
 function lanUrl(){return 'http://'+$('ip').value.trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'')+'/api/camera/stream'}
 function probe(url,ms){return new Promise(resolve=>{const im=new Image();let done=false;const fin=ok=>{if(done)return;done=true;try{im.src=''}catch(e){}resolve(ok)};im.onload=()=>fin(true);im.onerror=()=>fin(false);setTimeout(()=>fin(false),ms||2600);im.src=url+'?_probe='+Date.now();});}
-async function cloud(){await j('/api/rt7/camera/stream/start');$('empty').style.display='none';$('img').onerror=()=>log('Cloud MJPEG error');$('img').src='/api/rt7/camera/stream.mjpg?_cloud='+Date.now();setMode('CLOUD');log('CLOUD mode: Railway remote stream');}
+async function cloud(){await j('/api/rt7/camera/stream/start');$('empty').style.display='none';$('img').onerror=()=>log('Cloud MJPEG error');$('img').src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud='+Date.now();setMode('CLOUD');log('CLOUD mode: Railway remote stream');}
 async function lan(url){$('empty').style.display='none';$('img').onerror=()=>{log('LAN lost -> CLOUD fallback');cloud();};$('img').src=url+'?_lan='+Date.now();setMode('LAN');log('LAN mode: direct ESP32 stream '+url);}
 async function start(){wanted=true;setMode('AUTO');log('probe LAN...');const u=lanUrl();if(await probe(u,2600)) await lan(u); else await cloud();}
 async function stop(){wanted=false;$('img').removeAttribute('src');$('img').src='';$('empty').style.display='block';setMode('AUTO');await j('/api/rt7/camera/stream/stop');log('stopped')}
