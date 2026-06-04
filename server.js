@@ -18,7 +18,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E_AI_MUSIC_PLAYER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E1_MUSIC_MP3_BROWSER_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1509,6 +1509,27 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
        .replace(/\s+/g,' ').trim();
     return q || String(text||'').trim();
   }
+  async function rt7ProbeMusicUrl(url){
+    var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'probe=1&_='+Date.now(),{cache:'no-store'});
+    var ct=(r.headers.get('content-type')||'').toLowerCase();
+    if(!r.ok){
+      var msg='HTTP '+r.status;
+      try{ var jj=await r.json(); msg=jj.error||jj.message||msg; }catch(e){ try{ msg=await r.text(); }catch(_){} }
+      throw new Error(msg);
+    }
+    if(ct.indexOf('audio/')<0 && ct.indexOf('application/octet-stream')<0){ throw new Error('not audio: '+ct); }
+    return true;
+  }
+  async function rt7TryAudioPlay(url,q,label){
+    await rt7ProbeMusicUrl(url);
+    if(rt7MusicAudio){ try{ rt7MusicAudio.pause(); rt7MusicAudio.src=''; rt7MusicAudio.load(); }catch(e){} }
+    rt7MusicAudio=new Audio(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now());
+    rt7MusicAudio.preload='auto';
+    rt7MusicAudio.onplaying=function(){ setAnswer('正在播放：'+q); setDebug('music playing '+label); };
+    rt7MusicAudio.onended=function(){ setAnswer('音樂播放完成：'+q); };
+    rt7MusicAudio.onerror=function(){ setAnswer('音樂播放失敗：瀏覽器無法播放 '+label+' 音訊'); };
+    await rt7MusicAudio.play();
+  }
   async function rt7PlayMusic(q){
     q=(q||'').trim();
     if(!q){ setAnswer('請說歌曲名稱，例如：播放 五月天 溫柔'); return; }
@@ -1517,16 +1538,18 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{
       var r=await j('/api/rt7/music/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:q,device_id:selectedDeviceId||'#1'})});
       if(!r.ok){ setAnswer('音樂準備失敗：'+(r.error||'unknown')); return; }
-      if(rt7MusicAudio){ try{ rt7MusicAudio.pause(); rt7MusicAudio.src=''; }catch(e){} }
-      rt7MusicAudio=new Audio((r.wav_url||('/api/music/wav?q='+encodeURIComponent(q)))+'&_='+Date.now());
-      rt7MusicAudio.preload='auto';
-      rt7MusicAudio.onplaying=function(){ setAnswer('正在播放：'+q); };
-      rt7MusicAudio.onended=function(){ setAnswer('音樂播放完成：'+q); };
-      rt7MusicAudio.onerror=function(){ setAnswer('音樂播放失敗，請確認 Railway 可執行 yt-dlp/ffmpeg，或設定 MUSIC_PROXY_BASE_URL。'); };
-      await rt7MusicAudio.play();
+      var urls=[];
+      if(r.mp3_url) urls.push(['MP3',r.mp3_url]);
+      if(r.wav_url) urls.push(['WAV',r.wav_url]);
+      if(!urls.length) urls.push(['MP3','/api/music/mp3?q='+encodeURIComponent(q)]);
+      var lastErr=null;
+      for(var i=0;i<urls.length;i++){
+        try{ await rt7TryAudioPlay(urls[i][1],q,urls[i][0]); return; }catch(e){ lastErr=e; setDebug('music '+urls[i][0]+' failed '+(e.message||e)); }
+      }
+      throw lastErr || new Error('no supported source');
     }catch(e){
-      setAnswer('音樂播放失敗：'+e.message);
-      setDebug('music failed '+e.message);
+      setAnswer('音樂播放失敗：'+(e.message||e)+'。若 Railway 無法下載 YouTube，請在 Railway Variables 設定 MUSIC_PROXY_BASE_URL 指向 Node-RED，例如 http://你的電腦IP:1880');
+      setDebug('music failed '+(e.message||e));
     }
   }
   async function routeVoiceQuestion(text){
@@ -2385,7 +2408,7 @@ function rt7MusicFile_(q, ext) {
 function rt7CleanupMusicCache_() {
   try {
     const files = fs.readdirSync(MUSIC_CACHE_DIR)
-      .filter(f => /\.(pcm|wav)$/i.test(f))
+      .filter(f => /\.(pcm|wav|mp3)$/i.test(f))
       .map(f => ({ f, p:path.join(MUSIC_CACHE_DIR,f), t:fs.statSync(path.join(MUSIC_CACHE_DIR,f)).mtimeMs }))
       .sort((a,b)=>b.t-a.t);
     const keep = Math.max(2, MUSIC_KEEP_COUNT) * 2;
@@ -2416,14 +2439,14 @@ async function rt7EnsureMusicCached_(q, format) {
   q = rt7NormalizeMusicQuery_(q);
   if (!q) throw new Error('missing music query');
   rt7EnsureMusicDir_();
-  const ext = format === 'wav' ? 'wav' : 'pcm';
+  const ext = format === 'mp3' ? 'mp3' : (format === 'wav' ? 'wav' : 'pcm');
   const target = rt7MusicFile_(q, ext);
   if (fs.existsSync(target) && fs.statSync(target).size >= 4096) {
     try { fs.utimesSync(target, new Date(), new Date()); } catch(_) {}
     return { file:target, cache:'hit', query:q };
   }
   if (MUSIC_PROXY_BASE_URL) {
-    const url = MUSIC_PROXY_BASE_URL + (format === 'wav' ? '/api/music/wav?q=' : '/api/music/pcm?q=') + encodeURIComponent(q);
+    const url = MUSIC_PROXY_BASE_URL + (format === 'mp3' ? '/api/music/mp3?q=' : (format === 'wav' ? '/api/music/wav?q=' : '/api/music/pcm?q=')) + encodeURIComponent(q);
     const r = await fetch(url, { cache:'no-store' });
     if (!r.ok) throw new Error('music proxy HTTP ' + r.status);
     const b = Buffer.from(await r.arrayBuffer());
@@ -2440,9 +2463,11 @@ async function rt7EnsureMusicCached_(q, format) {
   try {
     await rt7Run_(ytdlp, ['--no-playlist','--default-search','ytsearch','--retries','3','--fragment-retries','3','--socket-timeout','20','-f','bestaudio[ext=m4a]/bestaudio/best','-o',audio,'ytsearch1:'+q]);
     if (!fs.existsSync(audio) || fs.statSync(audio).size < 4096) throw new Error('audio.m4a not created');
-    const args = format === 'wav'
-      ? ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','pcm_s16le','-f','wav','-ac','1','-ar','16000',target]
-      : ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','pcm_s16le','-f','s16le','-ac','1','-ar','16000',target];
+    const args = format === 'mp3'
+      ? ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','libmp3lame','-b:a','128k','-ar','44100','-ac','2',target]
+      : (format === 'wav'
+        ? ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','pcm_s16le','-f','wav','-ac','1','-ar','16000',target]
+        : ['-y','-hide_banner','-loglevel','error','-nostdin','-i',audio,'-map','0:a:0','-vn','-acodec','pcm_s16le','-f','s16le','-ac','1','-ar','16000',target]);
     await rt7Run_(ffmpeg, args);
     if (!fs.existsSync(target) || fs.statSync(target).size < 4096) throw new Error(ext + ' output too small');
     rt7CleanupMusicCache_();
@@ -2463,7 +2488,8 @@ async function rt7MusicStream_(req, res, format) {
     res.setHeader('Content-Length', String(stat.size));
     res.setHeader('X-RT7-Music-Query', encodeURIComponent(got.query));
     res.setHeader('X-RT7-Music-Cache', got.cache);
-    if (format === 'wav') res.setHeader('Content-Type','audio/wav');
+    if (format === 'mp3') res.setHeader('Content-Type','audio/mpeg');
+    else if (format === 'wav') res.setHeader('Content-Type','audio/wav');
     else { res.setHeader('Content-Type','application/octet-stream'); res.setHeader('X-DAZI-Audio','pcm_s16le;rate=16000;channels=1'); }
     fs.createReadStream(got.file).pipe(res);
   } catch (e) {
@@ -2472,17 +2498,19 @@ async function rt7MusicStream_(req, res, format) {
   }
 }
 app.get('/api/music/health', (req,res)=>{
-  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E music: AI voice command -> /api/music/wav or /api/music/pcm; cache hit -> direct response; cache miss -> yt-dlp -> ffmpeg -> cache', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
+  res.json({ ok:true, version:SERVER_VERSION, mode:'V5.6E music: AI voice command -> /api/music/wav or /api/music/pcm; cache hit -> direct response; cache miss -> yt-dlp -> ffmpeg -> cache', format_pcm:'pcm_s16le;rate=16000;channels=1', format_wav:'wav pcm_s16le 16k mono', cache_dir:MUSIC_CACHE_DIR, keep_cache_count:MUSIC_KEEP_COUNT, proxy_base:!!MUSIC_PROXY_BASE_URL, endpoint_mp3:'/api/music/mp3?q=歌曲名稱', endpoint_pcm:'/api/music/pcm?q=歌曲名稱', endpoint_wav:'/api/music/wav?q=歌曲名稱' });
 });
+app.get('/api/music/mp3', (req,res)=>rt7MusicStream_(req,res,'mp3'));
 app.get('/api/music/pcm', (req,res)=>rt7MusicStream_(req,res,'pcm'));
 app.get('/api/music/wav', (req,res)=>rt7MusicStream_(req,res,'wav'));
+app.get('/api/rt7/music/mp3', (req,res)=>rt7MusicStream_(req,res,'mp3'));
 app.get('/api/rt7/music/pcm', (req,res)=>rt7MusicStream_(req,res,'pcm'));
 app.get('/api/rt7/music/wav', (req,res)=>rt7MusicStream_(req,res,'wav'));
 app.post('/api/rt7/music/play', async (req,res)=>{
   const q = rt7NormalizeMusicQuery_(req.body?.q || req.body?.song || req.query.q || req.query.song || '');
   if (!q) return res.json({ ok:false, version:SERVER_VERSION, mode:'MUSIC', error:'missing q', answer:'請說要播放的歌曲名稱。' });
   appendEvent({ type:'music_play', query:q, message:'AI music play '+q });
-  res.json({ ok:true, version:SERVER_VERSION, mode:'MUSIC', query:q, answer:'準備播放：'+q, wav_url:'/api/music/wav?q='+encodeURIComponent(q), pcm_url:'/api/music/pcm?q='+encodeURIComponent(q), note:'手機頁使用 WAV 串流播放；ESP32 可用 PCM endpoint。' });
+  res.json({ ok:true, version:SERVER_VERSION, mode:'MUSIC', query:q, answer:'準備播放：'+q, mp3_url:'/api/music/mp3?q='+encodeURIComponent(q), wav_url:'/api/music/wav?q='+encodeURIComponent(q), pcm_url:'/api/music/pcm?q='+encodeURIComponent(q), note:'手機頁優先使用 MP3 播放；ESP32 可用 PCM endpoint。' });
 });
 
 async function openAiChat(messages, max_tokens=360) {
@@ -2550,7 +2578,7 @@ app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
     const isVision = mode === 'vision' || (mode !== 'chat' && visionWords.some(w=>text.includes(w)));
     let result;
     if (music.isMusic && mode !== 'vision') {
-      result = { ok:true, mode:'MUSIC', text, query:music.query, answer:'準備播放：' + music.query, wav_url:'/api/music/wav?q=' + encodeURIComponent(music.query), pcm_url:'/api/music/pcm?q=' + encodeURIComponent(music.query) };
+      result = { ok:true, mode:'MUSIC', text, query:music.query, answer:'準備播放：' + music.query, mp3_url:'/api/music/mp3?q=' + encodeURIComponent(music.query), wav_url:'/api/music/wav?q=' + encodeURIComponent(music.query), pcm_url:'/api/music/pcm?q=' + encodeURIComponent(music.query) };
       appendEvent({ type:'music_voice_route', query:music.query, text, message:'voice routed to music' });
     }
     else if (isVision) result = await analyzeLatestSnapshot(text);
