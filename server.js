@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6E6_D1_SAFE_MUSIC_BEACON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F_MOBILE_MUSIC_PLAYER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -347,14 +347,6 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, version: SERVER_VERSION, time: nowIso() }));
-app.get('/api/music/health', (req, res) => res.json({
-  ok:true,
-  version:SERVER_VERSION,
-  mode:'safe beacon trigger only; does not alter RT7 button bindings',
-  note:'Mobile AI voice sends GET beacon to selected/all device music endpoint. Say: 播放 五月天 溫柔',
-  endpoints:['http://DEVICE_IP/api/music/play?q=...', 'http://DEVICE_IP:1880/api/music/play?q=...', 'https://DEVICE_IP/api/music/play?q=...'],
-  current_devices: readDevices().map(d => ({id:d.id, name:d.name, ip:d.ip, enabled:d.enabled}))
-}));
 
 // V4.9A product system status: one endpoint for user support and maintenance.
 app.get('/api/rt7/system/status', (req, res) => {
@@ -1339,7 +1331,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6C</title>
+<title>RT7 Cloud Original UI V5.6F Mobile Music</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1364,7 +1356,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <script>
 (function(){
-  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var rt7DeviceList=[]; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
+  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
   // V5.4W: FACE_GATE is default OFF and persistent. UI state alone must never re-enable it.
   setTimeout(function(){ setAiUi(ai); rt7FaceGateEspEnable(ai, true); }, 600);
   function setAnswer(t){ if(answer) answer.textContent=t; }
@@ -1394,7 +1386,6 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       }
       var list=(d.devices||[]).filter(function(x){return x && x.enabled!==false;});
       if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true}];
-      rt7DeviceList=list;
       var sel=document.getElementById('deviceSel'); if(!sel) return;
       sel.innerHTML=list.map(function(x){
         var id=x.id||'#1'; var name=x.name||'RT7'; var dip=rt7CleanHost(x.ip||'');
@@ -1504,55 +1495,37 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(b){ b.textContent=ai?'FACE_ENABLE':'IDLE'; if(ai)b.classList.add('aiOn'); else b.classList.remove('aiOn'); }
     if(msg) setAnswer(msg);
   }
-  function rt7MusicTitleFromText(text){
-    var t=String(text||'').trim();
-    if(!t) return '';
-    var m=t.match(/(?:播放|放一首|我想聽|我要聽|聽)(?:音樂|歌曲|歌)?[：:\s]*(.+)$/);
-    if(m && m[1]) return m[1].replace(/[。.!！?？]$/,'').trim();
-    return '';
+  function rt7ParseMusicQuery(text){
+    text=(text||'').trim();
+    var m=text.match(/^(?:請)?(?:幫我)?(?:播放|放|聽|我要聽|想聽)\s*(.+)$/i);
+    if(!m) m=text.match(/(?:播放|放|聽)\s*(.+)$/i);
+    if(!m) return '';
+    var q=(m[1]||'').trim();
+    q=q.replace(/[。！!？?，,]$/g,'').trim();
+    return q;
   }
-  function rt7UniquePush(arr, v){ v=rt7CleanHost(v); if(v && arr.indexOf(v)<0) arr.push(v); }
-  function rt7MusicHosts(){
-    var hosts=[];
-    try{ rt7UniquePush(hosts, localStorage.getItem('RT7_MUSIC_HOST')||''); }catch(e){}
-    rt7UniquePush(hosts, ip);
-    try{
-      (rt7DeviceList||[]).forEach(function(d){ if(d && d.enabled!==false) rt7UniquePush(hosts, d.ip||''); });
-    }catch(e){}
-    return hosts;
-  }
-  function rt7SendMusicBeacon(url){
-    try{
-      var im=new Image();
-      im.onload=function(){};
-      im.onerror=function(){};
-      im.src=url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now();
-    }catch(e){}
-    try{ fetch(url+(url.indexOf('?')>=0?'&':'?')+'_f='+Date.now(),{mode:'no-cors',cache:'no-store',keepalive:true}).catch(function(){}); }catch(e){}
-  }
-  async function rt7PlayMusicByVoice(title){
-    title=String(title||'').trim();
-    if(!title){ setAnswer('請說：播放 歌曲名稱'); return true; }
-    var q=encodeURIComponent(title);
-    var hosts=rt7MusicHosts();
-    if(!hosts.length){ setAnswer('音樂播放失敗：沒有設備 IP'); return true; }
-    var urls=[];
-    hosts.forEach(function(h){
-      urls.push('http://'+h+'/api/music/play?q='+q);
-      urls.push('http://'+h+':1880/api/music/play?q='+q);
-      urls.push('https://'+h+'/api/music/play?q='+q);
-    });
-    urls=urls.filter(function(u,i,a){return a.indexOf(u)===i;});
-    urls.forEach(rt7SendMusicBeacon);
-    setAnswer('音樂播放命令已送出：'+title+'。若未播放，請確認 Node-RED /api/music/play 已啟動，或設定 localStorage RT7_MUSIC_HOST。');
-    setDebug('music beacon sent '+urls.length+' urls title='+title);
-    return true;
+  async function rt7MobileMusicPlay(query){
+    query=(query||'').trim();
+    if(!query){ setAnswer('請說：播放 歌曲名稱'); return; }
+    setAnswer('手機播放音樂：'+query+'，正在開啟 YouTube 搜尋...');
+    setDebug('mobile music '+query);
+    try{ await j('/api/rt7/music/mobile?q='+encodeURIComponent(query)+'&mode=youtube'); }catch(e){}
+    var url='https://www.youtube.com/results?search_query='+encodeURIComponent(query);
+    // Open in a new tab/app when possible. If blocked, leave a visible link for manual tap.
+    var opened=null;
+    try{ opened=window.open(url,'_blank'); }catch(e){}
+    if(!opened){
+      setAnswer('手機播放音樂：'+query+'。請點這裡開啟 YouTube：'+url);
+      try{ location.href=url; }catch(e){}
+    }else{
+      setAnswer('已開啟手機 YouTube 搜尋：'+query+'。不需要 Node-RED。');
+    }
   }
   async function routeVoiceQuestion(text){
     text=(text||'').trim();
     if(!text){ setAnswer('沒有收到語音內容，請再按一次 AI語音助理後說話'); setDebug('voice empty'); return; }
-    var musicTitle=rt7MusicTitleFromText(text);
-    if(musicTitle){ await rt7PlayMusicByVoice(musicTitle); return; }
+    var mq=rt7ParseMusicQuery(text);
+    if(mq){ await rt7MobileMusicPlay(mq); return; }
     setAnswer('你說：'+text+'，AI 分析中...');
     setDebug('voice question: '+text);
     try{
@@ -2415,6 +2388,21 @@ app.get('/api/rt7/vision/qa', handleVisionQa);
 app.post('/api/rt7/vision/qa', handleVisionQa);
 app.get('/api/rt7/phase9d/vision_qa_ping', (req,res)=>res.json({ok:true, version:SERVER_VERSION, openai_key:!!safeString(process.env.OPENAI_API_KEY).trim(), latest_snapshot:getSnapshotMeta_(), last_vision:cloudState.last_vision}));
 app.get('/api/rt7/vision/state', (req,res)=>res.json({ok:true, version:SERVER_VERSION, openai_key:!!safeString(process.env.OPENAI_API_KEY).trim(), latest_snapshot:getSnapshotMeta_(), last_vision:cloudState.last_vision}));
+
+// V5.6F: Mobile music player.  No Node-RED required.
+// The phone opens YouTube search / YouTube Music search from the AI voice command.
+app.get('/api/rt7/music/mobile', (req, res) => {
+  const q = safeString(req.query.q || req.query.query || '').trim();
+  const mode = safeString(req.query.mode || 'youtube').toLowerCase();
+  if (!q) return res.status(400).json({ ok:false, version:SERVER_VERSION, error:'missing q' });
+  const yt = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(q);
+  const ytm = 'https://music.youtube.com/search?q=' + encodeURIComponent(q);
+  const url = mode === 'ytmusic' ? ytm : yt;
+  const ev = appendEvent({ type:'mobile_music', query:q, target:mode, message:'mobile music search opened: ' + q });
+  broadcast('mobile_music', ev);
+  res.json({ ok:true, version:SERVER_VERSION, action:'mobile_music', query:q, url, youtube_url:yt, youtube_music_url:ytm, event:ev });
+});
+
 app.post('/api/rt7/phase9j/voice_vision', async (req,res)=>{
   const started = Date.now();
   try {
