@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6C_MOBILE_DEVICE_SELECTOR_BIND';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6C1_MOBILE_SELECTOR_REGEX_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -32,10 +32,10 @@ function ensureDataDir() {
 
 function defaultDevices() {
   return [
-    { id: '#1', name: 'RT7 ESP32-S3-CAM', ip: '', enabled: true },
-    { id: '#2', name: '#2', ip: '', enabled: true },
-    { id: '#3', name: '#3', ip: '', enabled: true },
-    { id: '#4', name: '#4', ip: '', enabled: true }
+    { id: '#1', name: 'RT7 ESP32-S3-CAM', ip: '192.168.0.179', enabled: true },
+    { id: '#2', name: '影像對講', ip: '192.168.0.11', enabled: true },
+    { id: '#3', name: 'RT7 S3-CAM-A', ip: '192.168.0.12', enabled: true },
+    { id: '#4', name: 'RT7 S3-CAM-B', ip: '192.168.0.13', enabled: true }
   ];
 }
 
@@ -1364,6 +1364,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function showDoorbellInline(){ setDoorText('⚠️ 有人按門鈴', true); setAnswer('收到門鈴提示音'); playDingdong(); setTimeout(function(){ setDoorText('最後：'+new Date().toLocaleTimeString('zh-TW'), false); }, 8000); }
   function setDebug(t){ /* V5.0E: hidden debug; no UI repaint */ }
   function rt7Esc(s){ return String(s||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
+  function rt7CleanHost(v){
+    v=String(v||'').trim();
+    var low=v.toLowerCase();
+    if(low.indexOf('http://')===0) v=v.slice(7);
+    else if(low.indexOf('https://')===0) v=v.slice(8);
+    var slash=v.indexOf('/');
+    if(slash>=0) v=v.slice(0,slash);
+    return v.trim();
+  }
   async function rt7LoadDeviceSelector(){
     try{
       // V5.6C: mobile page is bound to Device Manager. Use /api/devices as source of truth.
@@ -1379,7 +1388,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true}];
       var sel=document.getElementById('deviceSel'); if(!sel) return;
       sel.innerHTML=list.map(function(x){
-        var id=x.id||'#1'; var name=x.name||'RT7'; var dip=(x.ip||'').replace(/^https?:\/\//i,'').replace(/\/.*$/,'');
+        var id=x.id||'#1'; var name=x.name||'RT7'; var dip=rt7CleanHost(x.ip||'');
         return '<option value="'+rt7Esc(id)+'" data-ip="'+rt7Esc(dip)+'" data-name="'+rt7Esc(name)+'">'+rt7Esc(id+' / '+name+(dip?' / '+dip:''))+'</option>';
       }).join('');
       var want=selectedDeviceId||d.current_device_id||'#1'; sel.value=want; if(sel.value!==want) sel.selectedIndex=0;
@@ -1390,7 +1399,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function rt7ApplySelectedDevice(save){
     var sel=document.getElementById('deviceSel'); if(!sel || !sel.options.length) return;
     var opt=sel.options[sel.selectedIndex]; selectedDeviceId=sel.value||'#1';
-    var nextIp=(opt&&opt.getAttribute('data-ip')||'').trim(); if(nextIp) ip=nextIp.replace(/^https?:\/\//i,'').replace(/\/.*$/,'');
+    var nextIp=rt7CleanHost(opt&&opt.getAttribute('data-ip')||''); if(nextIp) ip=nextIp;
     var nextName=(opt&&opt.getAttribute('data-name')||'').trim();
     try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',selectedDeviceId); localStorage.setItem('RT7_CURRENT_DEVICE_IP',ip); localStorage.setItem('RT7_CURRENT_DEVICE_NAME',nextName);}catch(e){}
     if(save){
