@@ -16,7 +16,7 @@ const DATA_DIR = process.env.RT7_DATA_DIR || path.join(__dirname, 'data');
 const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6B_DEVICE_MANAGER_EVENT_LOG';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6D_MOBILE_CUSTOM_DEVICE_PICKER_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1322,18 +1322,27 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   const aiOn = q.face === '1' || cloudState.face_gate_auto_enabled === true;
   const doorLast = doorbellState.last || null;
   const doorText = doorLast && doorLast.time ? ('最後：' + new Date(doorLast.time).toLocaleTimeString('zh-TW')) : '等待事件';
+  // V5.6C: server-side render all saved devices into the mobile selector.
+  // This prevents Android Chrome from showing only the hard-coded #1 option if async fetch is delayed/cached.
+  const rt7MobileEsc_ = (v) => safeString(v).replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c] || c));
+  const rt7MobileDevices_ = (readDevices() || []).filter(d => d && d.enabled !== false && (d.id || d.ip));
+  const rt7MobileDeviceOptions_ = (rt7MobileDevices_.length ? rt7MobileDevices_ : [{id:'#1',name:'RT7 ESP32-S3-CAM',ip}]).map(d => {
+    const id = safeString(d.id || '#1');
+    const label = id + ' / ' + safeString(d.name || 'RT7') + (d.ip ? (' / ' + safeString(d.ip)) : '');
+    return '<option value="' + rt7MobileEsc_(id) + '">' + rt7MobileEsc_(label) + '</option>';
+  }).join('');
   let modeLabel = mode === 'lan' ? 'LAN' : (mode === 'cloud' ? 'CLOUD' : (mode === 'auto' ? 'AUTO' : 'AUTO'));
   let answer = mode === 'idle' ? '雲端門鈴待機中' : '自動判斷影像來源中';
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6A</title>
+<title>RT7 Cloud Original UI V5.6D</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
 a,button,input,select{pointer-events:auto!important;touch-action:manipulation!important}.noTouch,.video img,.emptyVideo,.badge{pointer-events:none!important}
 .top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900}.hamb{font-size:34px}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:34px}
-.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827;flex:1;min-width:0}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}.deviceAdd{height:42px;width:46px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-weight:900;font-size:22px}
+.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827;flex:1;min-width:0}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0;pointer-events:none}.deviceAdd{height:42px;width:46px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-weight:900;font-size:22px}.devPickerMask{position:fixed;inset:0;background:rgba(0,0,0,.42);z-index:99998;display:none;align-items:center;justify-content:center;padding:18px}.devPickerPanel{background:#fff;border-radius:18px;max-width:480px;width:100%;box-shadow:0 14px 40px rgba(0,0,0,.35);overflow:hidden}.devPickerTitle{padding:14px 16px;font-weight:900;background:#0d2c32;color:#fff}.devPickerItem{width:100%;display:flex;align-items:center;justify-content:space-between;text-align:left;background:#fff;color:#111827;border:0;border-bottom:1px solid #e5e7eb;padding:16px 18px;font-size:19px;font-weight:900}.devPickerItem small{display:block;color:#64748b;font-size:13px;font-weight:800;margin-top:4px}.devPickerItem.active{background:#eff6ff}.devPickerClose{width:100%;border:0;background:#475569;color:#fff;font-weight:900;padding:14px;font-size:16px}
 .video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22)}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
@@ -1342,7 +1351,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><div class="hamb">☰</div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="spacer"></div></header>
-<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="#1">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div><button id="btnAddDevice" class="deviceAdd" type="button">＋</button></div>
+<div class="deviceBar"><div id="deviceBox" class="deviceText"><select id="deviceSel">${rt7MobileDeviceOptions_}</select></div><button id="btnAddDevice" class="deviceAdd" type="button">＋</button></div><div id="devPicker" class="devPickerMask"><div class="devPickerPanel"><div class="devPickerTitle">選擇影像對講設備</div><div id="devPickerList"></div><button id="devPickerClose" class="devPickerClose" type="button">關閉</button></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
@@ -1374,22 +1383,45 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     setAnswer('已選擇 '+rt7DeviceLabel(d));
     if(videoWanted && restartVideo){ stopVideo(); setTimeout(startAuto, 180); }
   }
+  function rt7RenderPicker(){
+    var list=document.getElementById('devPickerList'); if(!list) return;
+    var html='';
+    for(var i=0;i<DEVICES.length;i++){
+      var d=DEVICES[i]||{}; var id=d.id||('#'+(i+1)); var name=d.name||'影像對講'; var dip=d.ip||'';
+      var active=(id===currentDeviceId)?' active':'';
+      html+='<button type="button" class="devPickerItem'+active+'" data-id="'+String(id).replace(/"/g,'&quot;')+'"><span>'+String(id)+' / '+String(name)+'<small>'+String(dip||'未設定 IP')+'</small></span><b>'+(active?'●':'○')+'</b></button>';
+    }
+    list.innerHTML=html || '<button type="button" class="devPickerItem">尚無設備，請到設備管理頁設定</button>';
+    Array.prototype.forEach.call(list.querySelectorAll('.devPickerItem[data-id]'), function(btn){
+      btn.onclick=function(){ var id=btn.getAttribute('data-id'); var d=DEVICES.find(function(x){return (x.id||'')===id;}); rt7HideDevicePicker(); rt7ApplyDevice(d,true); var sel=document.getElementById('deviceSel'); if(sel) sel.value=id; rt7RenderPicker(); };
+    });
+  }
+  function rt7ShowDevicePicker(){ rt7RenderPicker(); var p=document.getElementById('devPicker'); if(p) p.style.display='flex'; }
+  function rt7HideDevicePicker(){ var p=document.getElementById('devPicker'); if(p) p.style.display='none'; }
   async function rt7LoadDevices(){
     try{
-      var j=await rt7Json('/api/devices');
-      DEVICES=(j.devices||[]).filter(function(d){return d && (d.id||d.ip);});
-    }catch(e){ DEVICES=[]; }
+      var j=await rt7Json('/api/devices?mobile=1&v=56c');
+      DEVICES=(j.devices||[]).filter(function(d){return d && d.enabled!==false && (d.id||d.ip);});
+      setDebug('devices loaded count=' + DEVICES.length);
+    }catch(e){ DEVICES=[]; setDebug('devices load failed: '+(e&&e.message||e)); }
     if(!DEVICES.length) DEVICES=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true},{id:'#2',name:'#2 影像對講門禁',ip:'',enabled:true},{id:'#3',name:'#3 影像對講門禁',ip:'',enabled:true},{id:'#4',name:'#4 影像對講門禁',ip:'',enabled:true}];
     try{ currentDeviceId=localStorage.getItem('RT7_DEVICE_ID')||currentDeviceId||'#1'; }catch(e){}
     var sel=document.getElementById('deviceSel');
     if(sel){
-      sel.innerHTML=DEVICES.map(function(d){ return '<option value="'+(d.id||'')+'">'+rt7DeviceLabel(d)+'</option>'; }).join('');
+      sel.innerHTML=DEVICES.map(function(d){ return '<option value="'+String(d.id||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')+'">'+rt7DeviceLabel(d).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</option>'; }).join('');
       if(!DEVICES.some(function(d){return (d.id||'')===currentDeviceId;})) currentDeviceId=(DEVICES[0].id||'#1');
       sel.value=currentDeviceId;
       var d=rt7CurrentDevice(); if(d.ip) ip=String(d.ip).replace(/^https?:\/\//,'').replace(/\/.*$/,'');
       sel.onchange=function(){ var id=sel.value; var d=DEVICES.find(function(x){return (x.id||'')===id;}); rt7ApplyDevice(d,true); };
     }
+    rt7RenderPicker();
   }
+  setTimeout(function(){
+    var box=document.getElementById('deviceBox'); if(box) box.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); rt7ShowDevicePicker(); };
+    var sel=document.getElementById('deviceSel'); if(sel) sel.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); rt7ShowDevicePicker(); };
+    var close=document.getElementById('devPickerClose'); if(close) close.onclick=rt7HideDevicePicker;
+    var mask=document.getElementById('devPicker'); if(mask) mask.addEventListener('click', function(ev){ if(ev.target===mask) rt7HideDevicePicker(); }, false);
+  }, 0);
   async function rt7AddDevice(){
     var id=prompt('輸入設備編號，例如 #2：','#2'); if(!id) return; id=id.trim();
     var name=prompt('輸入設備名稱：', id+' 影像對講門禁')||id;
@@ -1459,7 +1491,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
   }
   function bind(id,fn){ var el=document.getElementById(id); if(el) el.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(); }, false); }
-  bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio); bind('btnAddDevice', rt7AddDevice); rt7LoadDevices();
+  bind('btnStart', startAuto); bind('btnStop', stopVideo); bind('btnAudio', enableDoorbellAudio); bind('btnAddDevice', rt7AddDevice); rt7LoadDevices(); setTimeout(rt7LoadDevices,500); window.addEventListener('pageshow', function(){ rt7LoadDevices(); });
   bind('btnAiOn', async function(){ setAiUi(true,'人臉辨識已啟用：靠近鏡頭會自動辨識'); rt7FaceGateEspEnable(true); setDebug('face mode on'); });
   bind('btnAiOff', async function(){ setAiUi(false,'人臉辨識已關閉'); rt7FaceGateEspEnable(false); setDebug('face mode off'); });
   bind('btnOpenDoor', async function(){
