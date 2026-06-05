@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6H2_GPIO_CONTROL_DEVICE_KEYPAD_ENTRY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6H5_GPIO_CONTROL_START_BUTTON_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -3076,7 +3076,7 @@ app.get('/rt7_gpio_control', (req,res)=>{
   const devJson = JSON.stringify(devs).replace(/</g,'\\u003c');
   const keys = ['1','2','3','A','4','5','6','B','7','8','9','C','*','0','#','D'];
   const keyHtml = keys.map(k=>`<button type="button" class="key ${/[ABCD*#]/.test(k)?'red':''}" data-key="${k}">${k}</button>`).join('');
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 GPIO Fast Control V5.6H4</title>
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 GPIO Fast Control V5.6H5</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;background:#fff;font-family:system-ui,-apple-system,'Noto Sans TC','Microsoft JhengHei',Arial,sans-serif;color:#17262a}body{max-width:520px;margin:0 auto;padding-bottom:30px}button,a,select,input{touch-action:manipulation}.top{height:56px;background:linear-gradient(90deg,#0b252b,#0d2c32);color:#fff;display:flex;align-items:center;padding:0 10px}.back{background:#41546b;color:#fff;text-decoration:none;border-radius:8px;padding:8px 10px;font-weight:900;font-size:13px}.menu{font-size:28px;margin-left:8px;color:#dbeafe;text-decoration:none}.title{flex:1;text-align:center;font-weight:900;line-height:1.05;font-size:12px;letter-spacing:.3px}.wrap{padding:7px}.device{width:100%;height:36px;font-size:13px;font-weight:900;border:1px solid #334155;border-radius:4px;background:#fff;padding:0 7px}.video{position:relative;background:#000;aspect-ratio:16/9;overflow:hidden;margin-top:6px}.video img{width:100%;height:100%;object-fit:cover;display:block;background:#000}.badge{position:absolute;top:10px;left:10px;background:#71839d;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.badge2{position:absolute;top:10px;right:10px;background:#e03131;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.hint{position:absolute;left:0;right:0;top:46%;text-align:center;color:#dbe3ee;font-weight:900;font-size:13px}.bar{display:flex;justify-content:flex-end;gap:6px;margin-top:5px}.bar button{background:#08272d;color:#fff;border:0;border-radius:4px;padding:7px 11px;font-size:12px;font-weight:900}.keypadBox{display:flex;justify-content:center;margin:12px 0 6px}.keypad{background:#333;border:4px solid #777;border-radius:10px;padding:8px;display:grid;grid-template-columns:repeat(4,47px);gap:7px}.key{width:47px;height:38px;border-radius:5px;background:#2d8fd6;border:2px solid #9fc5dd;color:#fff;font-size:20px;font-weight:900;line-height:1;padding:0}.key.red{background:#c73b3b;border-color:#e6a0a0}.card{border-top:1px solid #e5e7eb;padding:10px 8px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}button{border:0;border-radius:8px;padding:12px 8px;font-weight:900;color:#fff;background:#0b88d8;font-size:16px}.green{background:#13a85a}.redBtn{background:#d12f2f}.orange{background:#f39c12}.gray{background:#40516a}input{width:100%;font-size:17px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:7px}.status{white-space:pre-wrap;background:#071120;color:#d8f7ff;border-radius:8px;padding:9px;font-family:monospace;font-size:12px;margin:8px;min-height:38px}.small{text-align:center;color:#64748b;font-size:11px;margin-top:5px}@media(max-width:380px){.keypad{grid-template-columns:repeat(4,42px)}.key{width:42px;height:34px}.title{font-size:11px}}
 </style></head><body>
@@ -3084,13 +3084,13 @@ app.get('/rt7_gpio_control', (req,res)=>{
 <div class="wrap">
   <select id="devSel" class="device">${optHtml}</select>
   <div class="video"><img id="cam" alt="preview"><div class="badge">IDLE</div><div class="badge2" id="modeBadge">LAN</div><div class="hint" id="vhint">等待影像串流</div></div>
-  <div class="bar"><button id="btnStartCam" type="button">開始影像</button><button id="btnStopCam" type="button">停止影像</button></div>
+  <div class="bar"><button id="btnStartCam" type="button" onclick="window.rt7GpioStartCam&&window.rt7GpioStartCam()">開始影像</button><button id="btnStopCam" type="button" onclick="window.rt7GpioStopCam&&window.rt7GpioStopCam()">停止影像</button></div>
   <div class="keypadBox"><div class="keypad" id="keys">${keyHtml}</div></div>
   <div class="small">按鍵會優先直送 ESP32 :8081；失敗時才走 Railway 備援。</div>
   <div class="card">
-    <div class="grid2"><button id="btnDoor" class="green" type="button">開門 GPIO40</button><button id="btnPulse" class="orange" type="button">Pulse 指定 GPIO</button></div>
+    <div class="grid2"><button id="btnDoor" class="green" type="button" onclick="window.rt7GpioDoor&&window.rt7GpioDoor()">開門 GPIO40</button><button id="btnPulse" class="orange" type="button" onclick="window.rt7GpioPulse&&window.rt7GpioPulse()">Pulse 指定 GPIO</button></div>
     <div class="grid2"><input id="pin" value="40" inputmode="numeric"><input id="ms" value="300" inputmode="numeric"></div>
-    <div class="grid3" style="margin-top:8px"><button id="btnOn" type="button">ON</button><button id="btnOff" class="redBtn" type="button">OFF</button><button id="btnTest" class="gray" type="button">測試</button></div>
+    <div class="grid3" style="margin-top:8px"><button id="btnOn" type="button" onclick="window.rt7GpioWrite&&window.rt7GpioWrite(1)">ON</button><button id="btnOff" class="redBtn" type="button" onclick="window.rt7GpioWrite&&window.rt7GpioWrite(0)">OFF</button><button id="btnTest" class="gray" type="button" onclick="window.rt7GpioPing&&window.rt7GpioPing()">測試</button></div>
   </div>
   <div id="status" class="status">ready</div>
 </div>
@@ -3113,6 +3113,7 @@ function apiJson(url){return fetch(url,{cache:'no-store'}).then(function(r){retu
 function cloud(path,label){setTimeout(function(){apiJson(path).then(log).catch(function(e){log(label+' Railway 備援失敗: '+e.message);});},450);}
 function setBadge(txt){var b=el('modeBadge'); if(b)b.textContent=txt;}
 function startCam(){
+  log('開始影像按鍵已觸發，準備連線...');
   var h=host(); if(!h){log('沒有設備 IP');return;}
   var img=el('cam'); var hint=el('vhint');
   if(hint) hint.style.display='none';
@@ -3140,8 +3141,15 @@ function pulse(){if(!canClick())return; var p=el('pin').value||'40'; var m=el('m
 function write(v){if(!canClick())return; var p=el('pin').value||'40'; lanBeacon(u8081('/api/gpio?pin='+encodeURIComponent(p)+'&value='+v+'&tag=rt7_gpio_page'),'gpio_write_'+v); cloud('/api/rt7/gpio/write?device_id='+encodeURIComponent(sid())+'&pin='+encodeURIComponent(p)+'&value='+v,'write');}
 function key(k){if(!canClick())return; lanBeacon(u8081('/api/keypad?key='+encodeURIComponent(k)+'&tag=rt7_gpio_keypad'),'key_'+k); cloud('/api/rt7/gpio/key?device_id='+encodeURIComponent(sid())+'&key='+encodeURIComponent(k),'key');}
 function ping(){if(!canClick())return; lanBeacon(u8081('/api/health?tag=rt7_gpio_ping'),'ping');}
-function bind(){el('devSel').addEventListener('change',function(){try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',sid());localStorage.setItem('RT7_SELECTED_DEVICE_ID',sid());}catch(e){} stopCam(); log({selected:current()});}); el('btnStartCam').addEventListener('click',startCam); el('btnStopCam').addEventListener('click',stopCam); el('btnDoor').addEventListener('click',door); el('btnPulse').addEventListener('click',pulse); el('btnOn').addEventListener('click',function(){write(1);}); el('btnOff').addEventListener('click',function(){write(0);}); el('btnTest').addEventListener('click',ping); Array.prototype.forEach.call(document.querySelectorAll('[data-key]'),function(b){b.addEventListener('click',function(){key(b.getAttribute('data-key'));});});}
-bind(); log({loaded:devices.length,selected:current()});
+window.rt7GpioStartCam=startCam; window.rt7GpioStopCam=stopCam; window.rt7GpioDoor=door; window.rt7GpioPulse=pulse; window.rt7GpioWrite=write; window.rt7GpioPing=ping; window.rt7GpioKey=key;
+function safeBind(id,fn){var x=el(id); if(!x)return; x.addEventListener('click',function(ev){ev.preventDefault();fn();},false); x.addEventListener('touchend',function(ev){ev.preventDefault();fn();},false);}
+function bind(){
+  var ds=el('devSel');
+  if(ds){ ds.addEventListener('change',function(){try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',sid());localStorage.setItem('RT7_SELECTED_DEVICE_ID',sid());}catch(e){} stopCam(); log({selected:current()});}); }
+  safeBind('btnStartCam',startCam); safeBind('btnStopCam',stopCam); safeBind('btnDoor',door); safeBind('btnPulse',pulse); safeBind('btnOn',function(){write(1);}); safeBind('btnOff',function(){write(0);}); safeBind('btnTest',ping);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-key]'),function(b){b.setAttribute('onclick','window.rt7GpioKey&&window.rt7GpioKey('+JSON.stringify(b.getAttribute('data-key'))+')'); b.addEventListener('click',function(ev){ev.preventDefault();key(b.getAttribute('data-key'));},false); b.addEventListener('touchend',function(ev){ev.preventDefault();key(b.getAttribute('data-key'));},false);});
+}
+bind(); log({version:'V5.6H5',loaded:devices.length,selected:current()});
 })();
 </script></body></html>`);
 });
