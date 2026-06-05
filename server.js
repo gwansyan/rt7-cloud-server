@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G8_MAIN_DOOR_NO_CLOUD_ON_LAN_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6F3_MUSIC_PLAYER_DOORBELL_ALERT';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -331,6 +331,7 @@ table{width:100%;border-collapse:collapse;background:white}th,td{border-bottom:1
 app.get('/', (req, res) => {
   res.type('html').send(htmlShell('RT7 Cloud Server V4.3', `${baseCss}
 <header class="top"><h1>RT7 CLOUD SERVER V4.3</h1><p>Doorbell + Snapshot + Event Logger + Device Registry + WebSocket</p></header>
+<div class="alert" id="doorbellAlert"><div class="alertTitle">🔔 有人按門鈴</div><div class="alertMsg" id="doorbellMsg">播放音樂中收到門鈴事件。</div><div class="alertBtns"><button class="white" onclick="goBack()">返回門禁</button><button class="dark" onclick="dismissDoorbell()">繼續播放</button></div></div>
 <main class="wrap">
 <section class="card"><h2 class="ok">Server OK</h2><p>Railway Node.js Server is running.</p>
 <a class="btn" href="/rt7_cloud_original_ui_doorbell">原始 UI 雲端門鈴</a>
@@ -458,6 +459,7 @@ app.get('/api/test/doorbell', (req, res) => {
 app.get('/rt7_cloud_doorbell_player', (req, res) => {
   res.type('html').send(htmlShell('RT7 Cloud Doorbell Player', `${baseCss}
 <header class="top"><h1>RT7 Cloud Doorbell Player</h1><p>Railway → 手機提示音</p></header>
+<div class="alert" id="doorbellAlert"><div class="alertTitle">🔔 有人按門鈴</div><div class="alertMsg" id="doorbellMsg">播放音樂中收到門鈴事件。</div><div class="alertBtns"><button class="white" onclick="goBack()">返回門禁</button><button class="dark" onclick="dismissDoorbell()">繼續播放</button></div></div>
 <main class="wrap">
 <section class="card" style="text-align:center"><div class="big">🔔</div><h2 id="banner">等待門鈴事件</h2><p>目前 count：<b id="count">0</b></p><p class="muted">最後事件：<span id="lastTime">-</span></p></section>
 <section class="card"><button class="btn green" onclick="enableAudio()">啟用提示音</button><button class="btn" onclick="playBell()">測試提示音</button><button class="btn gray" onclick="poll(true)">立即讀取</button><button class="btn red" onclick="resetLocal()">本機重設顯示</button><p class="warn">手機瀏覽器通常要先按一次「啟用提示音」，後續門鈴事件才可自動播放。</p></section>
@@ -519,6 +521,7 @@ try{
 app.get('/rt7_cloud_admin', (req, res) => {
   res.type('html').send(htmlShell('RT7 Cloud Admin V3', `${baseCss}
 <header class="top"><h1>RT7 Cloud Admin V3</h1><p>Devices / Events / Doorbell</p></header>
+<div class="alert" id="doorbellAlert"><div class="alertTitle">🔔 有人按門鈴</div><div class="alertMsg" id="doorbellMsg">播放音樂中收到門鈴事件。</div><div class="alertBtns"><button class="white" onclick="goBack()">返回門禁</button><button class="dark" onclick="dismissDoorbell()">繼續播放</button></div></div>
 <main class="wrap">
 <section class="card"><a class="btn" href="/rt7_cloud_doorbell_player">門鈴播放器</a><button class="btn gray" onclick="loadAll()">重新讀取</button><button class="btn red" onclick="clearEvents()">清除事件</button></section>
 <section class="card"><h2>設備清單</h2><div id="devices">loading...</div></section>
@@ -547,6 +550,7 @@ loadAll();
 app.get('/rt7_snapshot_bridge_test', (req, res) => {
   res.type('html').send(htmlShell('RT7 V4.2 Snapshot Bridge Test', `${baseCss}
 <header class="top"><h1>RT7 V4.2 Snapshot Bridge</h1><p>只測 ESP32 → Railway Snapshot 上傳 / 手機讀取</p></header>
+<div class="alert" id="doorbellAlert"><div class="alertTitle">🔔 有人按門鈴</div><div class="alertMsg" id="doorbellMsg">播放音樂中收到門鈴事件。</div><div class="alertBtns"><button class="white" onclick="goBack()">返回門禁</button><button class="dark" onclick="dismissDoorbell()">繼續播放</button></div></div>
 <main class="wrap">
 <section class="card"><h2>測試目標</h2><p>本頁只驗證 Snapshot Bridge，不測對講、不測 Face Match、不測 AI Vision。</p><div class="grid"><a class="btn green" href="/api/rt7/camera/state">Snapshot 狀態</a><a class="btn" href="/api/rt7/camera/latest.jpg" target="_blank">開啟最新 JPG</a><button class="btn gray" onclick="refreshState()">重新讀取</button><button class="btn red" onclick="clearSnapshot()">清除 Snapshot</button></div></section>
 <section class="card"><h2>最新 Snapshot</h2><div style="background:#000;aspect-ratio:4/3;border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden"><img id="img" style="max-width:100%;max-height:100%;display:none"><div id="empty" style="color:#cbd5e1;font-weight:900;text-align:center">尚無照片<br><span class="muted">請 ESP32 POST /api/rt7/camera/snapshot</span></div></div><p class="muted">圖片 URL：<code>/api/rt7/camera/latest.jpg</code></p></section>
@@ -2524,11 +2528,12 @@ app.get('/rt7_music_player', (req, res) => {
   appendEvent({ type:'mobile_music_player', video_id:videoId, query:q, message:'RT7 music player opened: '+(q||videoId) });
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Music Player V5.6F2</title>
+<title>RT7 Music Player V5.6F3</title>
 <style>
-*{box-sizing:border-box}html,body{margin:0;padding:0;background:#06191d;color:#fff;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;min-height:100vh}body{display:flex;flex-direction:column}.top{height:64px;background:#0b252b;display:flex;align-items:center;gap:10px;padding:0 14px}.back{border:0;border-radius:10px;background:#334155;color:#fff;font-size:16px;font-weight:900;padding:10px 14px}.title{font-weight:900;line-height:1.2}.sub{font-size:12px;color:#cbd5e1}.wrap{flex:1;display:flex;flex-direction:column;padding:12px;gap:12px}.playerBox{position:relative;width:100%;background:#000;border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.35);aspect-ratio:16/9}.playerBox iframe,.playerBox #player{position:absolute;inset:0;width:100%;height:100%}.card{background:#102a31;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;line-height:1.45}.btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{border:0;border-radius:12px;color:#fff;font-weight:900;font-size:17px;padding:13px 10px}.green{background:#16a34a}.gray{background:#475569}.red{background:#dc2626}.status{font-weight:900;color:#bbf7d0}.small{font-size:13px;color:#cbd5e1;margin-top:6px}.ytlink{color:#93c5fd;word-break:break-all}
+*{box-sizing:border-box}html,body{margin:0;padding:0;background:#06191d;color:#fff;font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif;min-height:100vh}body{display:flex;flex-direction:column}.top{height:64px;background:#0b252b;display:flex;align-items:center;gap:10px;padding:0 14px}.back{border:0;border-radius:10px;background:#334155;color:#fff;font-size:16px;font-weight:900;padding:10px 14px}.title{font-weight:900;line-height:1.2}.sub{font-size:12px;color:#cbd5e1}.wrap{flex:1;display:flex;flex-direction:column;padding:12px;gap:12px}.playerBox{position:relative;width:100%;background:#000;border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.35);aspect-ratio:16/9}.playerBox iframe,.playerBox #player{position:absolute;inset:0;width:100%;height:100%}.card{background:#102a31;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;line-height:1.45}.btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{border:0;border-radius:12px;color:#fff;font-weight:900;font-size:17px;padding:13px 10px}.green{background:#16a34a}.gray{background:#475569}.red{background:#dc2626}.status{font-weight:900;color:#bbf7d0}.small{font-size:13px;color:#cbd5e1;margin-top:6px}.ytlink{color:#93c5fd;word-break:break-all}.alert{display:none;position:fixed;left:12px;right:12px;top:76px;z-index:99;background:#dc2626;color:#fff;border:3px solid #fff;border-radius:18px;padding:16px;box-shadow:0 12px 36px rgba(0,0,0,.55);font-weight:900}.alertTitle{font-size:24px}.alertMsg{font-size:15px;margin-top:6px;line-height:1.45}.alertBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.alertBtns button{border:0;border-radius:12px;padding:12px;font-size:16px;font-weight:900}.white{background:#fff;color:#991b1b}.dark{background:#111827;color:#fff}
 </style></head><body>
-<header class="top"><button class="back" onclick="goBack()">← 返回</button><div><div class="title">RT7 音樂播放器</div><div class="sub">播放結束會自動返回手機門禁頁</div></div></header>
+<header class="top"><button class="back" onclick="goBack()">← 返回</button><div><div class="title">RT7 音樂播放器</div><div class="sub">播放結束會自動返回；門鈴會立即提醒</div></div></header>
+<div class="alert" id="doorbellAlert"><div class="alertTitle">🔔 有人按門鈴</div><div class="alertMsg" id="doorbellMsg">播放音樂中收到門鈴事件。</div><div class="alertBtns"><button class="white" onclick="goBack()">返回門禁</button><button class="dark" onclick="dismissDoorbell()">繼續播放</button></div></div>
 <main class="wrap">
   <section class="playerBox"><div id="player"></div></section>
   <section class="card"><div class="status" id="status">正在載入 YouTube 播放器...</div><div class="small">歌曲：${h(q || videoId)}</div><div class="small">若手機禁止自動播放，請在影片中按一次播放；播放結束後仍會自動返回。</div></section>
@@ -2558,6 +2563,46 @@ function onYouTubeIframeAPIReady(){
     }
   });
 }
+
+var lastDoorbellCount=null;
+var doorbellAlertOpen=false;
+function dingDoorbell(){
+  try{
+    var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
+    var ctx=new AC(); var o=ctx.createOscillator(); var g=ctx.createGain();
+    o.type='sine'; o.frequency.value=880; g.gain.value=0.18; o.connect(g); g.connect(ctx.destination); o.start();
+    setTimeout(function(){try{o.frequency.value=660;}catch(e){}},180);
+    setTimeout(function(){try{o.stop();ctx.close();}catch(e){}},520);
+  }catch(e){}
+}
+function dismissDoorbell(){ var a=document.getElementById('doorbellAlert'); if(a) a.style.display='none'; doorbellAlertOpen=false; }
+function showDoorbellAlert(src){
+  doorbellAlertOpen=true;
+  try{ if(player && player.pauseVideo) player.pauseVideo(); }catch(e){}
+  try{ if(navigator.vibrate) navigator.vibrate([250,120,250]); }catch(e){}
+  dingDoorbell();
+  var msg=document.getElementById('doorbellMsg');
+  if(msg) msg.textContent='收到門鈴：'+(src && (src.message||src.source||src.device_id) ? (src.message||src.source||src.device_id) : '請返回門禁頁查看。');
+  var a=document.getElementById('doorbellAlert'); if(a) a.style.display='block';
+  setStatus('🔔 收到門鈴，音樂已暫停。');
+}
+async function pollDoorbell(){
+  try{
+    var r=await fetch('/api/rt7/doorbell/state?_='+Date.now(),{cache:'no-store'});
+    var j=await r.json(); var c=Number((j.state&&j.state.count)||0);
+    if(lastDoorbellCount===null){ lastDoorbellCount=c; return; }
+    if(c>lastDoorbellCount){ lastDoorbellCount=c; showDoorbellAlert((j.state&&j.state.last)||{}); }
+  }catch(e){}
+}
+function startDoorbellWatch(){
+  pollDoorbell(); setInterval(pollDoorbell,1200);
+  try{
+    var ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws?role=music_player&fast=doorbell');
+    ws.onmessage=function(ev){try{var m=JSON.parse(ev.data); if(m&&m.type==='doorbell') { lastDoorbellCount=null; showDoorbellAlert(m.event||m.payload||m); pollDoorbell(); }}catch(e){}};
+    ws.onclose=function(){setTimeout(startDoorbellWatch,2500);};
+  }catch(e){}
+}
+startDoorbellWatch();
 var tag=document.createElement('script'); tag.src='https://www.youtube.com/iframe_api'; document.head.appendChild(tag);
 setTimeout(function(){ if(!player) setStatus('YouTube API 載入較慢，請稍候或按返回。'); },7000);
 </script>
@@ -2705,6 +2750,7 @@ app.get('/rt7_device_manager', (req,res)=>{
 .dmTop{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.dmGrid{display:grid;grid-template-columns:72px 1.1fr 1.3fr 80px;gap:8px;align-items:center}.dmHead{font-weight:900;color:#334155}.dmGrid input{width:100%;height:42px;border:1px solid #94a3b8;border-radius:10px;padding:0 10px;font-size:15px}.dmGrid label{display:flex;gap:6px;align-items:center;font-weight:900}.dmGrid input[type=checkbox]{width:22px;height:22px}.preview{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.devCard{border:1px solid #d8e0e8;border-radius:12px;padding:12px;background:#f8fafc}.devCard b{font-size:17px}.devCard .ip{font-family:ui-monospace,Consolas,monospace;color:#0f172a;word-break:break-all}.current{outline:3px solid #22c55e;background:#ecfdf5}@media(max-width:640px){.dmGrid{grid-template-columns:54px 1fr}.dmHead{display:none}.span2{grid-column:span 2}.dmGrid input{height:44px}.dmTop .btn{width:100%}}
 </style>
 <header class="top"><h1>RT7 V5.6D1 DEVICE MANAGER</h1><p>Railway 設備名稱 / IP 管理：#1 ~ #4</p></header>
+<div class="alert" id="doorbellAlert"><div class="alertTitle">🔔 有人按門鈴</div><div class="alertMsg" id="doorbellMsg">播放音樂中收到門鈴事件。</div><div class="alertBtns"><button class="white" onclick="goBack()">返回門禁</button><button class="dark" onclick="dismissDoorbell()">繼續播放</button></div></div>
 <main class="wrap">
 <section class="card dmTop"><div><h2 style="margin:0">設備管理頁</h2><div class="muted">儲存位置：<code>data/devices.json</code></div></div><div><a class="btn gray" href="/rt7_cloud_original_ui_doorbell">回手機門禁頁</a><a class="btn" href="/rt7_cloud_admin">管理頁</a></div></section>
 <section class="card"><h3>編輯 #1 ~ #4 設備</h3><div class="dmGrid" id="devForm"><div class="dmHead">編號</div><div class="dmHead">設備名稱</div><div class="dmHead">ESP32 IP / Host</div><div class="dmHead">啟用</div></div><p class="muted">IP 請填 <code>192.168.x.x</code> 或主機名稱，不需要加 <code>http://</code>。</p><button class="btn green" id="saveBtn">儲存 devices.json</button><button class="btn" id="reloadBtn">重新載入</button><button class="btn gray" id="resetBtn">恢復預設 #1~#4</button></section>
