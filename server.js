@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G1_MAIN_DOOR_CLOUD_QUEUE_PRIORITY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G2_MAIN_DOOR_LAN_FIRST_CLOUD_DELAY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1498,18 +1498,28 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     } else {
       setAnswer('找不到目前設備 IP，改用雲端開門');
     }
-    // V5.6G11: Cloud queue is REQUIRED for外網. Send it as a same-origin request and also as an image beacon.
-    // LAN beacons give immediate inner-network open; Railway queue gives outer-network open when ESP32 polls /commands/next.
-    var cloudUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button&cloud_required=1&_='+Date.now();
-    try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue'); }catch(e){}
-    try{
-      fetch(cloudUrl,{cache:'no-store',keepalive:true})
-        .then(function(r){ return r.text(); })
-        .then(function(tx){
-          try{ var j=JSON.parse(tx); if(j&&j.ok){ setDebug('cloud door queued '+(j.normalized_device_id||'')); if(!host) setAnswer('外網雲端開門命令已送出，等待 ESP32 輪詢'); } }catch(e){}
-        })
-        .catch(function(){ if(!host) setAnswer('外網雲端開門命令送出失敗，請重試'); });
-    }catch(e){ if(!host) setAnswer('外網雲端開門命令送出失敗'); }
+    // V5.6G2: LAN-first, cloud-delayed.
+    // Problem in G1: cloud queue was fired at the same time as LAN fast open; on LAN this can make the user feel the button waits for the ESP32 cloud poll.
+    // Fix: keep LAN beacons first and immediate; start Railway queue slightly later as outer-network fallback.
+    function rt7SendCloudDoorQueue_(){
+      var cloudUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button&cloud_required=1&_='+Date.now();
+      try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue'); }catch(e){}
+      try{
+        fetch(cloudUrl,{cache:'no-store',keepalive:true})
+          .then(function(r){ return r.text(); })
+          .then(function(tx){
+            try{ var j=JSON.parse(tx); if(j&&j.ok){ setDebug('cloud door queued '+(j.normalized_device_id||'')); if(!host) setAnswer('外網雲端開門命令已送出，等待 ESP32 輪詢'); } }catch(e){}
+          })
+          .catch(function(){ if(!host) setAnswer('外網雲端開門命令送出失敗，請重試'); });
+      }catch(e){ if(!host) setAnswer('外網雲端開門命令送出失敗'); }
+    }
+    if(host){
+      // LAN has already received 8081/80 beacons above. Delay cloud backup to avoid slowing/overriding the LAN feel.
+      setTimeout(rt7SendCloudDoorQueue_, 950);
+    } else {
+      // No LAN host/IP: send cloud immediately for outer-network operation.
+      rt7SendCloudDoorQueue_();
+    }
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
