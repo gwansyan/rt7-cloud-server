@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G5_MAIN_DOOR_WS_DIRECT_FALLBACK_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G6_MAIN_DOOR_SINGLE_FIRE_DEDUPE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1486,14 +1486,14 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(now-rt7DoorLastTapMs<900) return;
     rt7DoorLastTapMs=now;
     var host=rt7CleanHost(ip);
-    setAnswer('開門命令已送出：內網快速 + WS雲端直送');
-    // V5.6G4: always queue Railway first by HTTPS-relative URL.  This is the path that works from outer-network.
+    setAnswer('開門命令已送出：內網快速 + 雲端單次直送');
+    // V5.6G6: send one Railway command first by HTTPS-relative URL. This is the outer-network path.
     // It is not awaited, so LAN opening still stays instant.
     function rt7SendCloudDoorQueue_(){
       var cloudUrl=(location.origin||'')+'/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button_cloud_first&cloud_required=1&_='+Date.now();
       var relUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button_cloud_first_rel&cloud_required=1&_='+Date.now();
-      try{ rt7DoorOpenBeacon_(relUrl,'cloud_queue_img_rel'); }catch(e){}
-      try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue_img_abs'); }catch(e){}
+      // V5.6G6: send exactly ONE cloud command per tap.  Do not use image beacons
+      // for the Railway queue because on mobile Chrome they create duplicate GETs.
       try{
         fetch(relUrl,{method:'GET',cache:'no-store',keepalive:true,credentials:'same-origin'})
           .then(function(r){ return r.text(); })
@@ -1502,7 +1502,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
               var j=JSON.parse(tx);
               if(j&&j.ok){
                 setDebug('cloud door queued '+(j.normalized_device_id||''));
-                setAnswer('開門命令已送出：內網快速 + WS雲端直送');
+                setAnswer('開門命令已送出：內網快速 + 雲端單次直送');
               }
             }catch(e){}
           })
@@ -2618,14 +2618,14 @@ function enqueueDoorOpen(req, res, endpointName) {
     message:'雲端開門命令已排入佇列，等待 ESP32 輪詢或 WebSocket 直送'
   });
 
-  // V5.6G5: while cloud streaming is active, the ESP32 HTTPS poll may be starved by
+  // V5.6G6: while cloud streaming is active, the ESP32 HTTPS poll may be starved by
   // continuous JPEG upload.  Send the same door_open command over the existing
   // persistent ESP32 WebSocket as a real-time fallback.  The queue remains as backup.
   const wsPayload = {
     ok:true, type:'door_open', command:'door_open', action:'door_open',
     id:cmd.id, command_id:cmd.id, device_id:deviceId, requested_device_id:requestedDeviceId,
     pulse_ms:cmd.pulse_ms, endpoint:endpointName || 'door_open_queue',
-    source:'railway_ws_direct_v56g5', time:nowIso()
+    source:'railway_ws_direct_v56g6', time:nowIso()
   };
   const wsSent = rt7SendWsJsonToEsp_(wsPayload);
   cmd.ws_sent = wsSent;
