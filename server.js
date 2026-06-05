@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G2_MAIN_DOOR_LAN_FIRST_CLOUD_DELAY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G3_MAIN_DOOR_DUAL_PATH_FAST_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1498,28 +1498,31 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     } else {
       setAnswer('找不到目前設備 IP，改用雲端開門');
     }
-    // V5.6G2: LAN-first, cloud-delayed.
-    // Problem in G1: cloud queue was fired at the same time as LAN fast open; on LAN this can make the user feel the button waits for the ESP32 cloud poll.
-    // Fix: keep LAN beacons first and immediate; start Railway queue slightly later as outer-network fallback.
+    // V5.6G3: dual-path fast open.
+    // LAN/private IP beacons are sent first and never awaited, so inner-network opening stays instant.
+    // Railway cloud queue is also sent immediately as an outer-network path.  It must not wait for
+    // LAN image/fetch failures because mobile Chrome can keep trying the private IP for a while.
     function rt7SendCloudDoorQueue_(){
-      var cloudUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button&cloud_required=1&_='+Date.now();
-      try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue'); }catch(e){}
+      var cloudUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button_dual_path&cloud_required=1&_='+Date.now();
+      try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue_now'); }catch(e){}
       try{
         fetch(cloudUrl,{cache:'no-store',keepalive:true})
           .then(function(r){ return r.text(); })
           .then(function(tx){
-            try{ var j=JSON.parse(tx); if(j&&j.ok){ setDebug('cloud door queued '+(j.normalized_device_id||'')); if(!host) setAnswer('外網雲端開門命令已送出，等待 ESP32 輪詢'); } }catch(e){}
+            try{
+              var j=JSON.parse(tx);
+              if(j&&j.ok){
+                setDebug('cloud door queued '+(j.normalized_device_id||''));
+                // Keep the visible LAN-fast message when an IP exists; on outer-network the cloud queue is still active.
+                if(!host) setAnswer('外網雲端開門命令已送出，等待 ESP32 輪詢');
+              }
+            }catch(e){}
           })
           .catch(function(){ if(!host) setAnswer('外網雲端開門命令送出失敗，請重試'); });
       }catch(e){ if(!host) setAnswer('外網雲端開門命令送出失敗'); }
     }
-    if(host){
-      // LAN has already received 8081/80 beacons above. Delay cloud backup to avoid slowing/overriding the LAN feel.
-      setTimeout(rt7SendCloudDoorQueue_, 950);
-    } else {
-      // No LAN host/IP: send cloud immediately for outer-network operation.
-      rt7SendCloudDoorQueue_();
-    }
+    // Send cloud queue now, not after LAN fallback. This restores external-network open while LAN remains instant.
+    rt7SendCloudDoorQueue_();
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
