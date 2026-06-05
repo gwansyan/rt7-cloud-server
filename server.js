@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6H10_KEYPAD_8081_REAL_API_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6H11_GPIO_DOOR_TONE_RESTORE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -3094,7 +3094,7 @@ app.get('/rt7_gpio_control', (req,res)=>{
   <div class="keypadBox"><div class="keypad">${keyHtml}</div></div>
   <div class="small">按鍵是真實按鈕：按下會送到 ESP32 :8081，ESP32 串口會顯示 [GPIO_KEYPAD] key=...</div>
   <div class="card">
-    <div class="grid2"><a class="btn green" href="${mkUrl('/api/door/open_fast?tag=rt7_gpio_page_door')}" target="rt7_hidden">開門 GPIO40</a><a id="pulseLink" class="btn orange" href="${mkUrl('/api/gpio/pulse?pin=40&ms=300&tag=rt7_gpio_page')}" target="rt7_hidden">Pulse 指定 GPIO</a></div>
+    <div class="grid2"><a class="btn green" href="${mkUrl('/api/door/open_fast?tag=rt7_gpio_page_door_h11_tone')}" target="rt7_hidden">開門 GPIO40</a><a id="pulseLink" class="btn orange" href="${mkUrl('/api/gpio/pulse?pin=40&ms=300&tag=rt7_gpio_page')}" target="rt7_hidden">Pulse 指定 GPIO</a></div>
     <div class="grid2"><input id="pin" value="40" inputmode="numeric"><input id="ms" value="300" inputmode="numeric"></div>
     <div class="grid3" style="margin-top:8px"><a id="onLink" class="btn" href="${mkUrl('/api/gpio?pin=40&value=1&tag=rt7_gpio_page')}" target="rt7_hidden">ON</a><a id="offLink" class="btn redBtn" href="${mkUrl('/api/gpio?pin=40&value=0&tag=rt7_gpio_page')}" target="rt7_hidden">OFF</a><a class="btn gray" href="${mkUrl('/api/health?tag=rt7_gpio_ping')}" target="rt7_hidden">測試</a></div>
   </div>
