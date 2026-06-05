@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G7_MAIN_DOOR_LAN_SINGLE_FAST_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G8_MAIN_DOOR_NO_CLOUD_ON_LAN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1509,14 +1509,23 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
           .catch(function(){ setDebug('cloud door queue fetch failed'); });
       }catch(e){ setDebug('cloud door queue exception '+(e.message||e)); }
     }
-    rt7SendCloudDoorQueue_();
-    if(host){
-      // V5.6G7: LAN path must fire exactly ONE local request per tap.
-      // G6 sent open_fast + /api/door/open + port-80 fallback, so ESP32 opened twice on LAN.
-      // Keep only the fastest 8081 endpoint; cloud queue/WS remains as the WAN backup path.
-      rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open_fast','lan8081_open_fast_single');
+    // V5.6G8: IMPORTANT - do NOT queue cloud door command while the phone is on LAN.
+    // In G7, LAN tap opened immediately via 8081 and also queued cloud commands.
+    // Those queued commands were later delivered by WebSocket when the page was closed,
+    // causing 2~3 unexpected GPIO pulses.
+    var isLanMode=false;
+    try{
+      isLanMode = (currentStreamMode==='LAN') || (badge && String(badge.textContent||'').toUpperCase().indexOf('LAN')>=0);
+    }catch(e){ isLanMode=false; }
+
+    if(host && isLanMode){
+      // LAN: single fast request only.  No Railway queue, no WS direct.
+      rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open_fast','lan8081_open_fast_only_no_cloud');
+      setAnswer('內網快速開門命令已送出');
     } else {
-      setAnswer('雲端開門命令已送出，等待 ESP32 輪詢');
+      // WAN/CLOUD: Railway queue + WebSocket direct fallback.
+      rt7SendCloudDoorQueue_();
+      setAnswer('雲端開門命令已送出，等待 ESP32 執行');
     }
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
