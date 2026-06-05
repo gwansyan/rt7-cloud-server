@@ -3067,33 +3067,91 @@ app.get('/api/rt7/gpio/key', async (req,res)=>{
 app.get('/rt7_gpio_control', (req,res)=>{
 res.send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 GPIO Fast Control</title>
 <style>
-*{box-sizing:border-box} body{margin:0;background:#eef2f5;font-family:Arial,'Noto Sans TC',sans-serif;color:#10202a}.top{background:#06262b;color:#fff;padding:12px 14px;display:flex;align-items:center;gap:10px}.back{background:#41546b;color:#fff;text-decoration:none;padding:8px 12px;border-radius:8px;font-weight:800}.title{flex:1;text-align:center;font-weight:900;line-height:1.2}.wrap{max-width:520px;margin:0 auto;padding:10px}.card{background:#fff;border:1px solid #cfd9e3;border-radius:14px;margin:10px 0;padding:12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}select,input{width:100%;font-size:16px;padding:10px;border:1px solid #b8c5d2;border-radius:10px}button{border:0;border-radius:11px;padding:13px 12px;font-size:16px;font-weight:900;color:#fff;background:#0b88d8;box-shadow:0 3px 0 rgba(0,0,0,.18)}button:active{transform:translateY(2px);box-shadow:none}.danger{background:#cf2f2f}.ok{background:#12a85a}.gray{background:#40516a}.warn{background:#f39c12}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.keypad{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:330px;margin:12px auto}.key{height:58px;font-size:24px;border-radius:12px;background:#1687d9}.key.red{background:#cf2f2f}.status{white-space:pre-wrap;background:#071120;color:#d8f7ff;border-radius:10px;padding:10px;font-family:monospace;font-size:12px;min-height:48px}.hint{font-size:13px;color:#607080;line-height:1.45}.pill{display:inline-block;border-radius:999px;background:#e6f0fa;padding:3px 8px;font-size:12px}.preview{height:180px;background:#000;border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#9aa}.preview img{width:100%;height:100%;object-fit:contain}</style></head><body>
-<div class="top"><a class="back" href="/rt7_cloud_original_ui_doorbell">← 返回</a><div class="title">RT7 GPIO<br>FAST CONTROL</div><a class="back" href="/rt7_device_manager">設備</a></div>
+*{box-sizing:border-box}body{margin:0;background:#eef2f5;font-family:Arial,'Noto Sans TC',sans-serif;color:#10202a}.top{background:#06262b;color:#fff;height:58px;display:flex;align-items:center;padding:0 12px;gap:10px}.menu{font-size:30px;font-weight:900}.title{flex:1;text-align:center;font-weight:900;line-height:1.05;font-size:15px}.back{background:#41546b;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:900}.wrap{max-width:430px;margin:0 auto;padding:8px}.device{width:100%;font-size:16px;font-weight:900;padding:9px;border:1px solid #b8c5d2;border-radius:6px;background:#fff}.video{margin-top:8px;background:#000;height:190px;position:relative;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover}.badge{position:absolute;top:10px;left:10px;background:#61728f;color:#fff;border-radius:5px;padding:7px 13px;font-weight:900}.badge2{position:absolute;top:10px;right:10px;background:#e03131;color:#fff;border-radius:5px;padding:7px 13px;font-weight:900}.hint{position:absolute;left:0;right:0;top:46%;text-align:center;color:#d9e1ef;font-weight:900;text-shadow:0 1px 2px #000}.bar{display:flex;gap:7px;margin-top:7px}.bar button{flex:1;font-size:14px;padding:9px 6px}.card{background:#fff;border:1px solid #cfd9e3;border-radius:12px;margin:10px 0;padding:11px;box-shadow:0 2px 8px rgba(0,0,0,.04)}button{border:0;border-radius:8px;padding:12px 10px;font-size:16px;font-weight:900;color:#fff;background:#0b88d8;box-shadow:0 2px 0 rgba(0,0,0,.18)}button:active{transform:translateY(2px);box-shadow:none}.ok{background:#12a85a}.danger{background:#cf2f2f}.dark{background:#06262b}.gray{background:#40516a}.warn{background:#f39c12}.keypadBox{display:flex;justify-content:center}.keypad{background:#333;border:4px solid #777;border-radius:12px;padding:10px;display:grid;grid-template-columns:repeat(4,52px);gap:9px}.key{height:42px;border-radius:6px;background:#2c8ed6;border:2px solid #9fc5dd;font-size:22px;line-height:1;padding:0}.key.red{background:#c73b3b;border-color:#e6a0a0}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}input{width:100%;font-size:18px;padding:10px;border:1px solid #b8c5d2;border-radius:8px}.status{white-space:pre-wrap;background:#071120;color:#d8f7ff;border-radius:10px;padding:10px;font-family:monospace;font-size:12px;min-height:46px}.small{font-size:12px;color:#637384}.hidden{display:none!important}</style></head><body>
+<div class="top"><a class="back" id="backBtn" href="/rt7_cloud_original_ui_doorbell">← 返回</a><div class="menu">☰</div><div class="title">RT7 PHASE10<br>GPIO FAST CONTROL</div></div>
 <div class="wrap">
-  <div class="card"><select id="devSel"></select><div class="hint" style="margin-top:8px">LAN 直連優先：直接打 ESP32 <span class="pill">:8081</span>，失敗再用 Railway proxy 備援。</div></div>
-  <div class="card"><div class="preview"><img id="cam" alt="preview"></div><div class="row" style="margin-top:10px"><button onclick="startCam()">開始影像</button><button class="gray" onclick="stopCam()">停止影像</button></div></div>
-  <div class="card"><h3 style="margin:0 0 10px">即時開門 / GPIO40</h3><div class="row"><button class="ok" onclick="doorFast()">開門 GPIO40</button><button class="warn" onclick="pulsePin()">Pulse 指定 GPIO</button></div><div class="row" style="margin-top:10px"><input id="pin" value="40" inputmode="numeric" placeholder="GPIO pin"><input id="ms" value="300" inputmode="numeric" placeholder="pulse ms"></div><div class="row3" style="margin-top:10px"><button onclick="writePin(1)">ON</button><button class="danger" onclick="writePin(0)">OFF</button><button class="gray" onclick="ping()">測試</button></div></div>
-  <div class="card"><h3 style="margin:0 0 6px">4x4 Keypad 快速控制</h3><div class="hint">若 ESP32 韌體有 <span class="pill">/api/keypad?key=1</span> 或 <span class="pill">/api/gpio/key?key=1</span>，可直接對應按鍵。</div><div class="keypad" id="keys"></div></div>
+  <select id="devSel" class="device"><option>載入設備中...</option></select>
+  <div class="video"><img id="cam" alt=""><div class="badge">IDLE</div><div class="badge2" id="modeBadge">LAN</div><div class="hint" id="vhint">等待影像串流</div></div>
+  <div class="bar"><button id="btnStartCam" class="dark">開始影像</button><button id="btnStopCam" class="dark">停止影像</button></div>
+  <div class="card">
+    <div class="keypadBox"><div class="keypad" id="keys"></div></div>
+    <div class="small" style="margin-top:8px;text-align:center">按鍵會優先直送 ESP32 :8081；失敗時才走 Railway 備援。</div>
+  </div>
+  <div class="card">
+    <div class="row"><button id="btnDoor" class="ok">開門 GPIO40</button><button id="btnPulse" class="warn">Pulse 指定 GPIO</button></div>
+    <div class="row" style="margin-top:8px"><input id="pin" value="40" inputmode="numeric"><input id="ms" value="300" inputmode="numeric"></div>
+    <div class="row3" style="margin-top:8px"><button id="btnOn">ON</button><button id="btnOff" class="danger">OFF</button><button id="btnTest" class="gray">測試</button></div>
+  </div>
   <div class="card"><div id="status" class="status">ready</div></div>
 </div>
 <script>
-var devices=[], selected=null;
-function $(id){return document.getElementById(id)}
-function log(s){ $('status').textContent = (typeof s==='string'?s:JSON.stringify(s,null,2)); }
-function host(){ return selected && selected.ip ? selected.ip.replace(/^https?:\/\//,'').replace(/\/.*$/,'').replace(/:\d+$/,'') : ''; }
-function lanUrl(path){ return 'http://'+host()+':8081'+path; }
-function beacon(url){ var img=new Image(); img.onload=function(){log('LAN OK: '+url)}; img.onerror=function(){log('LAN sent/no-cors: '+url)}; img.src=url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(); }
-async function j(url){ var r=await fetch(url,{cache:'no-store'}); var t=await r.text(); try{return JSON.parse(t)}catch(e){return {ok:r.ok,status:r.status,text:t}} }
-async function loadDevices(){ try{ var d=await j('/api/devices?_='+Date.now()); devices=(d.devices||[]).filter(x=>x.enabled!==false && x.ip); $('devSel').innerHTML=devices.map((x,i)=>'<option value="'+i+'">'+(x.id||'')+' / '+(x.name||'')+' / '+(x.ip||'')+'</option>').join(''); selected=devices[0]||null; log({loaded:devices.length, selected:selected}); }catch(e){log('load devices failed: '+e.message)} }
-$('devSel').addEventListener('change',function(){ selected=devices[Number(this.value)]||devices[0]||null; stopCam(); log({selected:selected}); });
-function startCam(){ if(!host()) return log('no device ip'); $('cam').src='http://'+host()+'/api/camera/stream?_='+Date.now(); log('start camera LAN '+host()); }
-function stopCam(){ $('cam').removeAttribute('src'); log('camera stopped'); }
-function doorFast(){ if(!host()) return log('no device ip'); var u=lanUrl('/api/door/open_fast?tag=rt7_gpio_page_door'); beacon(u); }
-async function pulsePin(){ var p=$('pin').value||'40', m=$('ms').value||'300'; if(host()) beacon(lanUrl('/api/gpio/pulse?pin='+encodeURIComponent(p)+'&ms='+encodeURIComponent(m)+'&tag=rt7_gpio_page')); try{ var r=await j('/api/rt7/gpio/pulse?device_id='+encodeURIComponent(selected.id||'#1')+'&pin='+encodeURIComponent(p)+'&ms='+encodeURIComponent(m)); log(r); }catch(e){log('pulse fallback failed: '+e.message)} }
-async function writePin(v){ var p=$('pin').value||'40'; if(host()) beacon(lanUrl('/api/gpio?pin='+encodeURIComponent(p)+'&value='+v+'&tag=rt7_gpio_page')); try{ var r=await j('/api/rt7/gpio/write?device_id='+encodeURIComponent(selected.id||'#1')+'&pin='+encodeURIComponent(p)+'&value='+v); log(r); }catch(e){log('write fallback failed: '+e.message)} }
-async function sendKey(k){ if(host()) beacon(lanUrl('/api/keypad?key='+encodeURIComponent(k)+'&tag=rt7_gpio_keypad')); try{ var r=await j('/api/rt7/gpio/key?device_id='+encodeURIComponent(selected.id||'#1')+'&key='+encodeURIComponent(k)); log(r); }catch(e){log('key fallback failed: '+e.message)} }
-function ping(){ if(!host()) return log('no device ip'); beacon('http://'+host()+'/api/health?tag=rt7_gpio_ping'); }
-(function(){ var arr=['1','2','3','A','4','5','6','B','7','8','9','C','*','0','#','D']; $('keys').innerHTML=arr.map(k=>'<button class="key '+(/[ABCD*#]/.test(k)?'red':'')+'" onclick="sendKey(\''+k+'\')">'+k+'</button>').join(''); loadDevices(); })();
+(function(){
+'use strict';
+var devices=[];
+var selected=null;
+var busyLan={};
+var lastClickAt=0;
+function el(id){ return document.getElementById(id); }
+function log(v){ el('status').textContent = (typeof v==='string') ? v : JSON.stringify(v,null,2); }
+function cleanHost(ip){ return String(ip||'').replace(/^https?:\/\//,'').split('/')[0].replace(/:\d+$/,'').trim(); }
+function host(){ return selected ? cleanHost(selected.ip) : ''; }
+function selectedId(){ return (selected && selected.id) ? selected.id : '#1'; }
+function lan8081(path){ return 'http://' + host() + ':8081' + path; }
+function lan80(path){ return 'http://' + host() + path; }
+function canClick(){ var n=Date.now(); if(n-lastClickAt<120){ return false; } lastClickAt=n; return true; }
+function lanBeacon(url,label){
+  if(!host()){ log('沒有設備 IP'); return; }
+  var key=label||url;
+  if(busyLan[key] && Date.now()-busyLan[key]<350){ log('忽略重複按鍵: '+key); return; }
+  busyLan[key]=Date.now();
+  var img=new Image();
+  var done=false;
+  var t=setTimeout(function(){ if(!done){ log('LAN 已送出: '+label+'\n'+url); } },220);
+  img.onload=function(){ done=true; clearTimeout(t); log('LAN OK: '+label+'\n'+url); };
+  img.onerror=function(){ done=true; clearTimeout(t); log('LAN sent/no-cors: '+label+'\n'+url); };
+  img.src=url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now();
+}
+async function apiJson(url){ var r=await fetch(url,{cache:'no-store'}); var text=await r.text(); try{return JSON.parse(text);}catch(e){return {ok:r.ok,status:r.status,text:text};} }
+function renderDevices(){
+  var sel=el('devSel');
+  if(!devices.length){ devices=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:'192.168.0.179',enabled:true}]; }
+  sel.innerHTML=devices.map(function(d,i){ return '<option value="'+i+'">'+(d.id||('#'+(i+1)))+' / '+(d.name||'設備')+' / '+(d.ip||'')+'</option>'; }).join('');
+  var saved=localStorage.getItem('RT7_SELECTED_DEVICE_ID')||'';
+  var idx=devices.findIndex(function(d){return String(d.id)===saved;});
+  if(idx<0) idx=0;
+  sel.value=String(idx);
+  selected=devices[idx];
+  el('modeBadge').textContent='LAN';
+  log({loaded:devices.length, selected:selected});
+}
+async function loadDevices(){
+  try{
+    var j=await apiJson('/api/devices?_='+Date.now());
+    devices=(j.devices||[]).filter(function(d){ return d && d.enabled!==false && d.ip; });
+  }catch(e){ devices=[]; log('設備載入失敗，使用預設 #1: '+e.message); }
+  renderDevices();
+}
+function startCam(){ if(!host()) return log('沒有設備 IP'); el('vhint').style.display='none'; el('cam').src=lan80('/api/camera/stream?_='+Date.now()); log('開始影像 LAN '+host()); }
+function stopCam(){ el('cam').removeAttribute('src'); el('vhint').style.display='block'; log('停止影像'); }
+function doorFast(){ if(!canClick()) return; lanBeacon(lan8081('/api/door/open_fast?tag=rt7_gpio_page_door'),'door_open_fast'); }
+async function cloudFallback(path,label){ try{ var r=await apiJson(path); log(r); }catch(e){ log(label+' Railway 備援失敗: '+e.message); } }
+function pulsePin(){ if(!canClick()) return; var p=el('pin').value||'40'; var m=el('ms').value||'300'; lanBeacon(lan8081('/api/gpio/pulse?pin='+encodeURIComponent(p)+'&ms='+encodeURIComponent(m)+'&tag=rt7_gpio_page'),'gpio_pulse'); setTimeout(function(){ cloudFallback('/api/rt7/gpio/pulse?device_id='+encodeURIComponent(selectedId())+'&pin='+encodeURIComponent(p)+'&ms='+encodeURIComponent(m),'pulse'); },450); }
+function writePin(v){ if(!canClick()) return; var p=el('pin').value||'40'; lanBeacon(lan8081('/api/gpio?pin='+encodeURIComponent(p)+'&value='+v+'&tag=rt7_gpio_page'),'gpio_write_'+v); setTimeout(function(){ cloudFallback('/api/rt7/gpio/write?device_id='+encodeURIComponent(selectedId())+'&pin='+encodeURIComponent(p)+'&value='+v,'write'); },450); }
+function sendKey(k){ if(!canClick()) return; lanBeacon(lan8081('/api/keypad?key='+encodeURIComponent(k)+'&tag=rt7_gpio_keypad'),'key_'+k); setTimeout(function(){ cloudFallback('/api/rt7/gpio/key?device_id='+encodeURIComponent(selectedId())+'&key='+encodeURIComponent(k),'key'); },450); }
+function ping(){ if(!canClick()) return; lanBeacon(lan8081('/api/health?tag=rt7_gpio_ping'),'ping'); }
+function buildKeys(){ var arr=['1','2','3','A','4','5','6','B','7','8','9','C','*','0','#','D']; el('keys').innerHTML=''; arr.forEach(function(k){ var b=document.createElement('button'); b.className='key '+(/[ABCD*#]/.test(k)?'red':''); b.textContent=k; b.addEventListener('click',function(){sendKey(k);}); el('keys').appendChild(b); }); }
+window.addEventListener('load',function(){
+  buildKeys(); loadDevices();
+  el('devSel').addEventListener('change',function(){ selected=devices[Number(this.value)]||devices[0]||null; if(selected&&selected.id) localStorage.setItem('RT7_SELECTED_DEVICE_ID',selected.id); stopCam(); log({selected:selected}); });
+  el('btnStartCam').addEventListener('click',startCam);
+  el('btnStopCam').addEventListener('click',stopCam);
+  el('btnDoor').addEventListener('click',doorFast);
+  el('btnPulse').addEventListener('click',pulsePin);
+  el('btnOn').addEventListener('click',function(){writePin(1);});
+  el('btnOff').addEventListener('click',function(){writePin(0);});
+  el('btnTest').addEventListener('click',ping);
+});
+})();
 </script></body></html>`);
 });
 
