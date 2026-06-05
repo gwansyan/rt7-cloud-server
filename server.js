@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G3_MAIN_DOOR_DUAL_PATH_FAST_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G4_MAIN_DOOR_CLOUD_DOOR_PRIORITY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1485,44 +1485,39 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var now=Date.now();
     if(now-rt7DoorLastTapMs<900) return;
     rt7DoorLastTapMs=now;
-    setAnswer('開門命令已送出');
     var host=rt7CleanHost(ip);
-    if(host){
-      // V5.6G1: main-page fast path. Send LAN beacons immediately; do not wait for Railway queue.
-      // 8081 is ticked inside ESP32 MJPEG/intercom loop and is the most immediate path while streaming.
-      rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open_fast','lan8081_open_fast');
-      setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open','lan8081_open'); }, 80);
-      // Port 80 fallback for cases where stream is not occupying the camera server.
-      setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+'/api/door/open','lan80_open'); }, 160);
-      setAnswer('內網快速開門命令已送出');
-    } else {
-      setAnswer('找不到目前設備 IP，改用雲端開門');
-    }
-    // V5.6G3: dual-path fast open.
-    // LAN/private IP beacons are sent first and never awaited, so inner-network opening stays instant.
-    // Railway cloud queue is also sent immediately as an outer-network path.  It must not wait for
-    // LAN image/fetch failures because mobile Chrome can keep trying the private IP for a while.
+    setAnswer('開門命令已送出：內網快速 + 雲端備援');
+    // V5.6G4: always queue Railway first by HTTPS-relative URL.  This is the path that works from outer-network.
+    // It is not awaited, so LAN opening still stays instant.
     function rt7SendCloudDoorQueue_(){
-      var cloudUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button_dual_path&cloud_required=1&_='+Date.now();
-      try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue_now'); }catch(e){}
+      var cloudUrl=(location.origin||'')+'/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button_cloud_first&cloud_required=1&_='+Date.now();
+      var relUrl='/api/rt7/door/open?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&source=main_button_cloud_first_rel&cloud_required=1&_='+Date.now();
+      try{ rt7DoorOpenBeacon_(relUrl,'cloud_queue_img_rel'); }catch(e){}
+      try{ rt7DoorOpenBeacon_(cloudUrl,'cloud_queue_img_abs'); }catch(e){}
       try{
-        fetch(cloudUrl,{cache:'no-store',keepalive:true})
+        fetch(relUrl,{method:'GET',cache:'no-store',keepalive:true,credentials:'same-origin'})
           .then(function(r){ return r.text(); })
           .then(function(tx){
             try{
               var j=JSON.parse(tx);
               if(j&&j.ok){
                 setDebug('cloud door queued '+(j.normalized_device_id||''));
-                // Keep the visible LAN-fast message when an IP exists; on outer-network the cloud queue is still active.
-                if(!host) setAnswer('外網雲端開門命令已送出，等待 ESP32 輪詢');
+                setAnswer('開門命令已送出：內網快速 + 雲端備援');
               }
             }catch(e){}
           })
-          .catch(function(){ if(!host) setAnswer('外網雲端開門命令送出失敗，請重試'); });
-      }catch(e){ if(!host) setAnswer('外網雲端開門命令送出失敗'); }
+          .catch(function(){ setDebug('cloud door queue fetch failed'); });
+      }catch(e){ setDebug('cloud door queue exception '+(e.message||e)); }
     }
-    // Send cloud queue now, not after LAN fallback. This restores external-network open while LAN remains instant.
     rt7SendCloudDoorQueue_();
+    if(host){
+      // LAN path after cloud queue fire-and-forget. It remains immediate for inner-network use.
+      rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open_fast','lan8081_open_fast');
+      setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+':8081/api/door/open','lan8081_open'); }, 60);
+      setTimeout(function(){ rt7DoorOpenBeacon_('http://'+host+'/api/door/open','lan80_open'); }, 130);
+    } else {
+      setAnswer('雲端開門命令已送出，等待 ESP32 輪詢');
+    }
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
   function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
@@ -2609,8 +2604,9 @@ function enqueueDoorOpen(req, res, endpointName) {
   const dev = getCurrentDevice(req);
   const requestedDeviceId = safeString(req.query.device_id || req.query.device || dev.id || '#1') || '#1';
   const deviceId = normalizeDoorCommandDeviceId_(requestedDeviceId);
-  // V5.6G11: external open must not be blocked by stale older door commands for the same device.
-  pendingCommands = pendingCommands.filter(c => !(commandMatchesDevice_(c, deviceId) && (c.command === 'door_open' || c.action === 'door_open')));
+  // V5.6G4: external door open must not be blocked by stale face/stream/intercom commands.
+  // Keep commands for other devices, but clear all pending commands for this device before queueing door_open.
+  pendingCommands = pendingCommands.filter(c => !commandMatchesDevice_(c, deviceId));
   const cmd = queueCommand({
     command:'door_open',
     action:'door_open',
@@ -2634,11 +2630,11 @@ app.get('/api/rt7/device/commands', (req,res)=>{ const id=normalizeDoorCommandDe
 app.get('/api/rt7/device/commands/next', (req,res)=>{
   const id=normalizeDoorCommandDeviceId_(req.query.device_id||req.query.device||'');
   const matches=pendingCommands.filter(c=>commandMatchesDevice_(c,id));
-  // V5.6G11: door_open also has priority. Old stream/intercom/debug commands must not block external open.
-  const faceCmd=matches.find(c=>c && (c.command==='face_snapshot_now' || c.action==='face_snapshot_now' || c.priority==='face_snapshot'));
+  // V5.6G4: door_open has absolute priority. Old face/stream/intercom commands must not block external open.
   const doorCmd=matches.find(c=>c && (c.command==='door_open' || c.action==='door_open'));
-  const cmd=faceCmd || doorCmd || matches[0] || null;
-  res.json({ok:true, version:SERVER_VERSION, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, matching:matches.length, face_priority:!!faceCmd, door_priority:!!doorCmd, state:doorOpenQueueState});
+  const faceCmd=matches.find(c=>c && (c.command==='face_snapshot_now' || c.action==='face_snapshot_now' || c.priority==='face_snapshot'));
+  const cmd=doorCmd || faceCmd || matches[0] || null;
+  res.json({ok:true, version:SERVER_VERSION, device_id:id, command:cmd, has_command:!!cmd, pending:pendingCommands.length, matching:matches.length, door_priority:!!doorCmd, face_priority:!!faceCmd, state:doorOpenQueueState});
 });
 function ackCommand(req,res){ const id=safeString(req.body?.id||req.query.id); const status=safeString(req.body?.status||req.query.status||'done'); const idx=pendingCommands.findIndex(c=>c.id===id); let cmd=null; if(idx>=0){cmd=pendingCommands[idx]; pendingCommands.splice(idx,1);} doorOpenQueueState.acked+=1; doorOpenQueueState.last_ack={id, status, time:nowIso(), found:!!cmd, command:cmd}; appendEvent({type:'command_ack', id, status, found:!!cmd}); res.json({ok:true, id, status, found:!!cmd, pending:pendingCommands.length, state:doorOpenQueueState}); }
 app.get('/api/rt7/device/commands/ack', ackCommand);
