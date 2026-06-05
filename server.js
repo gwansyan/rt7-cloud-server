@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G4_MAIN_DOOR_CLOUD_DOOR_PRIORITY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6G5_MAIN_DOOR_WS_DIRECT_FALLBACK_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1486,7 +1486,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(now-rt7DoorLastTapMs<900) return;
     rt7DoorLastTapMs=now;
     var host=rt7CleanHost(ip);
-    setAnswer('開門命令已送出：內網快速 + 雲端備援');
+    setAnswer('開門命令已送出：內網快速 + WS雲端直送');
     // V5.6G4: always queue Railway first by HTTPS-relative URL.  This is the path that works from outer-network.
     // It is not awaited, so LAN opening still stays instant.
     function rt7SendCloudDoorQueue_(){
@@ -1502,7 +1502,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
               var j=JSON.parse(tx);
               if(j&&j.ok){
                 setDebug('cloud door queued '+(j.normalized_device_id||''));
-                setAnswer('開門命令已送出：內網快速 + 雲端備援');
+                setAnswer('開門命令已送出：內網快速 + WS雲端直送');
               }
             }catch(e){}
           })
@@ -2610,14 +2610,28 @@ function enqueueDoorOpen(req, res, endpointName) {
   const cmd = queueCommand({
     command:'door_open',
     action:'door_open',
+    type:'door_open',
     device_id:deviceId,
     requested_device_id:requestedDeviceId,
     endpoint:endpointName || 'door_open_queue',
     pulse_ms:Number(req.query.pulse_ms || 800),
-    message:'雲端開門命令已排入佇列，等待 ESP32 輪詢'
+    message:'雲端開門命令已排入佇列，等待 ESP32 輪詢或 WebSocket 直送'
   });
+
+  // V5.6G5: while cloud streaming is active, the ESP32 HTTPS poll may be starved by
+  // continuous JPEG upload.  Send the same door_open command over the existing
+  // persistent ESP32 WebSocket as a real-time fallback.  The queue remains as backup.
+  const wsPayload = {
+    ok:true, type:'door_open', command:'door_open', action:'door_open',
+    id:cmd.id, command_id:cmd.id, device_id:deviceId, requested_device_id:requestedDeviceId,
+    pulse_ms:cmd.pulse_ms, endpoint:endpointName || 'door_open_queue',
+    source:'railway_ws_direct_v56g5', time:nowIso()
+  };
+  const wsSent = rt7SendWsJsonToEsp_(wsPayload);
+  cmd.ws_sent = wsSent;
+  doorOpenQueueState.last_ws_sent = wsSent;
   cloudState.last_door_open = cmd;
-  res.json({ ok:true, mode:'cloud_command_queue', command:cmd, requested_device_id:requestedDeviceId, normalized_device_id:deviceId, state:doorOpenQueueState, note:'ESP32 輪詢 /api/rt7/device/commands/next?device_id='+deviceId+' 後執行開門並 ACK' });
+  res.json({ ok:true, mode:'cloud_command_queue_ws_direct', command:cmd, ws_sent:wsSent, requested_device_id:requestedDeviceId, normalized_device_id:deviceId, state:doorOpenQueueState, note:'已排入 Queue 並同步 WS 直送 ESP32；ESP32 輪詢仍作備援' });
 }
 app.get('/api/rt7/phase9l/door/open', (req,res)=>enqueueDoorOpen(req,res,'phase9l'));
 app.post('/api/rt7/phase9l/door/open', (req,res)=>enqueueDoorOpen(req,res,'phase9l_post'));
