@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6I2_FACE_DISPLAY_BUTTON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6J1_MOBILE_FACE_REGISTER_I2_BASE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1311,23 +1311,55 @@ app.get('/api/rt7/phase6c3_plugin/faces', (req,res) => {
   const faces = rt7ReadFaces_().map(f => ({ id:f.id, name:f.name, time:f.time, bytes:f.bytes, device_id:f.device_id || '#1' }));
   res.json({ ok:true, version:SERVER_VERSION, count:faces.length, faces });
 });
+function rt7EnrollFaceB64_(name, b64, meta) {
+  meta = meta || {};
+  name = safeString(name || '').trim() || '未命名';
+  b64 = safeString(b64 || '').replace(/^data:image\/\w+;base64,/i, '').trim();
+  if (!b64) return { ok:false, error:'NO_IMAGE_B64', answer:'沒有取得手機鏡頭照片。' };
+  let bytes = 0;
+  try { bytes = Buffer.from(b64, 'base64').length; } catch (e) { return { ok:false, error:'BAD_IMAGE_B64', answer:'照片格式錯誤，請重新拍照。' }; }
+  if (bytes < 3000) return { ok:false, error:'IMAGE_TOO_SMALL', answer:'照片資料太小，請重新拍照。' };
+  const faces = rt7ReadFaces_();
+  const id = 'face_' + Date.now();
+  const face = { id, name, image_b64:b64, bytes, time:nowIso(), device_id:safeString(meta.device_id || '#mobile'), source:safeString(meta.source || 'mobile_selfie') };
+  try {
+    const emb = rt7ExtractFaceEmbedding_(b64, null);
+    if (emb && emb.ok) { face.embedding_cache = rt7FaceEmbeddingToCache_(emb); face.embedding_cache_key = rt7FaceEmbeddingCacheKey_(face); }
+    else return { ok:false, error:'NO_FACE_IN_SELFIE', answer:'手機照片未偵測到清楚人臉，請靠近鏡頭並重新拍照。' };
+  } catch(e) { console.warn('[FACE_API][V56J][MOBILE_ENROLL_CACHE_WARN] ' + String(e && e.message || e)); }
+  faces.unshift(face);
+  rt7SaveFaces_(faces.slice(0, 40));
+  const ev = appendEvent({ type:'face_enroll_mobile', id, name, bytes, source:face.source, message:'mobile selfie enrolled face '+name });
+  broadcast('face_enroll', { id, name, bytes, source:face.source, time:face.time });
+  return { ok:true, version:SERVER_VERSION, enrolled:{ id, name, bytes, time:face.time, source:face.source }, count:faces.length, event:ev, answer:'已用手機前鏡頭註冊：' + name };
+}
+
+app.post('/api/rt7/face/enroll_mobile', (req,res) => {
+  const name = safeString(req.body?.name || req.query.name || '').trim() || '未命名';
+  const image = safeString(req.body?.image || req.body?.image_b64 || req.body?.jpeg_b64 || '');
+  const out = rt7EnrollFaceB64_(name, image, { device_id:req.body?.device_id || '#mobile', source:'mobile_selfie' });
+  res.status(200).json(out);
+});
+
 app.post('/api/rt7/face/enroll', rt7EnrollHandler_);
 function rt7EnrollHandler_(req,res){
   const name = safeString(req.body?.name || req.query.name || req.query.face_id || req.query.id || '').trim() || '未命名';
+  const image = safeString(req.body?.image || req.body?.image_b64 || req.body?.jpeg_b64 || '');
+  if (image) return res.status(200).json(rt7EnrollFaceB64_(name, image, { device_id:req.body?.device_id || '#mobile', source:req.body?.source || 'mobile_selfie' }));
   const latest = rt7LatestJpegB64_();
-  if (!latest) return res.status(200).json({ ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或讓 ESP32 上傳 snapshot。' });
+  if (!latest) return res.status(200).json({ ok:false, version:SERVER_VERSION, error:'NO_LATEST_SNAPSHOT', answer:'尚無最新照片，請先開始影像或使用手機前鏡頭註冊。' });
   const faces = rt7ReadFaces_();
   const id = 'face_' + Date.now();
-  const face = { id, name, image_b64:latest.b64, bytes:latest.bytes, time:nowIso(), device_id:safeString(req.body?.device_id || req.query.device_id || '#1') };
+  const face = { id, name, image_b64:latest.b64, bytes:latest.bytes, time:nowIso(), device_id:safeString(req.body?.device_id || req.query.device_id || '#1'), source:'esp32_snapshot' };
   try {
     const emb = rt7ExtractFaceEmbedding_(latest.b64, null);
     if (emb && emb.ok) { face.embedding_cache = rt7FaceEmbeddingToCache_(emb); face.embedding_cache_key = rt7FaceEmbeddingCacheKey_(face); }
   } catch(e) { console.warn('[FACE_API][V54O][ENROLL_CACHE_WARN] ' + String(e && e.message || e)); }
   faces.unshift(face);
-  rt7SaveFaces_(faces.slice(0, 20));
-  const ev = appendEvent({ type:'face_enroll', id, name, bytes:latest.bytes, message:'enrolled face '+name });
-  broadcast('face_enroll', { id, name, bytes:latest.bytes, time:face.time });
-  res.json({ ok:true, version:SERVER_VERSION, enrolled:{ id, name, bytes:latest.bytes, time:face.time }, count:faces.length, event:ev, answer:'已註冊：' + name });
+  rt7SaveFaces_(faces.slice(0, 40));
+  const ev = appendEvent({ type:'face_enroll', id, name, bytes:latest.bytes, source:'esp32_snapshot', message:'enrolled face '+name });
+  broadcast('face_enroll', { id, name, bytes:latest.bytes, source:'esp32_snapshot', time:face.time });
+  res.json({ ok:true, version:SERVER_VERSION, enrolled:{ id, name, bytes:latest.bytes, time:face.time, source:'esp32_snapshot' }, count:faces.length, event:ev, answer:'已註冊：' + name });
 }
 app.get('/api/rt7/phase6c3_plugin/face/enroll_now', rt7EnrollHandler_);
 app.post('/api/rt7/phase6c3_plugin/face/enroll_now', rt7EnrollHandler_);
@@ -1436,7 +1468,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6F2 Music Auto Return</title>
+<title>RT7 Cloud Original UI V5.6J1 Mobile Face Register</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1448,6 +1480,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
 .actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
+.selfiePanel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:9999;padding:14px;color:#fff;overflow:auto}.selfieCard{max-width:500px;margin:0 auto;background:#0b252b;border-radius:16px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.45)}.selfieTitle{font-size:20px;font-weight:900;margin:4px 0 10px;text-align:center}.selfieVideo{width:100%;background:#000;border-radius:12px;border:2px solid #334155;aspect-ratio:3/4;object-fit:cover}.selfieBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.selfieBtns button{border:0;border-radius:10px;height:46px;font-size:17px;font-weight:900}.selfieShot{background:#22c55e;color:#fff}.selfieCancel{background:#ef4444;color:#fff}.selfieHint{font-size:13px;color:#dbeafe;line-height:1.45;margin-top:8px;text-align:center}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
@@ -1459,6 +1492,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
 <section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle" type="button">🎙️</button>AI語音助理</div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
+<div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
 (function(){
   var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
@@ -1706,14 +1740,46 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7WsTxBytes=[], rt7WsSent=0, rt7WsBeginMs=0, rt7WsListenTimer=null;
   var rt7RxAudioCtx=null, rt7RxPlayAt=0, rt7RxPackets=0, rt7RxBytes=0, rt7RxLastMs=0, rt7RxJitterMaxMs=0;
   async function rt7Json(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},opt||{})); var t=await r.text(); try{return JSON.parse(t)}catch(e){return{ok:r.ok,raw:t}} }
-  async function rt7FaceEnroll(){
+  var rt7SelfieStream=null;
+  async function rt7OpenSelfieEnroll(){
+    var name=(document.getElementById('regName')&&document.getElementById('regName').value||'').trim()||'未命名';
+    var panel=document.getElementById('selfiePanel'); var video=document.getElementById('selfieVideo');
     try{
-      var name=(document.getElementById('regName')&&document.getElementById('regName').value||'').trim()||'未命名';
-      setAnswer('人臉註冊中：'+name);
-      var j=await rt7Json('/api/rt7/face/enroll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,device_id:selectedDeviceId||'#1'})});
-      setAnswer(j.ok ? ('已註冊人臉：'+(j.enrolled&&j.enrolled.name||name)) : ('註冊失敗：'+(j.answer||j.error||'NO_SNAPSHOT')));
-    }catch(e){ setAnswer('註冊失敗：'+(e.message||e)); }
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        setAnswer('此手機瀏覽器不支援相機註冊，請使用 Chrome / Safari 並允許相機權限。'); return;
+      }
+      setAnswer('開啟手機前鏡頭註冊：'+name);
+      if(panel) panel.style.display='block';
+      rt7SelfieStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:720},height:{ideal:960}},audio:false});
+      if(video){ video.srcObject=rt7SelfieStream; try{ await video.play(); }catch(e){} }
+    }catch(e){
+      if(panel) panel.style.display='none';
+      setAnswer('手機相機開啟失敗：'+(e.message||e));
+    }
   }
+  function rt7CloseSelfieEnroll(){
+    try{ if(rt7SelfieStream){ rt7SelfieStream.getTracks().forEach(function(t){try{t.stop();}catch(e){}}); } }catch(e){}
+    rt7SelfieStream=null;
+    var panel=document.getElementById('selfiePanel'); if(panel) panel.style.display='none';
+  }
+  async function rt7CaptureSelfieEnroll(){
+    var name=(document.getElementById('regName')&&document.getElementById('regName').value||'').trim()||'未命名';
+    var video=document.getElementById('selfieVideo'); var canvas=document.getElementById('selfieCanvas');
+    try{
+      if(!video || !canvas || !video.videoWidth){ setAnswer('手機鏡頭尚未準備好，請稍候再拍照。'); return; }
+      var maxW=720; var vw=video.videoWidth; var vh=video.videoHeight; var scale=Math.min(1, maxW/Math.max(1,vw));
+      canvas.width=Math.max(1,Math.round(vw*scale)); canvas.height=Math.max(1,Math.round(vh*scale));
+      var ctx=canvas.getContext('2d'); ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      var data=canvas.toDataURL('image/jpeg',0.86);
+      setAnswer('手機自拍照片上傳註冊中：'+name);
+      var j=await rt7Json('/api/rt7/face/enroll_mobile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,device_id:'#mobile',source:'mobile_selfie',image:data})});
+      if(j.ok){ rt7CloseSelfieEnroll(); setAnswer('已用手機前鏡頭註冊：'+(j.enrolled&&j.enrolled.name||name)); }
+      else { setAnswer('手機註冊失敗：'+(j.answer||j.error||'NO_FACE')); }
+    }catch(e){ setAnswer('手機註冊失敗：'+(e.message||e)); }
+  }
+  async function rt7FaceEnroll(){ rt7OpenSelfieEnroll(); }
+  bind('btnSelfieCapture', rt7CaptureSelfieEnroll);
+  bind('btnSelfieCancel', function(){ rt7CloseSelfieEnroll(); setAnswer('已取消手機人臉註冊'); });
   async function rt7FaceList(){
     try{
       var j=await rt7Json('/api/rt7/faces');
