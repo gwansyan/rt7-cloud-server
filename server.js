@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6I_FACE_MATCH_VISION_LIVENESS';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6I1_FACE_RESULT_DISPLAY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1188,6 +1188,14 @@ async function rt7FaceMatchLatestCore_(providedLatest, opt) {
     console.log('[FACE_LIVENESS][V56I] result live=' + (!!liveness.live_face) + ' verdict=' + liveness.verdict + ' conf=' + liveness.confidence + ' reason=' + liveness.reason);
   }
   const known = faceKnownByMatch && !!liveness.live_face;
+  const faceMatchName = faceKnownByMatch ? safeString(match.matched_name || refs[0]?.name || '') : 'unknown';
+  const livenessLabel = safeString(liveness && liveness.verdict || (liveness && liveness.live_face ? 'REAL' : 'UNKNOWN')).toUpperCase() || 'UNKNOWN';
+  const doorDecision = known ? 'ALLOW' : 'DENY';
+  const displayText = 'FACE_FOUND=' + (detect.face_found ? 'YES' : 'NO') + '\n' +
+    'FACE_MATCH=' + faceMatchName + '\n' +
+    'MATCH=' + confidence + '%\n\n' +
+    'LIVENESS=' + livenessLabel + '\n\n' +
+    'DOOR=' + doorDecision;
   const result = {
     ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match', stage:'RAILWAY_MATCH_PLUS_VISION_LIVENESS', engine:'railway_local_plus_openai_vision', gpt_used:faceKnownByMatch,
     face_gate:gate,
@@ -1197,8 +1205,14 @@ async function rt7FaceMatchLatestCore_(providedLatest, opt) {
     face_box:detect.face_box,
     face_ratio:detect.face_ratio,
     face_match_pass:faceKnownByMatch,
+    face_match:faceMatchName,
+    match_score:confidence,
+    liveness_label:livenessLabel,
+    door:doorDecision,
+    door_allow:known,
+    display_text:displayText,
     known_face:known,
-    matched_name: known ? safeString(match.matched_name || refs[0]?.name || '') : '',
+    matched_name: faceKnownByMatch ? faceMatchName : '',
     confidence,
     backlight_tolerant:true,
     pass_threshold:40,
@@ -1222,7 +1236,7 @@ async function rt7FaceMatchLatestCore_(providedLatest, opt) {
     cache_miss:match.cache_miss || 0,
     compared:match.compared || refs.length,
     ref_names:refs.map(f => safeString(f.name || '')),
-    debug_text:'RAILWAY_FACE=YES SNAP=' + latest.snap_time + ' HASH=' + latest.snap_hash + ' FACE_FOUND=YES COUNT=' + detect.face_count + ' BOX=' + JSON.stringify(detect.face_box) + ' RATIO=' + detect.face_ratio + '% FACE_MATCH=' + faceKnownByMatch + ' LIVENESS=' + (!!liveness.live_face) + ' VERDICT=' + (liveness.verdict || '') + ' NAME=' + (match.matched_name || '') + ' CONF=' + confidence + ' LIVE_CONF=' + (liveness.confidence || 0) + ' QUALITY=' + detect.face_quality + ' MATCH_MS=' + (match.match_ms || 0) + ' CACHE_HITS=' + (match.cache_hits || 0) + ' POS=' + detect.face_position + ' REASON=' + (known ? 'FACE_OK_PLUS_LIVENESS' : (faceKnownByMatch ? ('LIVENESS_FAIL_' + (liveness.verdict || 'UNKNOWN')) : (match.reason || 'LOW_SIMILARITY'))),
+    debug_text:'RAILWAY_FACE=YES SNAP=' + latest.snap_time + ' HASH=' + latest.snap_hash + ' FACE_FOUND=YES COUNT=' + detect.face_count + ' BOX=' + JSON.stringify(detect.face_box) + ' RATIO=' + detect.face_ratio + '% FACE_MATCH=' + faceKnownByMatch + ' LIVENESS=' + (!!liveness.live_face) + ' VERDICT=' + (liveness.verdict || '') + ' NAME=' + (match.matched_name || '') + ' CONF=' + confidence + ' LIVE_CONF=' + (liveness.confidence || 0) + ' DOOR=' + doorDecision + ' QUALITY=' + detect.face_quality + ' MATCH_MS=' + (match.match_ms || 0) + ' CACHE_HITS=' + (match.cache_hits || 0) + ' POS=' + detect.face_position + ' REASON=' + (known ? 'FACE_OK_PLUS_LIVENESS' : (faceKnownByMatch ? ('LIVENESS_FAIL_' + (liveness.verdict || 'UNKNOWN')) : (match.reason || 'LOW_SIMILARITY'))),
     time:nowIso()
   };
   cloudState.last_face_match = result;
@@ -1355,6 +1369,13 @@ app.get('/api/rt7/face_gate/serial_result', (req,res) => {
     known_face:!!m.known_face,
     matched_name:safeString(m.matched_name || ''),
     confidence:Number(m.confidence || 0),
+    face_match:safeString(m.face_match || m.matched_name || ''),
+    match_score:Number(m.match_score || m.confidence || 0),
+    liveness_label:safeString(m.liveness_label || (m.liveness && m.liveness.verdict) || ''),
+    liveness_pass:!!m.liveness_pass,
+    door:safeString(m.door || (m.known_face ? 'ALLOW' : 'DENY')),
+    door_allow:!!m.door_allow,
+    display_text:safeString(m.display_text || ''),
     face_found:!!m.face_found,
     face_count:Number(m.face_count || 0),
     face_box:m.face_box || {x:0,y:0,w:0,h:0},
@@ -1424,7 +1445,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}
 .video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22)}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
-.statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
+.statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
 .actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
@@ -1733,15 +1754,20 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7AutoFacePollBusy=false;
   function rt7FaceResultText_(j, autoLabel){
     if(!j) return '';
-    var box=j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0';
-    var prefix=autoLabel?'FACE_GATE 自動辨識：':'';
-    if(j.ok && j.known_face){
-      return prefix+'人臉通過：'+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+box+'｜RATIO='+(j.face_ratio||0)+'%｜ENGINE='+(j.engine||'railway_local');
-    }
-    if(j.ok){
-      return prefix+'人臉未通過：'+(j.reason||'UNKNOWN')+'｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+box+'｜RATIO='+(j.face_ratio||0)+'%｜FAIL='+(j.fail_stage||'-');
-    }
-    return prefix+'人臉辨識錯誤：'+(j.error||j.reason||'UNKNOWN');
+    var prefix=autoLabel?'FACE_GATE 自動辨識：\n':'';
+    var found = j.face_found ? 'YES' : 'NO';
+    var faceName = j.face_match || j.matched_name || (j.face_match_pass ? '已註冊' : 'unknown');
+    var match = (typeof j.match_score !== 'undefined') ? j.match_score : (j.confidence || 0);
+    var live = (j.liveness_label || (j.liveness && j.liveness.verdict) || (j.liveness_pass ? 'REAL' : 'UNKNOWN') || 'UNKNOWN').toString().toUpperCase();
+    var door = j.door || (j.known_face ? 'ALLOW' : 'DENY');
+    var s = prefix +
+      'FACE_FOUND=' + found + '\n' +
+      'FACE_MATCH=' + faceName + '\n' +
+      'MATCH=' + match + '%\n\n' +
+      'LIVENESS=' + live + '\n\n' +
+      'DOOR=' + door;
+    if(j.reason) s += '\nREASON=' + j.reason;
+    return s;
   }
   async function rt7PollAutoFaceResult_(){
     if(rt7AutoFacePollBusy) return;
@@ -1835,10 +1861,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       setAnswer('人臉辨識中...');
       var j=await rt7Json('/api/rt7/face/match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pause_stream:true,no_stream_reload:true,mode:'face_result_no_stream_reload_v52n'})});
       rt7ShowFaceSnapshot(j);
-      if(j.ok && j.known_face) {
-        keepResult=((j.reason==='BACKLIGHT_PASS')?'逆光但人臉通過：':'人臉通過：')+(j.matched_name||'已註冊')+' / '+(j.confidence||0)+'%｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜品質='+(j.face_quality||'UNKNOWN')+'｜SNAP='+(j.snap_hash||'')+'｜ENGINE='+(j.engine||'railway_local')+'｜CACHE='+(j.cache_mode||'')+'｜MS='+(j.match_ms||'')+'｜REASON='+(j.reason||'FACE_OK');
-      } else if(j.ok) {
-        keepResult='人臉未通過：'+(j.reason||'UNKNOWN')+'｜FACE_FOUND='+(j.face_found?'YES':'NO')+'｜COUNT='+(j.face_count||0)+'｜BOX='+(j.face_box?((j.face_box.w||0)+'x'+(j.face_box.h||0)):'0x0')+'｜RATIO='+(j.face_ratio||0)+'%｜FAIL='+(j.fail_stage||'UNKNOWN')+'｜品質='+(j.face_quality||'UNKNOWN')+'｜SNAP='+(j.snap_hash||'')+'｜ENGINE='+(j.engine||'railway_local')+'｜CACHE='+(j.cache_mode||'')+'｜MS='+(j.match_ms||'')+'｜'+(j.summary||'');
+      if(j.ok) {
+        keepResult=rt7FaceResultText_(j,false);
       } else {
         keepResult='人臉辨識失敗：'+(j.answer||j.error||'UNKNOWN');
       }
