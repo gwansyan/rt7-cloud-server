@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6J1_MOBILE_FACE_REGISTER_I2_BASE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6K_FACE_DB_MANAGER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1454,6 +1454,190 @@ app.get('/api/rt7/phase6c3_plugin/faces/reset', (req,res) => {
   rt7SaveFaces_([]);
   res.json({ ok:true, version:SERVER_VERSION, count:0 });
 });
+
+
+
+// ---------- V5.6K Face DB Manager / backup / restore ----------
+function rt7FacePublic_(f) {
+  return {
+    id: safeString(f && f.id),
+    name: safeString(f && f.name),
+    time: safeString(f && f.time),
+    bytes: Number(f && f.bytes || 0),
+    device_id: safeString(f && f.device_id || ''),
+    source: safeString(f && f.source || ''),
+    image_url: '/api/rt7/face/image/' + encodeURIComponent(safeString(f && f.id)) + '.jpg'
+  };
+}
+function rt7FaceStats_() {
+  const faces = rt7ReadFaces_();
+  const bytes = faces.reduce((n,f)=>n+Number(f && f.bytes || 0),0);
+  const names = Array.from(new Set(faces.map(f=>safeString(f && f.name).trim()).filter(Boolean)));
+  return { persons:names.length, photos:faces.length, bytes, mb:Math.round(bytes/1024/1024*100)/100, names };
+}
+function rt7SanitizeFaceImport_(arr) {
+  const out = [];
+  for (const x of (Array.isArray(arr) ? arr : [])) {
+    const name = safeString(x && x.name).trim();
+    const b64 = safeString(x && (x.image_b64 || x.image || x.jpeg_b64)).replace(/^data:image\/\w+;base64,/i,'').trim();
+    if (!name || !b64) continue;
+    let bytes = 0;
+    try { bytes = Buffer.from(b64, 'base64').length; } catch (_) { continue; }
+    if (bytes < 1000) continue;
+    const id = safeString(x && x.id).trim() || ('face_' + Date.now() + '_' + Math.floor(Math.random()*100000));
+    const f = {
+      id, name, image_b64:b64, bytes,
+      time:safeString(x && x.time).trim() || nowIso(),
+      device_id:safeString(x && x.device_id).trim() || '#import',
+      source:safeString(x && x.source).trim() || 'restore_import'
+    };
+    try {
+      const emb = rt7ExtractFaceEmbedding_(b64, null);
+      if (emb && emb.ok) { f.embedding_cache = rt7FaceEmbeddingToCache_(emb); f.embedding_cache_key = rt7FaceEmbeddingCacheKey_(f); }
+      else if (x && x.embedding_cache) f.embedding_cache = x.embedding_cache;
+    } catch (_) { if (x && x.embedding_cache) f.embedding_cache = x.embedding_cache; }
+    out.push(f);
+  }
+  return out;
+}
+function rt7ZipStore_(files) {
+  // Minimal ZIP writer: STORE method only, no external npm dependency.
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  function dosTime(d) {
+    d = d || new Date();
+    const time = ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | (Math.floor(d.getSeconds()/2) & 31);
+    const date = (((d.getFullYear()-1980) & 127) << 9) | (((d.getMonth()+1) & 15) << 5) | (d.getDate() & 31);
+    return { time, date };
+  }
+  function crc32(buf) {
+    let c = ~0;
+    if (!crc32.table) {
+      crc32.table = Array.from({length:256}, (_,n)=>{let x=n; for(let k=0;k<8;k++) x=(x&1)?(0xedb88320^(x>>>1)):(x>>>1); return x>>>0;});
+    }
+    for (const b of buf) c = crc32.table[(c ^ b) & 255] ^ (c >>> 8);
+    return (~c) >>> 0;
+  }
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name.replace(/^\/+/, ''), 'utf8');
+    const data = Buffer.isBuffer(file.data) ? file.data : Buffer.from(String(file.data || ''), 'utf8');
+    const crc = crc32(data);
+    const dt = dosTime(new Date());
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50,0); local.writeUInt16LE(20,4); local.writeUInt16LE(0,6); local.writeUInt16LE(0,8);
+    local.writeUInt16LE(dt.time,10); local.writeUInt16LE(dt.date,12); local.writeUInt32LE(crc,14);
+    local.writeUInt32LE(data.length,18); local.writeUInt32LE(data.length,22); local.writeUInt16LE(nameBuf.length,26); local.writeUInt16LE(0,28);
+    chunks.push(local, nameBuf, data);
+    const cent = Buffer.alloc(46);
+    cent.writeUInt32LE(0x02014b50,0); cent.writeUInt16LE(20,4); cent.writeUInt16LE(20,6); cent.writeUInt16LE(0,8); cent.writeUInt16LE(0,10);
+    cent.writeUInt16LE(dt.time,12); cent.writeUInt16LE(dt.date,14); cent.writeUInt32LE(crc,16);
+    cent.writeUInt32LE(data.length,20); cent.writeUInt32LE(data.length,24); cent.writeUInt16LE(nameBuf.length,28); cent.writeUInt16LE(0,30); cent.writeUInt16LE(0,32);
+    cent.writeUInt16LE(0,34); cent.writeUInt16LE(0,36); cent.writeUInt32LE(0,38); cent.writeUInt32LE(offset,42);
+    central.push(cent, nameBuf);
+    offset += local.length + nameBuf.length + data.length;
+  }
+  const centralStart = offset;
+  const centralBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50,0); end.writeUInt16LE(0,4); end.writeUInt16LE(0,6); end.writeUInt16LE(files.length,8); end.writeUInt16LE(files.length,10);
+  end.writeUInt32LE(centralBuf.length,12); end.writeUInt32LE(centralStart,16); end.writeUInt16LE(0,20);
+  return Buffer.concat([...chunks, centralBuf, end]);
+}
+function rt7FaceBackupObject_() {
+  const faces = rt7ReadFaces_();
+  return { ok:true, version:SERVER_VERSION, exported_at:nowIso(), count:faces.length, stats:rt7FaceStats_(), faces };
+}
+
+app.get('/api/rt7/face/image/:id.jpg', (req,res) => {
+  const id = safeString(req.params.id).replace(/\.jpg$/,'');
+  const f = rt7ReadFaces_().find(x => safeString(x.id) === id);
+  if (!f || !f.image_b64) return res.status(404).json({ ok:false, version:SERVER_VERSION, error:'FACE_IMAGE_NOT_FOUND' });
+  try {
+    res.set('Cache-Control','no-store');
+    res.type('image/jpeg').send(Buffer.from(safeString(f.image_b64).replace(/^data:image\/\w+;base64,/i,''), 'base64'));
+  } catch (e) { res.status(500).json({ ok:false, version:SERVER_VERSION, error:String(e.message || e) }); }
+});
+app.get('/api/rt7/faces/full', (req,res) => {
+  const faces = rt7ReadFaces_();
+  res.json({ ok:true, version:SERVER_VERSION, stats:rt7FaceStats_(), count:faces.length, faces:faces.map(rt7FacePublic_), last_face_match:cloudState.last_face_match || null });
+});
+app.post('/api/rt7/face/delete', (req,res) => {
+  const id = safeString(req.body && req.body.id || req.query.id).trim();
+  const before = rt7ReadFaces_();
+  const after = before.filter(f => safeString(f.id) !== id);
+  rt7SaveFaces_(after);
+  const ev = appendEvent({ type:'face_delete', id, message:'deleted face photo '+id });
+  broadcast('faces_changed', { action:'delete', id, count:after.length });
+  res.json({ ok:true, version:SERVER_VERSION, deleted:before.length-after.length, count:after.length, event:ev });
+});
+app.post('/api/rt7/face/rename', (req,res) => {
+  const oldName = safeString(req.body && req.body.old_name || req.body && req.body.oldName || req.query.old_name).trim();
+  const newName = safeString(req.body && req.body.new_name || req.body && req.body.newName || req.query.new_name).trim();
+  if (!oldName || !newName) return res.status(200).json({ ok:false, version:SERVER_VERSION, error:'NAME_REQUIRED' });
+  const faces = rt7ReadFaces_();
+  let n = 0;
+  for (const f of faces) if (safeString(f.name).trim() === oldName) { f.name = newName; n++; }
+  rt7SaveFaces_(faces);
+  const ev = appendEvent({ type:'face_rename', old_name:oldName, new_name:newName, count:n, message:'renamed face person '+oldName+' to '+newName });
+  broadcast('faces_changed', { action:'rename', old_name:oldName, new_name:newName, count:n });
+  res.json({ ok:true, version:SERVER_VERSION, renamed:n, count:faces.length, event:ev });
+});
+app.get('/api/rt7/face/backup.json', (req,res) => {
+  res.set('Cache-Control','no-store');
+  res.set('Content-Disposition','attachment; filename="rt7_face_backup.json"');
+  res.json(rt7FaceBackupObject_());
+});
+app.get('/api/rt7/face/backup.zip', (req,res) => {
+  const faces = rt7ReadFaces_();
+  const meta = rt7FaceBackupObject_();
+  const files = [{ name:'face_backup.json', data:JSON.stringify(meta, null, 2) }];
+  for (const f of faces) {
+    if (!f || !f.image_b64) continue;
+    const safeName = safeString(f.name || 'unknown').replace(/[\\/:*?"<>|]/g,'_').slice(0,60) || 'unknown';
+    const id = safeString(f.id || ('face_'+Date.now()));
+    files.push({ name:'faces/'+safeName+'/'+id+'.jpg', data:Buffer.from(safeString(f.image_b64).replace(/^data:image\/\w+;base64,/i,''), 'base64') });
+  }
+  const zip = rt7ZipStore_(files);
+  res.set('Cache-Control','no-store');
+  res.set('Content-Type','application/zip');
+  res.set('Content-Disposition','attachment; filename="rt7_face_backup.zip"');
+  res.send(zip);
+});
+app.post('/api/rt7/face/restore_json', (req,res) => {
+  const mode = safeString(req.body && req.body.mode || req.query.mode || 'replace').toLowerCase();
+  let obj = req.body || {};
+  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch (_) { obj = {}; } }
+  const inputFaces = Array.isArray(obj) ? obj : (Array.isArray(obj.faces) ? obj.faces : []);
+  const imported = rt7SanitizeFaceImport_(inputFaces);
+  if (!imported.length) return res.status(200).json({ ok:false, version:SERVER_VERSION, error:'NO_VALID_FACES_IN_BACKUP' });
+  const current = mode === 'append' ? rt7ReadFaces_() : [];
+  const ids = new Set(current.map(f=>safeString(f.id)));
+  const merged = current.concat(imported.map(f => { while(ids.has(f.id)){ f.id = 'face_' + Date.now() + '_' + Math.floor(Math.random()*100000); } ids.add(f.id); return f; }));
+  rt7SaveFaces_(merged.slice(0, 200));
+  const ev = appendEvent({ type:'face_restore_json', mode, imported:imported.length, total:merged.length, message:'restored face backup json' });
+  broadcast('faces_changed', { action:'restore', mode, imported:imported.length, count:merged.length });
+  res.json({ ok:true, version:SERVER_VERSION, mode, imported:imported.length, count:merged.length, event:ev });
+});
+
+app.get('/rt7_face_db_manager', (req,res) => res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 Face DB Manager</title><style>
+body{margin:0;background:#f3f7fb;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#062b31;color:white;padding:18px 14px;text-align:center;font-weight:900}.top a{float:left;color:white;text-decoration:none;background:#41506a;border-radius:10px;padding:9px 12px}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:white;border:1px solid #d5e0ea;border-radius:16px;padding:14px;margin:12px 0;box-shadow:0 4px 18px #0001}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:900;font-size:16px;color:white;background:#148bd5;text-decoration:none;display:inline-block}button.green,.btn.green{background:#11aa58}button.red{background:#d92d2d}button.gray,.btn.gray{background:#41506a}input,textarea{border:1px solid #cad6e1;border-radius:10px;padding:10px;font-size:16px}textarea{width:100%;min-height:150px;box-sizing:border-box}.stats{font-weight:900;color:#6b2b20}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.face{border:1px solid #d5e0ea;border-radius:12px;padding:8px;background:#fbfdff}.face img{width:100%;height:130px;object-fit:cover;border-radius:10px;background:#111}.name{font-weight:900;margin-top:6px}.small{font-size:12px;color:#687886;word-break:break-all}.log{background:#071225;color:#dff7ff;padding:10px;border-radius:10px;white-space:pre-wrap;font-size:12px;max-height:180px;overflow:auto}.cap{font-size:13px;color:#667;margin:6px 0}.groupTitle{font-size:20px;font-weight:900;margin:12px 0 6px}.preview{width:220px;max-width:100%;border-radius:12px;background:#111}#camPanel{display:none}video{width:100%;max-height:360px;background:#111;border-radius:12px}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 返回</a><div>RT7 FACE DB MANAGER</div><div style="font-size:13px;font-weight:600">查看照片 / 新增 / 刪除 / 改名 / 備份還原</div></div><main class="wrap">
+<section class="card"><div class="row"><a class="btn green" href="/api/rt7/face/backup.zip">下載 face_backup.zip</a><a class="btn gray" href="/api/rt7/face/backup.json">下載 JSON</a><button class="gray" id="btnReload">重新載入</button><button class="red" id="btnReset">清空全部</button></div><p class="stats" id="stats">loading...</p></section>
+<section class="card"><h2>手機新增照片</h2><div class="row"><input id="regName" placeholder="姓名，例如 gwansyan" value="gwansyan"><button class="green" id="btnOpenCam">開手機前鏡頭</button><button id="btnCapture">拍照加入</button><button class="gray" id="btnCloseCam">關閉鏡頭</button></div><div id="camPanel"><video id="video" playsinline autoplay muted></video><canvas id="canvas" style="display:none"></canvas></div><p class="cap">註冊使用手機前鏡頭；辨識仍使用 ESP32-CAM。</p></section>
+<section class="card"><h2>修改姓名</h2><div class="row"><input id="oldName" placeholder="原姓名"><input id="newName" placeholder="新姓名"><button id="btnRename">修改姓名</button></div></section>
+<section class="card"><h2>還原 / 上傳備份 JSON</h2><p class="cap">可貼上 face_backup.json 內容；模式選 replace 會取代目前資料，append 會追加。</p><div class="row"><select id="restoreMode"><option value="replace">replace 取代</option><option value="append">append 追加</option></select><button id="btnRestore">還原 JSON</button></div><textarea id="backupText" placeholder="貼上 face_backup.json 內容"></textarea></section>
+<section class="card"><h2>人臉照片</h2><div id="faces"></div></section><section class="card"><h2>狀態</h2><pre class="log" id="log">ready</pre></section></main><script>
+var stream=null;function $(id){return document.getElementById(id)}function log(x){$('log').textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}async function api(u,o){var r=await fetch(u+(u.indexOf('?')>=0?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},o||{}));var t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,status:r.status,raw:t}}}
+async function load(){var j=await api('/api/rt7/faces/full');log(j);var s=j.stats||{};$('stats').textContent='人數：'+(s.persons||0)+'｜照片：'+(s.photos||0)+'｜容量：'+(s.mb||0)+' MB';var faces=j.faces||[];var by={};faces.forEach(function(f){var n=f.name||'未命名';(by[n]=by[n]||[]).push(f)});var html='';Object.keys(by).sort().forEach(function(n){html+='<div class="groupTitle">'+esc(n)+' <span class="small">('+by[n].length+'張)</span></div><div class="grid">';by[n].forEach(function(f){html+='<div class="face"><img src="'+f.image_url+'?_='+Date.now()+'"><div class="name">'+esc(f.name)+'</div><div class="small">'+esc(f.id)+'</div><div class="small">'+esc(f.source)+'｜'+esc(f.time)+'</div><button class="red" data-del="'+esc(f.id)+'">刪除</button></div>'});html+='</div>'});$('faces').innerHTML=html||'<p>尚無人臉資料</p>';document.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){del(this.getAttribute('data-del'))}})}
+function esc(s){return String(s||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+async function del(id){if(!confirm('刪除此照片？'))return;var j=await api('/api/rt7/face/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});log(j);load()}
+async function rename(){var oldn=$('oldName').value.trim(),newn=$('newName').value.trim();if(!oldn||!newn){alert('請輸入原姓名與新姓名');return}var j=await api('/api/rt7/face/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_name:oldn,new_name:newn})});log(j);load()}
+async function openCam(){try{if(!navigator.mediaDevices){alert('瀏覽器不支援相機');return}stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:720},height:{ideal:960}},audio:false});$('camPanel').style.display='block';$('video').srcObject=stream;try{await $('video').play()}catch(e){}}catch(e){log('相機開啟失敗：'+(e.message||e))}}
+function closeCam(){try{if(stream)stream.getTracks().forEach(function(t){t.stop()})}catch(e){}stream=null;$('camPanel').style.display='none'}
+async function capture(){var v=$('video'),c=$('canvas'),name=$('regName').value.trim()||'未命名';if(!v.videoWidth){alert('鏡頭尚未準備好');return}var scale=Math.min(1,720/v.videoWidth);c.width=Math.round(v.videoWidth*scale);c.height=Math.round(v.videoHeight*scale);c.getContext('2d').drawImage(v,0,0,c.width,c.height);var data=c.toDataURL('image/jpeg',0.86);var j=await api('/api/rt7/face/enroll_mobile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,source:'mobile_face_db_manager',device_id:'#mobile',image:data})});log(j);if(j.ok)load()}
+async function restoreJson(){var txt=$('backupText').value.trim();if(!txt){alert('請貼上 JSON');return}var obj;try{obj=JSON.parse(txt)}catch(e){alert('JSON 格式錯誤');return}if(!confirm('確定還原？'))return;var j=await api('/api/rt7/face/restore_json?mode='+encodeURIComponent($('restoreMode').value),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)});log(j);load()}
+$('btnReload').onclick=load;$('btnRename').onclick=rename;$('btnOpenCam').onclick=openCam;$('btnCloseCam').onclick=closeCam;$('btnCapture').onclick=capture;$('btnRestore').onclick=restoreJson;$('btnReset').onclick=async function(){if(!confirm('確定清空全部人臉？'))return;var j=await api('/api/rt7/faces/reset');log(j);load()};load();
+</script></body></html>`));
 
 // ---------- Original RT7 mobile-style cloud doorbell UI ----------
 app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
