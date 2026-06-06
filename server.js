@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6I1_FACE_RESULT_DISPLAY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6I2_FACE_DISPLAY_BUTTON_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1754,19 +1754,20 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7AutoFacePollBusy=false;
   function rt7FaceResultText_(j, autoLabel){
     if(!j) return '';
-    var prefix=autoLabel?'FACE_GATE 自動辨識：\n':'';
+    var NL = String.fromCharCode(10);
+    var prefix = autoLabel ? ('FACE_GATE 自動辨識：' + NL) : '';
     var found = j.face_found ? 'YES' : 'NO';
     var faceName = j.face_match || j.matched_name || (j.face_match_pass ? '已註冊' : 'unknown');
     var match = (typeof j.match_score !== 'undefined') ? j.match_score : (j.confidence || 0);
     var live = (j.liveness_label || (j.liveness && j.liveness.verdict) || (j.liveness_pass ? 'REAL' : 'UNKNOWN') || 'UNKNOWN').toString().toUpperCase();
     var door = j.door || (j.known_face ? 'ALLOW' : 'DENY');
     var s = prefix +
-      'FACE_FOUND=' + found + '\n' +
-      'FACE_MATCH=' + faceName + '\n' +
-      'MATCH=' + match + '%\n\n' +
-      'LIVENESS=' + live + '\n\n' +
+      'FACE_FOUND=' + found + NL +
+      'FACE_MATCH=' + faceName + NL +
+      'MATCH=' + match + '%' + NL + NL +
+      'LIVENESS=' + live + NL + NL +
       'DOOR=' + door;
-    if(j.reason) s += '\nREASON=' + j.reason;
+    if(j.reason) s += NL + 'REASON=' + j.reason;
     return s;
   }
   async function rt7PollAutoFaceResult_(){
