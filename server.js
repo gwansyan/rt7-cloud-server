@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6H11_GPIO_DOOR_TONE_RESTORE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6I_FACE_MATCH_VISION_LIVENESS';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1051,6 +1051,75 @@ function rt7RailwayFaceCompare_(latest, refs, detect) {
   };
 }
 
+
+
+// V5.6I: Vision liveness check after Railway Face Match PASS.
+// Goal: block phone/tablet/computer screen photos and printed photos before reporting known_face=true.
+async function rt7VisionLivenessCheck_(latest, detect) {
+  const t0 = Date.now();
+  const outBase = {
+    ok:false,
+    enabled:true,
+    engine:'openai_vision',
+    model:safeString(process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini').trim(),
+    live_face:false,
+    verdict:'UNKNOWN',
+    confidence:0,
+    reason:'INIT',
+    summary:'Vision 活體檢測尚未完成。',
+    liveness_ms:0
+  };
+  try {
+    if (!latest || !latest.b64) return Object.assign(outBase, { reason:'NO_SNAPSHOT', summary:'Vision 活體檢測失敗：沒有 Snapshot。', liveness_ms:Date.now()-t0 });
+    const prompt = [
+      '你是 RT7 門禁系統的活體檢測器。請只判斷這張門口攝影機照片中的臉是否是真人站在鏡頭前。',
+      '請特別檢查是否為：手機螢幕、平板螢幕、電腦螢幕、紙本照片、照片翻拍、海報、人臉圖片。',
+      '判斷規則：只有明顯是真人且不是螢幕/紙本照片，才算 REAL。只要疑似螢幕或照片，判為 SCREEN 或 PHOTO。',
+      '請只輸出 JSON，不要 Markdown：',
+      '{"verdict":"REAL|SCREEN|PHOTO|UNCLEAR","live_face":true|false,"confidence":0-100,"reason":"繁體中文一句話"}'
+    ].join('\n');
+    const raw = await openAiChat([{ role:'user', content:[
+      { type:'text', text:prompt },
+      { type:'image_url', image_url:{ url:'data:image/jpeg;base64,' + latest.b64 } }
+    ]}], 180);
+    let text = safeString(raw).trim();
+    text = text.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/```$/,'').trim();
+    let obj = null;
+    try { obj = JSON.parse(text); }
+    catch (_) {
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) { try { obj = JSON.parse(m[0]); } catch(e) {} }
+    }
+    const verdict = safeString(obj && obj.verdict || '').toUpperCase();
+    const conf = Math.max(0, Math.min(100, Number(obj && obj.confidence || 0)));
+    const live = (verdict === 'REAL') && (obj && obj.live_face === true || /true/i.test(safeString(obj && obj.live_face))) && conf >= 60;
+    return {
+      ok:true,
+      enabled:true,
+      engine:'openai_vision',
+      model:safeString(process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini').trim(),
+      live_face:!!live,
+      verdict:verdict || 'UNCLEAR',
+      confidence:conf,
+      reason:safeString(obj && obj.reason || text).slice(0,240),
+      summary: live ? ('Vision 活體檢測通過：REAL / ' + conf + '%') : ('Vision 活體檢測未通過：' + (verdict || 'UNCLEAR') + ' / ' + conf + '%'),
+      raw:text.slice(0,500),
+      face_box: detect && detect.face_box || null,
+      liveness_ms:Date.now()-t0
+    };
+  } catch(e) {
+    return Object.assign(outBase, {
+      ok:false,
+      live_face:false,
+      verdict:'ERROR',
+      confidence:0,
+      reason:String(e && e.message || e).slice(0,240),
+      summary:'Vision 活體檢測失敗，已阻擋開門：' + String(e && e.message || e).slice(0,120),
+      liveness_ms:Date.now()-t0
+    });
+  }
+}
+
 async function rt7MatchKnownFaceOnly_(latest, refs, detect) {
   // V5.3A: Railway-only fast cached face match. No GPT/OpenAI call is used for door face recognition.
   return rt7RailwayFaceCompare_(latest, refs, detect);
@@ -1111,24 +1180,35 @@ async function rt7FaceMatchLatestCore_(providedLatest, opt) {
   const refs = faces.slice(0, 6);
   const match = await rt7MatchKnownFaceOnly_(latest, refs, detect);
   const confidence = Number(match.confidence || 0);
-  const known = !!match.known_face && confidence >= 40;
+  const faceKnownByMatch = !!match.known_face && confidence >= 40;
+  let liveness = { enabled:true, skipped:true, live_face:false, verdict:'SKIPPED', confidence:0, reason:'FACE_MATCH_NOT_PASS', summary:'Face Match 未通過，略過 Vision 活體檢測。' };
+  if (faceKnownByMatch) {
+    console.log('[FACE_LIVENESS][V56I] Face Match PASS, start Vision liveness hash=' + latest.snap_hash + ' name=' + (match.matched_name || ''));
+    liveness = await rt7VisionLivenessCheck_(latest, detect);
+    console.log('[FACE_LIVENESS][V56I] result live=' + (!!liveness.live_face) + ' verdict=' + liveness.verdict + ' conf=' + liveness.confidence + ' reason=' + liveness.reason);
+  }
+  const known = faceKnownByMatch && !!liveness.live_face;
   const result = {
-    ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match', stage:'RAILWAY_DETECT_THEN_MATCH', engine:'railway_local', gpt_used:false,
+    ok:true, version:SERVER_VERSION, api_entered:true, api_path:'/api/rt7/face/match', type:'face_match', stage:'RAILWAY_MATCH_PLUS_VISION_LIVENESS', engine:'railway_local_plus_openai_vision', gpt_used:faceKnownByMatch,
     face_gate:gate,
+    liveness,
     face_found:true,
     face_count:detect.face_count,
     face_box:detect.face_box,
     face_ratio:detect.face_ratio,
+    face_match_pass:faceKnownByMatch,
     known_face:known,
     matched_name: known ? safeString(match.matched_name || refs[0]?.name || '') : '',
     confidence,
     backlight_tolerant:true,
     pass_threshold:40,
+    liveness_required:true,
+    liveness_pass:!!liveness.live_face,
     face_quality:detect.face_quality,
     face_position:detect.face_position,
-    fail_stage:known ? 'NONE' : 'MATCH',
-    reason: known ? 'FACE_OK' : (match.reason || 'LOW_SIMILARITY'),
-    summary: known ? ('人臉通過：' + (match.matched_name || refs[0]?.name || '已註冊') + ' / ' + confidence + '% / threshold=40%') : (match.summary || '已偵測到人臉，但與註冊名單相似度不足。'),
+    fail_stage:known ? 'NONE' : (faceKnownByMatch ? 'LIVENESS' : 'MATCH'),
+    reason: known ? 'FACE_OK_PLUS_LIVENESS' : (faceKnownByMatch ? ('LIVENESS_FAIL_' + (liveness.verdict || 'UNKNOWN')) : (match.reason || 'LOW_SIMILARITY')),
+    summary: known ? ('人臉 + 活體檢測通過：' + (match.matched_name || refs[0]?.name || '已註冊') + ' / Face=' + confidence + '% / Live=' + (liveness.confidence || 0) + '%') : (faceKnownByMatch ? ('Face Match 通過，但 Vision 活體檢測未通過，已阻擋開門：' + (liveness.summary || liveness.reason || 'UNKNOWN')) : (match.summary || '已偵測到人臉，但與註冊名單相似度不足。')),
     count:faces.length,
     latest_bytes:latest.bytes,
     snap_time:latest.snap_time,
@@ -1142,12 +1222,12 @@ async function rt7FaceMatchLatestCore_(providedLatest, opt) {
     cache_miss:match.cache_miss || 0,
     compared:match.compared || refs.length,
     ref_names:refs.map(f => safeString(f.name || '')),
-    debug_text:'RAILWAY_FACE=YES SNAP=' + latest.snap_time + ' HASH=' + latest.snap_hash + ' FACE_FOUND=YES COUNT=' + detect.face_count + ' BOX=' + JSON.stringify(detect.face_box) + ' RATIO=' + detect.face_ratio + '% KNOWN=' + known + ' NAME=' + (match.matched_name || '') + ' CONF=' + confidence + ' QUALITY=' + detect.face_quality + ' MATCH_MS=' + (match.match_ms || 0) + ' CACHE_HITS=' + (match.cache_hits || 0) + ' POS=' + detect.face_position + ' REASON=' + (known ? 'FACE_OK' : (match.reason || 'LOW_SIMILARITY')),
+    debug_text:'RAILWAY_FACE=YES SNAP=' + latest.snap_time + ' HASH=' + latest.snap_hash + ' FACE_FOUND=YES COUNT=' + detect.face_count + ' BOX=' + JSON.stringify(detect.face_box) + ' RATIO=' + detect.face_ratio + '% FACE_MATCH=' + faceKnownByMatch + ' LIVENESS=' + (!!liveness.live_face) + ' VERDICT=' + (liveness.verdict || '') + ' NAME=' + (match.matched_name || '') + ' CONF=' + confidence + ' LIVE_CONF=' + (liveness.confidence || 0) + ' QUALITY=' + detect.face_quality + ' MATCH_MS=' + (match.match_ms || 0) + ' CACHE_HITS=' + (match.cache_hits || 0) + ' POS=' + detect.face_position + ' REASON=' + (known ? 'FACE_OK_PLUS_LIVENESS' : (faceKnownByMatch ? ('LIVENESS_FAIL_' + (liveness.verdict || 'UNKNOWN')) : (match.reason || 'LOW_SIMILARITY'))),
     time:nowIso()
   };
   cloudState.last_face_match = result;
   appendEvent({ type:'face_match', name:result.matched_name, known_face:result.known_face, confidence:result.confidence, message:result.summary });
-  console.log('[FACE_API][V54O] result stage=' + result.stage + ' hash=' + result.snap_hash + ' face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
+  console.log('[FACE_API][V56I] result stage=' + result.stage + ' hash=' + result.snap_hash + ' face_found=' + result.face_found + ' count=' + result.face_count + ' box=' + JSON.stringify(result.face_box) + ' ratio=' + result.face_ratio + '% face_match=' + result.face_match_pass + ' liveness=' + result.liveness_pass + ' verdict=' + (result.liveness && result.liveness.verdict || '') + ' known=' + result.known_face + ' name=' + result.matched_name + ' confidence=' + result.confidence + ' quality=' + result.face_quality + ' pos=' + result.face_position + ' reason=' + result.reason + ' fail_stage=' + result.fail_stage);
   broadcast('face_match', result);
   return result;
 }
