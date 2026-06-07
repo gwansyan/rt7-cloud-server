@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6K_FACE_DB_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6K1_FACE_DB_SQLITE_EXPORT';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1549,6 +1549,48 @@ function rt7FaceBackupObject_() {
   return { ok:true, version:SERVER_VERSION, exported_at:nowIso(), count:faces.length, stats:rt7FaceStats_(), faces };
 }
 
+async function rt7FaceSqliteBuffer_() {
+  // Build a real SQLite .sqlite file using sql.js (pure JS + WASM). The photos stay in ZIP/JPG;
+  // SQLite records names, photo metadata, image paths, and image URL for readable management.
+  let initSqlJs;
+  try { initSqlJs = require('sql.js'); }
+  catch (e) {
+    const msg = 'SQLITE_EXPORT_NEEDS_SQLJS: please npm install sql.js';
+    const err = new Error(msg); err.cause = e; throw err;
+  }
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run('PRAGMA user_version = 5601');
+  db.run('CREATE TABLE faces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, photo_count INTEGER DEFAULT 0, total_bytes INTEGER DEFAULT 0, first_created_at TEXT, last_created_at TEXT)');
+  db.run('CREATE TABLE face_photos (id TEXT PRIMARY KEY, face_name TEXT NOT NULL, filename TEXT NOT NULL, path TEXT NOT NULL, image_url TEXT NOT NULL, size_bytes INTEGER DEFAULT 0, created_at TEXT, source TEXT, device_id TEXT)');
+  db.run('CREATE INDEX idx_face_photos_name ON face_photos(face_name)');
+  const faces = rt7ReadFaces_();
+  const byName = {};
+  for (const f of faces) {
+    const name = safeString(f && f.name || '未命名').trim() || '未命名';
+    const id = safeString(f && f.id || ('face_'+Date.now()));
+    const safeName = name.replace(/[\\/:*?"<>|]/g,'_').slice(0,60) || 'unknown';
+    const filename = id + '.jpg';
+    const path = 'faces/' + safeName + '/' + filename;
+    const imageUrl = '/api/rt7/face/image/' + encodeURIComponent(id) + '.jpg';
+    const bytes = Number(f && f.bytes || 0);
+    const created = safeString(f && f.time || '');
+    const row = byName[name] || (byName[name] = { name, count:0, bytes:0, first:'', last:'' });
+    row.count++; row.bytes += bytes;
+    if (created && (!row.first || created < row.first)) row.first = created;
+    if (created && (!row.last || created > row.last)) row.last = created;
+    const st = db.prepare('INSERT OR REPLACE INTO face_photos (id, face_name, filename, path, image_url, size_bytes, created_at, source, device_id) VALUES (?,?,?,?,?,?,?,?,?)');
+    st.run([id, name, filename, path, imageUrl, bytes, created, safeString(f && f.source || ''), safeString(f && f.device_id || '')]);
+    st.free();
+  }
+  const stFace = db.prepare('INSERT INTO faces (name, photo_count, total_bytes, first_created_at, last_created_at) VALUES (?,?,?,?,?)');
+  Object.keys(byName).sort().forEach(k => { const r = byName[k]; stFace.run([r.name, r.count, r.bytes, r.first, r.last]); });
+  stFace.free();
+  const data = db.export();
+  db.close();
+  return Buffer.from(data);
+}
+
 app.get('/api/rt7/face/image/:id.jpg', (req,res) => {
   const id = safeString(req.params.id).replace(/\.jpg$/,'');
   const f = rt7ReadFaces_().find(x => safeString(x.id) === id);
@@ -1588,10 +1630,23 @@ app.get('/api/rt7/face/backup.json', (req,res) => {
   res.set('Content-Disposition','attachment; filename="rt7_face_backup.json"');
   res.json(rt7FaceBackupObject_());
 });
-app.get('/api/rt7/face/backup.zip', (req,res) => {
+app.get('/api/rt7/face/backup.sqlite', async (req,res) => {
+  try {
+    const db = await rt7FaceSqliteBuffer_();
+    res.set('Cache-Control','no-store');
+    res.set('Content-Type','application/vnd.sqlite3');
+    res.set('Content-Disposition','attachment; filename="rt7_face_backup.sqlite"');
+    res.send(db);
+  } catch (e) {
+    res.status(500).json({ ok:false, version:SERVER_VERSION, error:'SQLITE_EXPORT_FAILED', message:String(e.message || e) });
+  }
+});
+app.get('/api/rt7/face/backup.zip', async (req,res) => {
   const faces = rt7ReadFaces_();
   const meta = rt7FaceBackupObject_();
   const files = [{ name:'face_backup.json', data:JSON.stringify(meta, null, 2) }];
+  try { files.push({ name:'face_backup.sqlite', data:await rt7FaceSqliteBuffer_() }); }
+  catch (e) { files.push({ name:'SQLITE_EXPORT_ERROR.txt', data:String(e.message || e) }); }
   for (const f of faces) {
     if (!f || !f.image_b64) continue;
     const safeName = safeString(f.name || 'unknown').replace(/[\\/:*?"<>|]/g,'_').slice(0,60) || 'unknown';
@@ -1621,8 +1676,8 @@ app.post('/api/rt7/face/restore_json', (req,res) => {
 });
 
 app.get('/rt7_face_db_manager', (req,res) => res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 Face DB Manager</title><style>
-body{margin:0;background:#f3f7fb;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#062b31;color:white;padding:18px 14px;text-align:center;font-weight:900}.top a{float:left;color:white;text-decoration:none;background:#41506a;border-radius:10px;padding:9px 12px}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:white;border:1px solid #d5e0ea;border-radius:16px;padding:14px;margin:12px 0;box-shadow:0 4px 18px #0001}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:900;font-size:16px;color:white;background:#148bd5;text-decoration:none;display:inline-block}button.green,.btn.green{background:#11aa58}button.red{background:#d92d2d}button.gray,.btn.gray{background:#41506a}input,textarea{border:1px solid #cad6e1;border-radius:10px;padding:10px;font-size:16px}textarea{width:100%;min-height:150px;box-sizing:border-box}.stats{font-weight:900;color:#6b2b20}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.face{border:1px solid #d5e0ea;border-radius:12px;padding:8px;background:#fbfdff}.face img{width:100%;height:130px;object-fit:cover;border-radius:10px;background:#111}.name{font-weight:900;margin-top:6px}.small{font-size:12px;color:#687886;word-break:break-all}.log{background:#071225;color:#dff7ff;padding:10px;border-radius:10px;white-space:pre-wrap;font-size:12px;max-height:180px;overflow:auto}.cap{font-size:13px;color:#667;margin:6px 0}.groupTitle{font-size:20px;font-weight:900;margin:12px 0 6px}.preview{width:220px;max-width:100%;border-radius:12px;background:#111}#camPanel{display:none}video{width:100%;max-height:360px;background:#111;border-radius:12px}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 返回</a><div>RT7 FACE DB MANAGER</div><div style="font-size:13px;font-weight:600">查看照片 / 新增 / 刪除 / 改名 / 備份還原</div></div><main class="wrap">
-<section class="card"><div class="row"><a class="btn green" href="/api/rt7/face/backup.zip">下載 face_backup.zip</a><a class="btn gray" href="/api/rt7/face/backup.json">下載 JSON</a><button class="gray" id="btnReload">重新載入</button><button class="red" id="btnReset">清空全部</button></div><p class="stats" id="stats">loading...</p></section>
+body{margin:0;background:#f3f7fb;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#062b31;color:white;padding:18px 14px;text-align:center;font-weight:900}.top a{float:left;color:white;text-decoration:none;background:#41506a;border-radius:10px;padding:9px 12px}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:white;border:1px solid #d5e0ea;border-radius:16px;padding:14px;margin:12px 0;box-shadow:0 4px 18px #0001}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:900;font-size:16px;color:white;background:#148bd5;text-decoration:none;display:inline-block}button.green,.btn.green{background:#11aa58}button.red{background:#d92d2d}button.gray,.btn.gray{background:#41506a}input,textarea{border:1px solid #cad6e1;border-radius:10px;padding:10px;font-size:16px}textarea{width:100%;min-height:150px;box-sizing:border-box}.stats{font-weight:900;color:#6b2b20}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.face{border:1px solid #d5e0ea;border-radius:12px;padding:8px;background:#fbfdff}.face img{width:100%;height:130px;object-fit:cover;border-radius:10px;background:#111}.name{font-weight:900;margin-top:6px}.small{font-size:12px;color:#687886;word-break:break-all}.log{background:#071225;color:#dff7ff;padding:10px;border-radius:10px;white-space:pre-wrap;font-size:12px;max-height:180px;overflow:auto}.cap{font-size:13px;color:#667;margin:6px 0}.groupTitle{font-size:20px;font-weight:900;margin:12px 0 6px}.preview{width:220px;max-width:100%;border-radius:12px;background:#111}#camPanel{display:none}video{width:100%;max-height:360px;background:#111;border-radius:12px}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 返回</a><div>RT7 FACE DB MANAGER</div><div style="font-size:13px;font-weight:600">查看照片 / 新增 / 刪除 / 改名 / SQLite / ZIP 備份還原</div></div><main class="wrap">
+<section class="card"><div class="row"><a class="btn green" href="/api/rt7/face/backup.zip">下載 ZIP</a><a class="btn gray" href="/api/rt7/face/backup.sqlite">下載 SQLite</a><a class="btn gray" href="/api/rt7/face/backup.json">下載 JSON</a><button class="gray" id="btnReload">重新載入</button><button class="red" id="btnReset">清空全部</button></div><p class="stats" id="stats">loading...</p></section>
 <section class="card"><h2>手機新增照片</h2><div class="row"><input id="regName" placeholder="姓名，例如 gwansyan" value="gwansyan"><button class="green" id="btnOpenCam">開手機前鏡頭</button><button id="btnCapture">拍照加入</button><button class="gray" id="btnCloseCam">關閉鏡頭</button></div><div id="camPanel"><video id="video" playsinline autoplay muted></video><canvas id="canvas" style="display:none"></canvas></div><p class="cap">註冊使用手機前鏡頭；辨識仍使用 ESP32-CAM。</p></section>
 <section class="card"><h2>修改姓名</h2><div class="row"><input id="oldName" placeholder="原姓名"><input id="newName" placeholder="新姓名"><button id="btnRename">修改姓名</button></div></section>
 <section class="card"><h2>還原 / 上傳備份 JSON</h2><p class="cap">可貼上 face_backup.json 內容；模式選 replace 會取代目前資料，append 會追加。</p><div class="row"><select id="restoreMode"><option value="replace">replace 取代</option><option value="append">append 追加</option></select><button id="btnRestore">還原 JSON</button></div><textarea id="backupText" placeholder="貼上 face_backup.json 內容"></textarea></section>
