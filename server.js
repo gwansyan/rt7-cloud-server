@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L8_XIAOAI_BUTTON_MOVE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L9_XIAOAI_WAKE_ACK_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -2048,6 +2048,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7WakePauseForAi=false;
   var rt7WakeResumeTimer=null;
   var rt7WakeRestarting=false;
+  var rt7WakeAckPending=false;
   function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); var l=document.getElementById('lblWakeXiaoAi'); if(b){ b.textContent='🎙️'; b.title=txt||'小艾'; } if(l){ var t=String(txt||'小艾'); if(t.indexOf('待命中')>=0) t='小艾待命'; else if(t.indexOf('聆聽')>=0) t='小艾聆聽'; else if(t.indexOf('不支援')>=0) t='不支援'; else if(t.indexOf('關閉')>=0) t='小艾'; else t='小艾'; l.textContent=t; } }
   function rt7WakeStop_(msg){
     rt7WakeEnabled=false;
@@ -2059,6 +2060,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7WakeStopTimer){ clearInterval(rt7WakeStopTimer); rt7WakeStopTimer=null; }
     if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); rt7WakeResumeTimer=null; }
     rt7WakePauseForAi=false;
+    rt7WakeAckPending=false;
     rt7WakeButtonText_('啟用小艾待命');
     if(msg) setAnswer(msg);
     setDebug('xiaoai wake stopped');
@@ -2066,6 +2068,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function rt7WakeReturnToWake_(){
     rt7WakeSession=false;
     rt7WakeBusy=false;
+    rt7WakeAckPending=false;
     rt7WakeLastMs=Date.now();
     rt7WakeButtonText_('啟用小艾待命');
     setAnswer('小艾：已回到等待喚醒詞。請說「小艾」再開始詢問。');
@@ -2099,6 +2102,12 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     rt7WakeBusy=true;
     rt7WakePauseRecForAi_();
     try{
+      var needAck=!!rt7WakeAckPending;
+      rt7WakeAckPending=false;
+      if(needAck){
+        setAnswer('小艾：我是小艾。'+(cmd ? ' 你說：'+cmd : ''));
+        await speakAnswer('我是小艾');
+      }
       setAnswer('小艾：'+cmd);
       await routeVoiceQuestion(cmd);
     }catch(e){
@@ -2126,13 +2135,21 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(hasWake){
       rt7WakeSession=true;
       rt7WakeLastMs=now;
+      rt7WakeAckPending=true;
       rt7WakeButtonText_('小艾聆聽中');
       try{
         var m=String(text||'').match(/小[艾愛][，,。！!？?\s]*(.*)$/);
         if(m) cmd=(m[1]||'').trim();
       }catch(e){ cmd=''; }
       if(!cmd){
-        setAnswer('小艾已啟動，請直接說問題。30秒未說話會回到等待「小艾」。');
+        rt7WakeAckPending=false;
+        rt7WakeBusy=true;
+        rt7WakePauseRecForAi_();
+        setAnswer('小艾：我是小艾。請直接說問題，30秒未說話會回到等待「小艾」。');
+        speakAnswer('我是小艾').then(function(){
+          rt7WakeBusy=false;
+          if(rt7WakeEnabled){ rt7WakeLastMs=Date.now(); rt7WakeResumeRecAfterAi_(); }
+        });
         return;
       }
     }else if(rt7WakeSession){
