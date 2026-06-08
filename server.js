@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L7_XIAOAI_START_BUTTON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L8_XIAOAI_BUTTON_MOVE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1739,11 +1739,11 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section><section class="wakePanel"><button id="btnWakeXiaoAi" class="wakeBtn" type="button">啟用小艾待命</button><div class="wakeHint">按一次授權麥克風，之後說「小艾」啟動 AI。</div></section>
+<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnAiVoice" class="circle" type="button">🎙️</button>AI語音助理</div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
@@ -2048,7 +2048,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7WakePauseForAi=false;
   var rt7WakeResumeTimer=null;
   var rt7WakeRestarting=false;
-  function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); if(b) b.textContent=txt; }
+  function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); var l=document.getElementById('lblWakeXiaoAi'); if(b){ b.textContent='🎙️'; b.title=txt||'小艾'; } if(l){ var t=String(txt||'小艾'); if(t.indexOf('待命中')>=0) t='小艾待命'; else if(t.indexOf('聆聽')>=0) t='小艾聆聽'; else if(t.indexOf('不支援')>=0) t='不支援'; else if(t.indexOf('關閉')>=0) t='小艾'; else t='小艾'; l.textContent=t; } }
   function rt7WakeStop_(msg){
     rt7WakeEnabled=false;
     rt7WakeSession=false;
@@ -2200,12 +2200,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     rt7WakeAutoArmed=true;
     setTimeout(function(){ try{ rt7WakeStart_(); }catch(e){} },80);
   }
-  document.addEventListener('click', rt7WakeAutoStartOnce_, {once:true, passive:true});
-  document.addEventListener('touchend', rt7WakeAutoStartOnce_, {once:true, passive:true});
   document.addEventListener('DOMContentLoaded', function(){
     setTimeout(function(){ rt7WakeButtonText_('啟用小艾待命'); },200);
-    // Try only if browser previously granted permission; failures are silent to avoid breaking buttons.
-    setTimeout(function(){ try{ if(!rt7WakeAutoArmed) rt7WakeStart_(); }catch(e){} },1200);
   });
 
   // V5.0K: 雙向 PTT WebSocket 對講。
