@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6K2_FACE_DB_PHOTO_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L2_WAKE_WORD_XIAOAI_K2_SAFE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1739,7 +1739,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
+<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnWakeXiaoAi" class="vbtn vgreen" type="button">啟用小艾</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
@@ -1985,6 +1985,86 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   function startVoiceAsk(){ setAnswer('請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
+
+  // V5.6L2: Safe wake word mode. It is OFF by default and only starts after the user taps 啟用小艾.
+  // It does not change existing button handlers. 30 seconds after the last wake activity it stops automatically.
+  var rt7WakeEnabled=false;
+  var rt7WakeRec=null;
+  var rt7WakeLastMs=0;
+  var rt7WakeStopTimer=null;
+  function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); if(b) b.textContent=txt; }
+  function rt7WakeStop_(msg){
+    rt7WakeEnabled=false;
+    try{ if(rt7WakeRec){ rt7WakeRec.onresult=null; rt7WakeRec.onerror=null; rt7WakeRec.onend=null; rt7WakeRec.stop(); } }catch(e){}
+    rt7WakeRec=null;
+    if(rt7WakeStopTimer){ clearInterval(rt7WakeStopTimer); rt7WakeStopTimer=null; }
+    rt7WakeButtonText_('啟用小艾');
+    if(msg) setAnswer(msg);
+    setDebug('xiaoai wake stopped');
+  }
+  function rt7WakeArmTimer_(){
+    if(rt7WakeStopTimer) clearInterval(rt7WakeStopTimer);
+    rt7WakeStopTimer=setInterval(function(){
+      if(rt7WakeEnabled && Date.now()-rt7WakeLastMs>30000){ rt7WakeStop_('小艾語音喚醒已自動關閉（30秒未說話）'); }
+    },1000);
+  }
+  function rt7WakeHandleText_(text){
+    text=String(text||'').trim();
+    if(!text) return;
+    setDebug('xiaoai heard '+text);
+    var normalized=text.replace(/\s+/g,'');
+    var idx=normalized.indexOf('小艾');
+    if(idx<0) idx=normalized.indexOf('小愛');
+    if(idx<0) return;
+    rt7WakeLastMs=Date.now();
+    var cmd='';
+    try{
+      var raw=String(text||'');
+      var m=raw.match(/小[艾愛][，,。！!？?\s]*(.*)$/);
+      if(m) cmd=(m[1]||'').trim();
+    }catch(e){ cmd=''; }
+    if(cmd){
+      setAnswer('小艾已喚醒：'+cmd);
+      routeVoiceQuestion(cmd);
+    }else{
+      setAnswer('小艾已喚醒，請說問題');
+      setTimeout(function(){ if(rt7WakeEnabled) startVoiceAsk(); },300);
+    }
+  }
+  function rt7WakeStart_(){
+    if(rt7WakeEnabled) return;
+    var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){ setAnswer('此瀏覽器不支援語音喚醒，請使用 AI語音助理按鍵。'); return; }
+    try{
+      rt7WakeEnabled=true;
+      rt7WakeLastMs=Date.now();
+      rt7WakeButtonText_('關閉小艾');
+      setAnswer('小艾語音喚醒已啟用，30秒未說話會自動關閉。請說：小艾 開門 / 小艾 播放五月天溫柔');
+      rt7WakeArmTimer_();
+      var rec=new SR();
+      rt7WakeRec=rec;
+      rec.lang='zh-TW';
+      rec.continuous=true;
+      rec.interimResults=false;
+      rec.maxAlternatives=1;
+      rec.onresult=function(ev){
+        for(var i=ev.resultIndex||0;i<ev.results.length;i++){
+          if(ev.results[i] && ev.results[i][0]) rt7WakeHandleText_(ev.results[i][0].transcript||'');
+        }
+      };
+      rec.onerror=function(ev){ setDebug('xiaoai wake error '+(ev&&ev.error||'')); };
+      rec.onend=function(){
+        if(rt7WakeEnabled){
+          setTimeout(function(){
+            try{ if(rt7WakeEnabled && rt7WakeRec) rt7WakeRec.start(); }catch(e){ setDebug('xiaoai restart failed '+(e.message||e)); }
+          },500);
+        }
+      };
+      try{ rec.start(); }catch(e){ rt7WakeStop_('小艾語音喚醒啟動失敗：'+(e.message||e)); }
+    }catch(e){ rt7WakeStop_('小艾語音喚醒啟動失敗：'+(e.message||e)); }
+  }
+  function rt7WakeToggle_(){ if(rt7WakeEnabled) rt7WakeStop_('小艾語音喚醒已關閉'); else rt7WakeStart_(); }
+  bind('btnWakeXiaoAi', rt7WakeToggle_);
 
   // V5.0K: 雙向 PTT WebSocket 對講。
   // 按住中央「對講」：手機 Mic -> ESP32 Speaker；放開：ESP32 Mic -> 手機 Speaker；按下方「◼ 對講」才結束。
