@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L5_TTS_FULL_PLAY_NO_CUTOFF_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6K1_FACE_DB_SQLITE_EXPORT';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1613,18 +1613,6 @@ app.post('/api/rt7/face/delete', (req,res) => {
   broadcast('faces_changed', { action:'delete', id, count:after.length });
   res.json({ ok:true, version:SERVER_VERSION, deleted:before.length-after.length, count:after.length, event:ev });
 });
-
-app.post('/api/rt7/face/delete_person', (req,res) => {
-  const name = safeString(req.body && req.body.name || req.query.name).trim();
-  if (!name) return res.status(200).json({ ok:false, version:SERVER_VERSION, error:'NAME_REQUIRED' });
-  const before = rt7ReadFaces_();
-  const after = before.filter(f => safeString(f.name).trim() !== name);
-  rt7SaveFaces_(after);
-  const deleted = before.length - after.length;
-  const ev = appendEvent({ type:'face_delete_person', name, deleted, message:'deleted all face photos for '+name });
-  broadcast('faces_changed', { action:'delete_person', name, deleted, count:after.length });
-  res.json({ ok:true, version:SERVER_VERSION, name, deleted, count:after.length, event:ev });
-});
 app.post('/api/rt7/face/rename', (req,res) => {
   const oldName = safeString(req.body && req.body.old_name || req.body && req.body.oldName || req.query.old_name).trim();
   const newName = safeString(req.body && req.body.new_name || req.body && req.body.newName || req.query.new_name).trim();
@@ -1688,24 +1676,22 @@ app.post('/api/rt7/face/restore_json', (req,res) => {
 });
 
 app.get('/rt7_face_db_manager', (req,res) => res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 Face DB Manager</title><style>
-body{margin:0;background:#f3f7fb;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#062b31;color:white;padding:18px 14px;text-align:center;font-weight:900}.top a{float:left;color:white;text-decoration:none;background:#41506a;border-radius:10px;padding:9px 12px}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:white;border:1px solid #d5e0ea;border-radius:16px;padding:14px;margin:12px 0;box-shadow:0 4px 18px #0001}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:900;font-size:16px;color:white;background:#148bd5;text-decoration:none;display:inline-block}button.green,.btn.green{background:#11aa58}button.red{background:#d92d2d}button.gray,.btn.gray{background:#41506a}input,textarea{border:1px solid #cad6e1;border-radius:10px;padding:10px;font-size:16px}textarea{width:100%;min-height:150px;box-sizing:border-box}.stats{font-weight:900;color:#6b2b20}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.face{border:1px solid #d5e0ea;border-radius:12px;padding:8px;background:#fbfdff}.face img{width:100%;height:130px;object-fit:cover;border-radius:10px;background:#111;cursor:pointer}.face .row{gap:6px}.face button,.face .btn{font-size:13px;padding:8px 9px;border-radius:9px}.name{font-weight:900;margin-top:6px}.small{font-size:12px;color:#687886;word-break:break-all}.log{background:#071225;color:#dff7ff;padding:10px;border-radius:10px;white-space:pre-wrap;font-size:12px;max-height:180px;overflow:auto}.cap{font-size:13px;color:#667;margin:6px 0}.groupTitle{font-size:20px;font-weight:900;margin:12px 0 6px}.preview{width:220px;max-width:100%;border-radius:12px;background:#111}#camPanel{display:none}video{width:100%;max-height:360px;background:#111;border-radius:12px}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 返回</a><div>RT7 FACE DB MANAGER</div><div style="font-size:13px;font-weight:600">照片預覽 / 本機上傳 / 手機拍照 / 單張刪除 / 刪除此人 / 改名 / SQLite / ZIP</div></div><main class="wrap">
+body{margin:0;background:#f3f7fb;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#062b31;color:white;padding:18px 14px;text-align:center;font-weight:900}.top a{float:left;color:white;text-decoration:none;background:#41506a;border-radius:10px;padding:9px 12px}.wrap{max-width:980px;margin:0 auto;padding:14px}.card{background:white;border:1px solid #d5e0ea;border-radius:16px;padding:14px;margin:12px 0;box-shadow:0 4px 18px #0001}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:900;font-size:16px;color:white;background:#148bd5;text-decoration:none;display:inline-block}button.green,.btn.green{background:#11aa58}button.red{background:#d92d2d}button.gray,.btn.gray{background:#41506a}input,textarea{border:1px solid #cad6e1;border-radius:10px;padding:10px;font-size:16px}textarea{width:100%;min-height:150px;box-sizing:border-box}.stats{font-weight:900;color:#6b2b20}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.face{border:1px solid #d5e0ea;border-radius:12px;padding:8px;background:#fbfdff}.face img{width:100%;height:130px;object-fit:cover;border-radius:10px;background:#111}.name{font-weight:900;margin-top:6px}.small{font-size:12px;color:#687886;word-break:break-all}.log{background:#071225;color:#dff7ff;padding:10px;border-radius:10px;white-space:pre-wrap;font-size:12px;max-height:180px;overflow:auto}.cap{font-size:13px;color:#667;margin:6px 0}.groupTitle{font-size:20px;font-weight:900;margin:12px 0 6px}.preview{width:220px;max-width:100%;border-radius:12px;background:#111}#camPanel{display:none}video{width:100%;max-height:360px;background:#111;border-radius:12px}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 返回</a><div>RT7 FACE DB MANAGER</div><div style="font-size:13px;font-weight:600">查看照片 / 新增 / 刪除 / 改名 / SQLite / ZIP 備份還原</div></div><main class="wrap">
 <section class="card"><div class="row"><a class="btn green" href="/api/rt7/face/backup.zip">下載 ZIP</a><a class="btn gray" href="/api/rt7/face/backup.sqlite">下載 SQLite</a><a class="btn gray" href="/api/rt7/face/backup.json">下載 JSON</a><button class="gray" id="btnReload">重新載入</button><button class="red" id="btnReset">清空全部</button></div><p class="stats" id="stats">loading...</p></section>
-<section class="card"><h2>新增照片</h2><div class="row"><input id="regName" placeholder="姓名，例如 gwansyan" value="gwansyan"><button class="green" id="btnOpenCam">開手機前鏡頭</button><button id="btnCapture">拍照加入</button><button class="gray" id="btnCloseCam">關閉鏡頭</button></div><div id="camPanel"><video id="video" playsinline autoplay muted></video><canvas id="canvas" style="display:none"></canvas></div><hr><h3>從手機/電腦選照片加入</h3><div class="row"><input id="fileName" placeholder="姓名，例如 gwansyan" value="gwansyan"><input id="filePhoto" type="file" accept="image/*"><button class="green" id="btnUploadPhoto">上傳照片加入</button></div><p class="cap">註冊可使用手機前鏡頭或本機照片；辨識仍使用 ESP32-CAM。建議每人 3～5 張不同角度照片。</p></section>
+<section class="card"><h2>手機新增照片</h2><div class="row"><input id="regName" placeholder="姓名，例如 gwansyan" value="gwansyan"><button class="green" id="btnOpenCam">開手機前鏡頭</button><button id="btnCapture">拍照加入</button><button class="gray" id="btnCloseCam">關閉鏡頭</button></div><div id="camPanel"><video id="video" playsinline autoplay muted></video><canvas id="canvas" style="display:none"></canvas></div><p class="cap">註冊使用手機前鏡頭；辨識仍使用 ESP32-CAM。</p></section>
 <section class="card"><h2>修改姓名</h2><div class="row"><input id="oldName" placeholder="原姓名"><input id="newName" placeholder="新姓名"><button id="btnRename">修改姓名</button></div></section>
 <section class="card"><h2>還原 / 上傳備份 JSON</h2><p class="cap">可貼上 face_backup.json 內容；模式選 replace 會取代目前資料，append 會追加。</p><div class="row"><select id="restoreMode"><option value="replace">replace 取代</option><option value="append">append 追加</option></select><button id="btnRestore">還原 JSON</button></div><textarea id="backupText" placeholder="貼上 face_backup.json 內容"></textarea></section>
-<section class="card"><h2>人臉照片管理</h2><p class="cap">可查看照片、下載單張照片、刪除單張照片、刪除此人全部照片。</p><div id="faces"></div></section><section class="card"><h2>狀態</h2><pre class="log" id="log">ready</pre></section></main><script>
+<section class="card"><h2>人臉照片</h2><div id="faces"></div></section><section class="card"><h2>狀態</h2><pre class="log" id="log">ready</pre></section></main><script>
 var stream=null;function $(id){return document.getElementById(id)}function log(x){$('log').textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}async function api(u,o){var r=await fetch(u+(u.indexOf('?')>=0?'&':'?')+'_='+Date.now(),Object.assign({cache:'no-store'},o||{}));var t=await r.text();try{return JSON.parse(t)}catch(e){return{ok:r.ok,status:r.status,raw:t}}}
-async function load(){var j=await api('/api/rt7/faces/full');log(j);var s=j.stats||{};$('stats').textContent='人數：'+(s.persons||0)+'｜照片：'+(s.photos||0)+'｜容量：'+(s.mb||0)+' MB';var faces=j.faces||[];var by={};faces.forEach(function(f){var n=f.name||'未命名';(by[n]=by[n]||[]).push(f)});var html='';Object.keys(by).sort().forEach(function(n){html+='<div class="groupTitle">'+esc(n)+' <span class="small">('+by[n].length+'張)</span> <button class="red" data-delperson="'+esc(n)+'">刪除此人</button></div><div class="grid">';by[n].forEach(function(f){var img=f.image_url+'?_='+Date.now();html+='<div class="face"><img data-view="'+esc(f.image_url)+'" src="'+img+'"><div class="name">'+esc(f.name)+'</div><div class="small">ID：'+esc(f.id)+'</div><div class="small">來源：'+esc(f.source)+'｜'+esc(f.time)+'</div><div class="small">大小：'+(f.bytes||0)+' bytes</div><div class="row"><a class="btn gray" href="'+f.image_url+'" target="_blank">查看</a><a class="btn gray" href="'+f.image_url+'" download="'+esc(f.id)+'.jpg">下載</a><button class="red" data-del="'+esc(f.id)+'">刪除</button></div></div>'});html+='</div>'});$('faces').innerHTML=html||'<p>尚無人臉資料</p>';document.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){del(this.getAttribute('data-del'))}});document.querySelectorAll('[data-delperson]').forEach(function(b){b.onclick=function(){delPerson(this.getAttribute('data-delperson'))}});document.querySelectorAll('[data-view]').forEach(function(img){img.onclick=function(){window.open(this.getAttribute('data-view'),'_blank')}})}
+async function load(){var j=await api('/api/rt7/faces/full');log(j);var s=j.stats||{};$('stats').textContent='人數：'+(s.persons||0)+'｜照片：'+(s.photos||0)+'｜容量：'+(s.mb||0)+' MB';var faces=j.faces||[];var by={};faces.forEach(function(f){var n=f.name||'未命名';(by[n]=by[n]||[]).push(f)});var html='';Object.keys(by).sort().forEach(function(n){html+='<div class="groupTitle">'+esc(n)+' <span class="small">('+by[n].length+'張)</span></div><div class="grid">';by[n].forEach(function(f){html+='<div class="face"><img src="'+f.image_url+'?_='+Date.now()+'"><div class="name">'+esc(f.name)+'</div><div class="small">'+esc(f.id)+'</div><div class="small">'+esc(f.source)+'｜'+esc(f.time)+'</div><button class="red" data-del="'+esc(f.id)+'">刪除</button></div>'});html+='</div>'});$('faces').innerHTML=html||'<p>尚無人臉資料</p>';document.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){del(this.getAttribute('data-del'))}})}
 function esc(s){return String(s||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 async function del(id){if(!confirm('刪除此照片？'))return;var j=await api('/api/rt7/face/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});log(j);load()}
-async function delPerson(name){if(!confirm('刪除 '+name+' 的全部照片？'))return;var j=await api('/api/rt7/face/delete_person',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})});log(j);load()}
 async function rename(){var oldn=$('oldName').value.trim(),newn=$('newName').value.trim();if(!oldn||!newn){alert('請輸入原姓名與新姓名');return}var j=await api('/api/rt7/face/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_name:oldn,new_name:newn})});log(j);load()}
 async function openCam(){try{if(!navigator.mediaDevices){alert('瀏覽器不支援相機');return}stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:720},height:{ideal:960}},audio:false});$('camPanel').style.display='block';$('video').srcObject=stream;try{await $('video').play()}catch(e){}}catch(e){log('相機開啟失敗：'+(e.message||e))}}
 function closeCam(){try{if(stream)stream.getTracks().forEach(function(t){t.stop()})}catch(e){}stream=null;$('camPanel').style.display='none'}
 async function capture(){var v=$('video'),c=$('canvas'),name=$('regName').value.trim()||'未命名';if(!v.videoWidth){alert('鏡頭尚未準備好');return}var scale=Math.min(1,720/v.videoWidth);c.width=Math.round(v.videoWidth*scale);c.height=Math.round(v.videoHeight*scale);c.getContext('2d').drawImage(v,0,0,c.width,c.height);var data=c.toDataURL('image/jpeg',0.86);var j=await api('/api/rt7/face/enroll_mobile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,source:'mobile_face_db_manager',device_id:'#mobile',image:data})});log(j);if(j.ok)load()}
-async function uploadPhoto(){var f=$('filePhoto').files&&$('filePhoto').files[0];var name=$('fileName').value.trim()||$('regName').value.trim()||'未命名';if(!f){alert('請先選擇照片');return}var reader=new FileReader();reader.onload=async function(){var data=String(reader.result||'');var j=await api('/api/rt7/face/enroll_mobile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,source:'file_upload_face_db_manager',device_id:'#upload',image:data})});log(j);if(j.ok)load()};reader.readAsDataURL(f)}
 async function restoreJson(){var txt=$('backupText').value.trim();if(!txt){alert('請貼上 JSON');return}var obj;try{obj=JSON.parse(txt)}catch(e){alert('JSON 格式錯誤');return}if(!confirm('確定還原？'))return;var j=await api('/api/rt7/face/restore_json?mode='+encodeURIComponent($('restoreMode').value),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)});log(j);load()}
-$('btnReload').onclick=load;$('btnRename').onclick=rename;$('btnOpenCam').onclick=openCam;$('btnCloseCam').onclick=closeCam;$('btnCapture').onclick=capture;$('btnUploadPhoto').onclick=uploadPhoto;$('btnRestore').onclick=restoreJson;$('btnReset').onclick=async function(){if(!confirm('確定清空全部人臉？'))return;var j=await api('/api/rt7/faces/reset');log(j);load()};load();
+$('btnReload').onclick=load;$('btnRename').onclick=rename;$('btnOpenCam').onclick=openCam;$('btnCloseCam').onclick=closeCam;$('btnCapture').onclick=capture;$('btnRestore').onclick=restoreJson;$('btnReset').onclick=async function(){if(!confirm('確定清空全部人臉？'))return;var j=await api('/api/rt7/faces/reset');log(j);load()};load();
 </script></body></html>`));
 
 // ---------- Original RT7 mobile-style cloud doorbell UI ----------
@@ -1721,7 +1707,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6K2 Face DB Photo Manager</title>
+<title>RT7 Cloud Original UI V5.6J1 Mobile Face Register</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1739,7 +1725,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnWakeXiaoAi" class="vbtn vgreen" type="button">啟用小艾</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
+<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
@@ -1921,54 +1907,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
-  function speakAnswer(txt){
-    return new Promise(function(resolve){
-      txt=String(txt||'');
-      if(!window.speechSynthesis || !txt.length){ resolve(); return; }
-      try{
-        // V5.6L5: do not cut the last sentence.  Android Chrome zh-TW TTS can be
-        // slower than the old txt.length*180ms watchdog, especially after wake-word
-        // continuous mode pauses/resumes recognition.  Use a much longer watchdog
-        // and only cancel on real error, not during normal long answers.
-        try{ speechSynthesis.cancel(); }catch(_e){}
-        var u=new SpeechSynthesisUtterance(txt);
-        u.lang='zh-TW';
-        u.rate=0.96;
-        u.pitch=1.0;
-        u.volume=1.0;
-        var done=false;
-        var lastProgress=Date.now();
-        var textLen=txt.replace(/\s+/g,'').length || txt.length || 1;
-        var timeoutMs=Math.min(120000, Math.max(15000, textLen*520));
-        var progressTimer=null;
-        function finish(){
-          if(done) return;
-          done=true;
-          try{ if(progressTimer) clearInterval(progressTimer); }catch(_e){}
-          resolve();
-        }
-        u.onstart=function(){ lastProgress=Date.now(); };
-        u.onboundary=function(){ lastProgress=Date.now(); };
-        u.onmark=function(){ lastProgress=Date.now(); };
-        u.onend=finish;
-        u.onerror=function(ev){
-          // If the browser reports interrupted/canceled because of a new speak(), end safely.
-          // Do not forcibly restart here; routeVoiceQuestion will finish and wake-word will resume.
-          finish();
-        };
-        progressTimer=setInterval(function(){
-          if(done) return;
-          var elapsed=Date.now()-(lastProgress||Date.now());
-          // Safety only: if speechSynthesis hangs for a long time, resolve without cutting early.
-          if(elapsed>timeoutMs){
-            try{ speechSynthesis.cancel(); }catch(_e){}
-            finish();
-          }
-        },1000);
-        speechSynthesis.speak(u);
-      }catch(e){ resolve(); }
-    });
-  }
+  function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
   function setAiUi(on, msg){
     // V5.4L: this top button controls FACE_GATE auto recognition only, not AI voice.
     ai=!!on; try{localStorage.setItem('RT7_FACE_MODE', ai?'1':'0');}catch(e){}
@@ -2021,7 +1960,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var r=await j('/api/rt7/phase9j/voice_vision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,mode:'auto'})});
       var ans=r.answer||r.error||'AI 無回應';
       setAnswer(ans);
-      await speakAnswer(ans);
+      speakAnswer(ans);
       setDebug('voice_vision ok');
     }catch(e){
       setAnswer('AI語音助理失敗：'+e.message);
@@ -2032,143 +1971,6 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   function startVoiceAsk(){ setAnswer('請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
-
-  // V5.6L3: Safe XiaoAi wake word + continuous Q/A session.
-  // Tap 啟用小艾 once. Say 小艾 to enter AI session; then ask follow-up questions without repeating 小艾.
-  // 30 seconds without recognized speech stops the AI session and microphone.
-  var rt7WakeEnabled=false;
-  var rt7WakeRec=null;
-  var rt7WakeLastMs=0;
-  var rt7WakeStopTimer=null;
-  var rt7WakeSession=false;
-  var rt7WakeBusy=false;
-  var rt7WakeLastText='';
-  var rt7WakeLastTextMs=0;
-  var rt7WakePauseForAi=false;
-  var rt7WakeResumeTimer=null;
-  function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); if(b) b.textContent=txt; }
-  function rt7WakeStop_(msg){
-    rt7WakeEnabled=false;
-    rt7WakeSession=false;
-    rt7WakeBusy=false;
-    try{ if(rt7WakeRec){ rt7WakeRec.onresult=null; rt7WakeRec.onerror=null; rt7WakeRec.onend=null; rt7WakeRec.stop(); } }catch(e){}
-    rt7WakeRec=null;
-    if(rt7WakeStopTimer){ clearInterval(rt7WakeStopTimer); rt7WakeStopTimer=null; }
-    if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); rt7WakeResumeTimer=null; }
-    rt7WakePauseForAi=false;
-    rt7WakeButtonText_('啟用小艾');
-    if(msg) setAnswer(msg);
-    setDebug('xiaoai wake stopped');
-  }
-  function rt7WakePauseRecForAi_(){
-    rt7WakePauseForAi=true;
-    if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); rt7WakeResumeTimer=null; }
-    try{ if(rt7WakeRec) rt7WakeRec.stop(); }catch(e){}
-    setDebug('xiaoai mic paused while AI speaking');
-  }
-  function rt7WakeResumeRecAfterAi_(){
-    if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); }
-    rt7WakeResumeTimer=setTimeout(function(){
-      if(!rt7WakeEnabled || !rt7WakeSession) return;
-      rt7WakePauseForAi=false;
-      rt7WakeLastMs=Date.now();
-      try{ if(rt7WakeRec) rt7WakeRec.start(); setDebug('xiaoai ready for next question'); }catch(e){ setDebug('xiaoai resume failed '+(e.message||e)); }
-    },1500);
-  }
-  function rt7WakeArmTimer_(){
-    if(rt7WakeStopTimer) clearInterval(rt7WakeStopTimer);
-    rt7WakeStopTimer=setInterval(function(){
-      if(rt7WakeEnabled && !rt7WakeBusy && !rt7WakePauseForAi && Date.now()-rt7WakeLastMs>30000){ rt7WakeStop_('小艾語音喚醒已自動關閉（30秒未說話）'); }
-    },1000);
-  }
-  async function rt7WakeAsk_(cmd){
-    cmd=String(cmd||'').trim();
-    if(!cmd) return;
-    rt7WakeLastMs=Date.now();
-    rt7WakeBusy=true;
-    rt7WakePauseRecForAi_();
-    try{
-      setAnswer('小艾：'+cmd);
-      await routeVoiceQuestion(cmd);
-    }catch(e){
-      setAnswer('小艾處理失敗：'+(e.message||e));
-    }finally{
-      rt7WakeBusy=false;
-      if(rt7WakeEnabled && rt7WakeSession){
-        rt7WakeLastMs=Date.now();
-        rt7WakeResumeRecAfterAi_();
-      }
-    }
-  }
-  function rt7WakeHandleText_(text){
-    text=String(text||'').trim();
-    if(!text) return;
-    if(rt7WakeBusy || rt7WakePauseForAi){ setDebug('xiaoai ignored while AI speaking: '+text); return; }
-    var now=Date.now();
-    // Prevent duplicate transcripts from Chrome SpeechRecognition.
-    if(text===rt7WakeLastText && now-rt7WakeLastTextMs<1500) return;
-    rt7WakeLastText=text;
-    rt7WakeLastTextMs=now;
-    rt7WakeLastMs=now;
-    setDebug('xiaoai heard '+text);
-    var normalized=text.replace(/\s+/g,'');
-    var hasWake=(normalized.indexOf('小艾')>=0 || normalized.indexOf('小愛')>=0);
-    var cmd='';
-    if(hasWake){
-      rt7WakeSession=true;
-      try{
-        var m=String(text||'').match(/小[艾愛][，,。！!？?\s]*(.*)$/);
-        if(m) cmd=(m[1]||'').trim();
-      }catch(e){ cmd=''; }
-      if(!cmd){
-        setAnswer('小艾已啟動，請直接說問題。30秒未說話會自動關閉。');
-        return;
-      }
-    }else if(rt7WakeSession){
-      // Continuous Q/A: after wake word, follow-up speech is treated as AI question.
-      cmd=text;
-    }else{
-      return;
-    }
-    if(rt7WakeBusy){ setDebug('xiaoai busy, ignored '+cmd); return; }
-    rt7WakeAsk_(cmd);
-  }
-  function rt7WakeStart_(){
-    if(rt7WakeEnabled) return;
-    var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){ setAnswer('此瀏覽器不支援語音喚醒，請使用 AI語音助理按鍵。'); return; }
-    try{
-      rt7WakeEnabled=true;
-      rt7WakeSession=false;
-      rt7WakeBusy=false;
-      rt7WakeLastMs=Date.now();
-      rt7WakeButtonText_('關閉小艾');
-      setAnswer('小艾語音喚醒已啟用。先說「小艾」，之後可連續詢問；30秒未說話會自動關閉。');
-      rt7WakeArmTimer_();
-      var rec=new SR();
-      rt7WakeRec=rec;
-      rec.lang='zh-TW';
-      rec.continuous=true;
-      rec.interimResults=false;
-      rec.maxAlternatives=1;
-      rec.onresult=function(ev){
-        for(var i=ev.resultIndex||0;i<ev.results.length;i++){
-          if(ev.results[i] && ev.results[i][0]) rt7WakeHandleText_(ev.results[i][0].transcript||'');
-        }
-      };
-      rec.onerror=function(ev){ setDebug('xiaoai wake error '+(ev&&ev.error||'')); };
-      rec.onend=function(){
-        if(rt7WakeEnabled && !rt7WakePauseForAi){
-          setTimeout(function(){
-            try{ if(rt7WakeEnabled && !rt7WakePauseForAi && rt7WakeRec) rt7WakeRec.start(); }catch(e){ setDebug('xiaoai restart failed '+(e.message||e)); }
-          },400);
-        }
-      };
-      try{ rec.start(); }catch(e){ rt7WakeStop_('小艾語音喚醒啟動失敗：'+(e.message||e)); }
-    }catch(e){ rt7WakeStop_('小艾語音喚醒啟動失敗：'+(e.message||e)); }
-  }
-  function rt7WakeToggle_(){ if(rt7WakeEnabled) rt7WakeStop_('小艾語音喚醒已關閉'); else rt7WakeStart_(); }
-  bind('btnWakeXiaoAi', rt7WakeToggle_);
 
   // V5.0K: 雙向 PTT WebSocket 對講。
   // 按住中央「對講」：手機 Mic -> ESP32 Speaker；放開：ESP32 Mic -> 手機 Speaker；按下方「◼ 對講」才結束。
