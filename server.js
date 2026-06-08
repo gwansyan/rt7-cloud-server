@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L_WAKE_WORD_XIAOAI';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L1_WAKE_WORD_BUTTON_SAFE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1721,7 +1721,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6L Wake Word XiaoAi</title>
+<title>RT7 Cloud Original UI V5.6L1 Wake Word Safe</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1732,7 +1732,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
-.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.wakeBox{padding:8px 20px 12px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.wakeStatus{font-size:13px;font-weight:900;color:#5b1f14;white-space:pre-line}.wakeBtn{border:0;border-radius:12px;background:#2563eb;color:white;font-size:14px;font-weight:900;padding:10px 12px}.wakeBtn.on{background:#16a34a}.small{font-size:12px;color:#64748b}.debug{display:none!important}
+.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.wakeBox{padding:8px 20px 12px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:#fff}.wakeStatus{font-size:13px;font-weight:900;color:#5b1f14;white-space:pre-line}.wakeBtn{border:0;border-radius:12px;background:#2563eb;color:white;font-size:14px;font-weight:900;padding:10px 12px}.wakeBtn.on{background:#16a34a}.small{font-size:12px;color:#64748b}.debug{display:none!important}
 .selfiePanel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:9999;padding:14px;color:#fff;overflow:auto}.selfieCard{max-width:500px;margin:0 auto;background:#0b252b;border-radius:16px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.45)}.selfieTitle{font-size:20px;font-weight:900;margin:4px 0 10px;text-align:center}.selfieVideo{width:100%;background:#000;border-radius:12px;border:2px solid #334155;aspect-ratio:3/4;object-fit:cover}.selfieBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.selfieBtns button{border:0;border-radius:10px;height:46px;font-size:17px;font-weight:900}.selfieShot{background:#22c55e;color:#fff}.selfieCancel{background:#ef4444;color:#fff}.selfieHint{font-size:13px;color:#dbeafe;line-height:1.45;margin-top:8px;text-align:center}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
@@ -1988,110 +1988,77 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
 
 
-  // V5.6L: 手機網頁語音喚醒詞「小艾」。
-  // 啟用後會常駐聽麥克風；聽到「小艾」會開啟 AI 語音助理模式，30 秒沒有新語音就自動關閉 AI 模式，回到等待喚醒。
+  // V5.6L1: 安全版語音喚醒詞「小艾」。
+  // 不自動啟動、不使用頁面載入自動麥克風，避免破壞主頁按鍵。
+  // 使用短週期 SpeechRecognition：偵測「小艾」後進入 AI 模式，30 秒無語音自動關閉。
   var rt7WakeEnabled=false;
   var rt7WakeActive=false;
   var rt7WakeRec=null;
+  var rt7WakeTimer=null;
   var rt7WakeRestartTimer=null;
-  var rt7WakeCloseTimer=null;
-  var rt7WakeLastResultMs=0;
-  function rt7WakeSetStatus(t){ var el=document.getElementById('wakeStatus'); if(el) el.textContent=t; }
-  function rt7WakeSetButton(){ var b=document.getElementById('btnWakeWord'); if(!b) return; b.textContent=rt7WakeEnabled?'關閉小艾喚醒':'啟用小艾喚醒'; if(rt7WakeEnabled) b.classList.add('on'); else b.classList.remove('on'); }
-  function rt7WakeArmCloseTimer(){
-    try{ if(rt7WakeCloseTimer) clearTimeout(rt7WakeCloseTimer); }catch(e){}
+  var rt7WakeStarting=false;
+  function rt7WakeStatus(t){ var el=document.getElementById('wakeStatus'); if(el) el.textContent=t; }
+  function rt7WakeButton(){ var b=document.getElementById('btnWakeWord'); if(!b) return; b.textContent=rt7WakeEnabled?'關閉小艾喚醒':'啟用小艾喚醒'; if(rt7WakeEnabled)b.classList.add('on'); else b.classList.remove('on'); }
+  function rt7WakeNorm(t){ return String(t||'').replace(/\s+/g,'').replace(/[，,。.!！?？]/g,''); }
+  function rt7WakeArmIdle(){
+    try{ if(rt7WakeTimer) clearTimeout(rt7WakeTimer); }catch(e){}
     if(!rt7WakeActive) return;
-    rt7WakeCloseTimer=setTimeout(function(){
+    rt7WakeTimer=setTimeout(function(){
       rt7WakeActive=false;
-      rt7WakeSetStatus('小艾喚醒：等待「小艾」\nAI語音助理已自動關閉');
-      setAnswer('AI語音助理已關閉，請再說「小艾」喚醒。');
       try{ var a=document.getElementById('btnAiVoice'); if(a) a.classList.remove('aiActive'); }catch(e){}
-    }, 30000);
+      rt7WakeStatus('小艾喚醒：等待「小艾」\nAI語音助理已自動關閉');
+      setAnswer('AI語音助理已關閉，請再說「小艾」喚醒。');
+    },30000);
   }
-  function rt7WakeNormalize_(txt){ return String(txt||'').replace(/\s+/g,'').replace(/[，,。.!！?？]/g,''); }
-  async function rt7WakeHandleText_(text){
-    text=(text||'').trim();
-    if(!text) return;
-    var compact=rt7WakeNormalize_(text);
-    setDebug('wake heard: '+text);
+  async function rt7WakeHandle(text){
+    text=(text||'').trim(); if(!text) return;
+    setDebug('wake text '+text);
+    var norm=rt7WakeNorm(text);
     if(!rt7WakeActive){
-      var idx=compact.indexOf('小艾');
-      if(idx<0) return;
+      if(norm.indexOf('小艾')<0) return;
       rt7WakeActive=true;
       try{ var a=document.getElementById('btnAiVoice'); if(a) a.classList.add('aiActive'); }catch(e){}
       var cmd=text.replace(/小\s*艾[，,。.!！?？\s]*/,'').trim();
-      rt7WakeSetStatus('小艾喚醒：AI語音助理已開啟\n30秒內可連續詢問');
-      setAnswer(cmd ? ('小艾已啟動：'+cmd) : '小艾已啟動，請直接說指令。');
-      rt7WakeArmCloseTimer();
+      rt7WakeStatus('小艾喚醒：AI語音助理已開啟\n30秒內可連續詢問');
+      setAnswer(cmd ? ('小艾已啟動：'+cmd) : '小艾已啟動，請繼續說指令。');
+      rt7WakeArmIdle();
       if(cmd) await routeVoiceQuestion(cmd);
       return;
     }
-    // Active session: every recognized sentence is treated as an AI command.
-    rt7WakeSetStatus('小艾喚醒：AI語音助理啟動中\n30秒未說話會自動關閉');
-    rt7WakeArmCloseTimer();
+    rt7WakeArmIdle();
+    rt7WakeStatus('小艾喚醒：AI語音助理啟動中\n30秒未說話會自動關閉');
     await routeVoiceQuestion(text.replace(/小\s*艾[，,。.!！?？\s]*/,'').trim() || text);
   }
-  function rt7WakeStartRec_(){
-    if(!rt7WakeEnabled) return;
+  function rt7WakeStart(){
+    if(!rt7WakeEnabled || rt7WakeStarting) return;
     var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){ rt7WakeSetStatus('小艾喚醒：此瀏覽器不支援 SpeechRecognition'); return; }
-    try{ if(rt7WakeRec){ try{rt7WakeRec.stop();}catch(e){} rt7WakeRec=null; } }catch(e){}
+    if(!SR){ rt7WakeStatus('小艾喚醒：此手機瀏覽器不支援 SpeechRecognition'); return; }
+    rt7WakeStarting=true;
+    try{ if(rt7WakeRec){ try{rt7WakeRec.abort();}catch(e){} rt7WakeRec=null; } }catch(e){}
     try{
-      var rec=new SR();
-      rt7WakeRec=rec;
-      rec.lang='zh-TW'; rec.continuous=true; rec.interimResults=false; rec.maxAlternatives=1;
-      rec.onstart=function(){ rt7WakeSetStatus(rt7WakeActive?'小艾喚醒：AI語音助理啟動中\n30秒未說話會自動關閉':'小艾喚醒：等待「小艾」'); };
-      rec.onresult=function(ev){
-        for(var i=ev.resultIndex;i<ev.results.length;i++){
-          if(ev.results[i] && ev.results[i].isFinal){
-            var text=''; try{text=ev.results[i][0].transcript||'';}catch(e){}
-            rt7WakeLastResultMs=Date.now();
-            rt7WakeHandleText_(text);
-          }
-        }
-      };
-      rec.onerror=function(ev){
-        var er=(ev&&ev.error)||'unknown';
-        rt7WakeSetStatus('小艾喚醒：辨識暫停 '+er+'\n若被瀏覽器中止，請再按啟用。');
-        setDebug('wake error '+er);
-      };
-      rec.onend=function(){
-        rt7WakeRec=null;
-        if(rt7WakeEnabled){
-          try{ if(rt7WakeRestartTimer) clearTimeout(rt7WakeRestartTimer); }catch(e){}
-          rt7WakeRestartTimer=setTimeout(rt7WakeStartRec_, 600);
-        }
-      };
+      var rec=new SR(); rt7WakeRec=rec;
+      rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1;
+      rec.onstart=function(){ rt7WakeStarting=false; rt7WakeStatus(rt7WakeActive?'小艾喚醒：AI語音助理啟動中\n30秒未說話會自動關閉':'小艾喚醒：等待「小艾」'); };
+      rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} rt7WakeHandle(text); };
+      rec.onerror=function(ev){ rt7WakeStarting=false; var er=(ev&&ev.error)||'unknown'; rt7WakeStatus('小艾喚醒：辨識暫停 '+er+'\n若停止，請重新啟用。'); setDebug('wake error '+er); };
+      rec.onend=function(){ rt7WakeStarting=false; rt7WakeRec=null; if(rt7WakeEnabled){ try{ if(rt7WakeRestartTimer) clearTimeout(rt7WakeRestartTimer); }catch(e){} rt7WakeRestartTimer=setTimeout(rt7WakeStart,700); } };
       rec.start();
-    }catch(e){ rt7WakeSetStatus('小艾喚醒啟動失敗：'+(e.message||e)); }
+    }catch(e){ rt7WakeStarting=false; rt7WakeStatus('小艾喚醒啟動失敗：'+(e.message||e)); }
   }
-  function rt7WakeStop_(){
-    rt7WakeEnabled=false; rt7WakeActive=false;
-    try{localStorage.setItem('RT7_WAKE_XIAOAI','0');}catch(e){}
-    try{ if(rt7WakeCloseTimer) clearTimeout(rt7WakeCloseTimer); }catch(e){}
+  function rt7WakeStop(){
+    rt7WakeEnabled=false; rt7WakeActive=false; rt7WakeStarting=false;
+    try{ if(rt7WakeTimer) clearTimeout(rt7WakeTimer); }catch(e){}
     try{ if(rt7WakeRestartTimer) clearTimeout(rt7WakeRestartTimer); }catch(e){}
-    try{ if(rt7WakeRec) rt7WakeRec.stop(); }catch(e){}
-    rt7WakeRec=null;
-    rt7WakeSetButton();
-    rt7WakeSetStatus('小艾喚醒：關閉');
+    try{ if(rt7WakeRec) rt7WakeRec.abort(); }catch(e){}
+    rt7WakeRec=null; rt7WakeButton(); rt7WakeStatus('小艾喚醒：關閉');
     try{ var a=document.getElementById('btnAiVoice'); if(a) a.classList.remove('aiActive'); }catch(e){}
   }
-  function rt7WakeToggle_(){
-    if(rt7WakeEnabled){ rt7WakeStop_(); return; }
-    rt7WakeEnabled=true; rt7WakeActive=false;
-    try{localStorage.setItem('RT7_WAKE_XIAOAI','1');}catch(e){}
-    rt7WakeSetButton();
-    rt7WakeSetStatus('小艾喚醒：啟動中，請允許麥克風權限');
-    rt7WakeStartRec_();
+  function rt7WakeToggle(){
+    if(rt7WakeEnabled){ rt7WakeStop(); return; }
+    rt7WakeEnabled=true; rt7WakeActive=false; rt7WakeButton(); rt7WakeStatus('小艾喚醒：啟動中，請允許麥克風權限'); rt7WakeStart();
   }
-  bind('btnWakeWord', rt7WakeToggle_);
-  try{
-    if(localStorage.getItem('RT7_WAKE_XIAOAI')==='1'){
-      // Browser requires user gesture on some phones, so show enabled state but do not force-start until the user taps once if blocked.
-      rt7WakeEnabled=true; rt7WakeSetButton(); rt7WakeSetStatus('小艾喚醒：已記住開啟\n若未聽見，請按一次「關閉/啟用」重新授權');
-      setTimeout(rt7WakeStartRec_, 1200);
-    } else { rt7WakeSetButton(); }
-  }catch(e){ rt7WakeSetButton(); }
+  bind('btnWakeWord', rt7WakeToggle);
+  rt7WakeButton();
 
   // V5.0K: 雙向 PTT WebSocket 對講。
   // 按住中央「對講」：手機 Mic -> ESP32 Speaker；放開：ESP32 Mic -> 手機 Speaker；按下方「◼ 對講」才結束。
