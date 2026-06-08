@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L3_WAKE_WORD_CONTINUOUS_30S_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L4_WAKE_WORD_NO_ECHO_LOOP_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1921,7 +1921,24 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     }
   }
   bind('btnOpenDoor', rt7OpenDoorFastMain_);
-  function speakAnswer(txt){ if(window.speechSynthesis && (txt||'').length){ try{ speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(txt); u.lang='zh-TW'; speechSynthesis.speak(u); }catch(e){} } }
+  function speakAnswer(txt){
+    return new Promise(function(resolve){
+      txt=String(txt||'');
+      if(!window.speechSynthesis || !txt.length){ resolve(); return; }
+      try{
+        speechSynthesis.cancel();
+        var u=new SpeechSynthesisUtterance(txt);
+        u.lang='zh-TW';
+        var done=false;
+        var timeoutMs=Math.min(30000, Math.max(2500, txt.length*180));
+        var timer=setTimeout(function(){ if(done) return; done=true; try{speechSynthesis.cancel();}catch(e){} resolve(); }, timeoutMs);
+        function finish(){ if(done) return; done=true; clearTimeout(timer); resolve(); }
+        u.onend=finish;
+        u.onerror=finish;
+        speechSynthesis.speak(u);
+      }catch(e){ resolve(); }
+    });
+  }
   function setAiUi(on, msg){
     // V5.4L: this top button controls FACE_GATE auto recognition only, not AI voice.
     ai=!!on; try{localStorage.setItem('RT7_FACE_MODE', ai?'1':'0');}catch(e){}
@@ -1974,7 +1991,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var r=await j('/api/rt7/phase9j/voice_vision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,mode:'auto'})});
       var ans=r.answer||r.error||'AI 無回應';
       setAnswer(ans);
-      speakAnswer(ans);
+      await speakAnswer(ans);
       setDebug('voice_vision ok');
     }catch(e){
       setAnswer('AI語音助理失敗：'+e.message);
@@ -1997,6 +2014,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var rt7WakeBusy=false;
   var rt7WakeLastText='';
   var rt7WakeLastTextMs=0;
+  var rt7WakePauseForAi=false;
+  var rt7WakeResumeTimer=null;
   function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); if(b) b.textContent=txt; }
   function rt7WakeStop_(msg){
     rt7WakeEnabled=false;
@@ -2005,14 +2024,31 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     try{ if(rt7WakeRec){ rt7WakeRec.onresult=null; rt7WakeRec.onerror=null; rt7WakeRec.onend=null; rt7WakeRec.stop(); } }catch(e){}
     rt7WakeRec=null;
     if(rt7WakeStopTimer){ clearInterval(rt7WakeStopTimer); rt7WakeStopTimer=null; }
+    if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); rt7WakeResumeTimer=null; }
+    rt7WakePauseForAi=false;
     rt7WakeButtonText_('啟用小艾');
     if(msg) setAnswer(msg);
     setDebug('xiaoai wake stopped');
   }
+  function rt7WakePauseRecForAi_(){
+    rt7WakePauseForAi=true;
+    if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); rt7WakeResumeTimer=null; }
+    try{ if(rt7WakeRec) rt7WakeRec.stop(); }catch(e){}
+    setDebug('xiaoai mic paused while AI speaking');
+  }
+  function rt7WakeResumeRecAfterAi_(){
+    if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); }
+    rt7WakeResumeTimer=setTimeout(function(){
+      if(!rt7WakeEnabled || !rt7WakeSession) return;
+      rt7WakePauseForAi=false;
+      rt7WakeLastMs=Date.now();
+      try{ if(rt7WakeRec) rt7WakeRec.start(); setDebug('xiaoai ready for next question'); }catch(e){ setDebug('xiaoai resume failed '+(e.message||e)); }
+    },900);
+  }
   function rt7WakeArmTimer_(){
     if(rt7WakeStopTimer) clearInterval(rt7WakeStopTimer);
     rt7WakeStopTimer=setInterval(function(){
-      if(rt7WakeEnabled && Date.now()-rt7WakeLastMs>30000){ rt7WakeStop_('小艾語音喚醒已自動關閉（30秒未說話）'); }
+      if(rt7WakeEnabled && !rt7WakeBusy && !rt7WakePauseForAi && Date.now()-rt7WakeLastMs>30000){ rt7WakeStop_('小艾語音喚醒已自動關閉（30秒未說話）'); }
     },1000);
   }
   async function rt7WakeAsk_(cmd){
@@ -2020,6 +2056,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(!cmd) return;
     rt7WakeLastMs=Date.now();
     rt7WakeBusy=true;
+    rt7WakePauseRecForAi_();
     try{
       setAnswer('小艾：'+cmd);
       await routeVoiceQuestion(cmd);
@@ -2029,13 +2066,14 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7WakeBusy=false;
       if(rt7WakeEnabled && rt7WakeSession){
         rt7WakeLastMs=Date.now();
-        setDebug('xiaoai ready for next question');
+        rt7WakeResumeRecAfterAi_();
       }
     }
   }
   function rt7WakeHandleText_(text){
     text=String(text||'').trim();
     if(!text) return;
+    if(rt7WakeBusy || rt7WakePauseForAi){ setDebug('xiaoai ignored while AI speaking: '+text); return; }
     var now=Date.now();
     // Prevent duplicate transcripts from Chrome SpeechRecognition.
     if(text===rt7WakeLastText && now-rt7WakeLastTextMs<1500) return;
@@ -2090,9 +2128,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       };
       rec.onerror=function(ev){ setDebug('xiaoai wake error '+(ev&&ev.error||'')); };
       rec.onend=function(){
-        if(rt7WakeEnabled){
+        if(rt7WakeEnabled && !rt7WakePauseForAi){
           setTimeout(function(){
-            try{ if(rt7WakeEnabled && rt7WakeRec) rt7WakeRec.start(); }catch(e){ setDebug('xiaoai restart failed '+(e.message||e)); }
+            try{ if(rt7WakeEnabled && !rt7WakePauseForAi && rt7WakeRec) rt7WakeRec.start(); }catch(e){ setDebug('xiaoai restart failed '+(e.message||e)); }
           },400);
         }
       };
