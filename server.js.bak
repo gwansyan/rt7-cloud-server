@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L7_XIAOAI_START_BUTTON_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L6_ALWAYS_LISTEN_XIAOAI';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1721,7 +1721,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6L7 XiaoAi Start Button Fix</title>
+<title>RT7 Cloud Original UI V5.6K2 Face DB Photo Manager</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1729,7 +1729,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900}.hamb{font-size:34px}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:34px}
 .deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}
 .video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22)}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
-.videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.wakePanel{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:#fff}.wakeBtn{border:0;border-radius:8px;color:#fff;background:#16a34a;font-weight:900;font-size:14px;height:38px}.wakeHint{font-size:12px;color:#64748b;font-weight:800;display:flex;align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
+.videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
 .actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
@@ -1739,7 +1739,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
 <div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
-<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section><section class="wakePanel"><button id="btnWakeXiaoAi" class="wakeBtn" type="button">啟用小艾待命</button><div class="wakeHint">按一次授權麥克風，之後說「小艾」啟動 AI。</div></section>
+<section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnWakeXiaoAi" class="vbtn vgreen" type="button">小艾待命</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
@@ -2033,9 +2033,9 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function startVoiceAsk(){ setAnswer('請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
 
-  // V5.6L7: explicit XiaoAi start button.
-  // Android Chrome needs a clear user gesture to open microphone; do not auto-start on arbitrary page tap.
-  // Press 啟用小艾待命 once, then say 小艾 to enter AI session; 30s idle returns to wake waiting.
+  // V5.6L6: Always-listen XiaoAi wake word.
+  // After the first user gesture on the page, the browser may allow SpeechRecognition to start.
+  // Say 小艾 to enter AI session; 30s idle returns to waiting for 小艾, not shutting down the listener.
   var rt7WakeEnabled=false;
   var rt7WakeAutoArmed=false;
   var rt7WakeRec=null;
@@ -2059,15 +2059,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(rt7WakeStopTimer){ clearInterval(rt7WakeStopTimer); rt7WakeStopTimer=null; }
     if(rt7WakeResumeTimer){ clearTimeout(rt7WakeResumeTimer); rt7WakeResumeTimer=null; }
     rt7WakePauseForAi=false;
-    rt7WakeButtonText_('啟用小艾待命');
+    rt7WakeButtonText_('小艾待命');
     if(msg) setAnswer(msg);
-    setDebug('xiaoai wake stopped');
+    setDebug('xiaoai always-listen stopped');
   }
   function rt7WakeReturnToWake_(){
     rt7WakeSession=false;
     rt7WakeBusy=false;
     rt7WakeLastMs=Date.now();
-    rt7WakeButtonText_('啟用小艾待命');
+    rt7WakeButtonText_('小艾待命');
     setAnswer('小艾：已回到等待喚醒詞。請說「小艾」再開始詢問。');
     setDebug('xiaoai returned to wake-word waiting');
   }
@@ -2179,21 +2179,19 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7WakeBusy=false;
       rt7WakePauseForAi=false;
       rt7WakeLastMs=Date.now();
-      rt7WakeButtonText_('啟用小艾待命');
+      rt7WakeButtonText_('小艾待命');
       rt7WakeArmTimer_();
       rt7WakeRec=rt7WakeCreateRecognizer_();
       if(!rt7WakeRec){ rt7WakeStop_('此瀏覽器不支援語音喚醒'); return; }
       try{
         rt7WakeRec.start();
-        rt7WakeButtonText_('小艾待命中');
-        setAnswer('小艾待命已啟用。請說「小艾」開始詢問，30秒未說話會回到等待小艾。');
-        setDebug('xiaoai wake started by button');
+        setDebug('xiaoai always-listen started');
       }catch(e){
-        rt7WakeStop_('小艾待命需要麥克風權限；請按「啟用小艾待命」並允許麥克風。');
+        rt7WakeStop_('小艾待命需要麥克風權限；請點一下畫面或按 AI語音助理後再說「小艾」。');
       }
     }catch(e){ rt7WakeStop_('小艾語音喚醒啟動失敗：'+(e.message||e)); }
   }
-  function rt7WakeToggle_(){ if(rt7WakeEnabled) rt7WakeStop_('小艾待命已關閉'); else rt7WakeStart_(); }
+  function rt7WakeToggle_(){ if(rt7WakeEnabled) rt7WakeStop_('小艾語音喚醒已手動關閉'); else rt7WakeStart_(); }
   bind('btnWakeXiaoAi', rt7WakeToggle_);
   function rt7WakeAutoStartOnce_(){
     if(rt7WakeAutoArmed) return;
@@ -2203,7 +2201,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   document.addEventListener('click', rt7WakeAutoStartOnce_, {once:true, passive:true});
   document.addEventListener('touchend', rt7WakeAutoStartOnce_, {once:true, passive:true});
   document.addEventListener('DOMContentLoaded', function(){
-    setTimeout(function(){ rt7WakeButtonText_('啟用小艾待命'); },200);
+    setTimeout(function(){ rt7WakeButtonText_('小艾待命'); },200);
     // Try only if browser previously granted permission; failures are silent to avoid breaking buttons.
     setTimeout(function(){ try{ if(!rt7WakeAutoArmed) rt7WakeStart_(); }catch(e){} },1200);
   });
