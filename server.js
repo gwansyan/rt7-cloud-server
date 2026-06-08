@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L2_WAKE_WORD_XIAOAI_K2_SAFE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L3_WAKE_WORD_CONTINUOUS_30S_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1986,15 +1986,22 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   function startVoiceAsk(){ setAnswer('請開始說話'); var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ var t=prompt('請輸入要問 AI語音助理的內容：','')||''; routeVoiceQuestion(t); return; } try{ var rec=new SR(); rec.lang='zh-TW'; rec.continuous=false; rec.interimResults=false; rec.maxAlternatives=1; setAnswer('請開始說話'); setDebug('speech recognition start'); rec.onresult=function(ev){ var text=''; try{text=ev.results[0][0].transcript||'';}catch(e){} routeVoiceQuestion(text); }; rec.onerror=function(ev){ setAnswer('語音辨識失敗：'+(ev.error||'unknown')+'。請再按一次 AI語音助理。'); setDebug('speech error '+(ev.error||'')); }; rec.onend=function(){ setDebug('speech recognition end'); }; rec.start(); }catch(e){ var t2=prompt('語音辨識無法啟動，請輸入問題：','')||''; routeVoiceQuestion(t2); } }
   bind('btnAiVoice', startVoiceAsk); // btnVoice 是中央對講按鍵，不再啟動 AI 語音助理
 
-  // V5.6L2: Safe wake word mode. It is OFF by default and only starts after the user taps 啟用小艾.
-  // It does not change existing button handlers. 30 seconds after the last wake activity it stops automatically.
+  // V5.6L3: Safe XiaoAi wake word + continuous Q/A session.
+  // Tap 啟用小艾 once. Say 小艾 to enter AI session; then ask follow-up questions without repeating 小艾.
+  // 30 seconds without recognized speech stops the AI session and microphone.
   var rt7WakeEnabled=false;
   var rt7WakeRec=null;
   var rt7WakeLastMs=0;
   var rt7WakeStopTimer=null;
+  var rt7WakeSession=false;
+  var rt7WakeBusy=false;
+  var rt7WakeLastText='';
+  var rt7WakeLastTextMs=0;
   function rt7WakeButtonText_(txt){ var b=document.getElementById('btnWakeXiaoAi'); if(b) b.textContent=txt; }
   function rt7WakeStop_(msg){
     rt7WakeEnabled=false;
+    rt7WakeSession=false;
+    rt7WakeBusy=false;
     try{ if(rt7WakeRec){ rt7WakeRec.onresult=null; rt7WakeRec.onerror=null; rt7WakeRec.onend=null; rt7WakeRec.stop(); } }catch(e){}
     rt7WakeRec=null;
     if(rt7WakeStopTimer){ clearInterval(rt7WakeStopTimer); rt7WakeStopTimer=null; }
@@ -2008,28 +2015,55 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       if(rt7WakeEnabled && Date.now()-rt7WakeLastMs>30000){ rt7WakeStop_('小艾語音喚醒已自動關閉（30秒未說話）'); }
     },1000);
   }
+  async function rt7WakeAsk_(cmd){
+    cmd=String(cmd||'').trim();
+    if(!cmd) return;
+    rt7WakeLastMs=Date.now();
+    rt7WakeBusy=true;
+    try{
+      setAnswer('小艾：'+cmd);
+      await routeVoiceQuestion(cmd);
+    }catch(e){
+      setAnswer('小艾處理失敗：'+(e.message||e));
+    }finally{
+      rt7WakeBusy=false;
+      if(rt7WakeEnabled && rt7WakeSession){
+        rt7WakeLastMs=Date.now();
+        setDebug('xiaoai ready for next question');
+      }
+    }
+  }
   function rt7WakeHandleText_(text){
     text=String(text||'').trim();
     if(!text) return;
+    var now=Date.now();
+    // Prevent duplicate transcripts from Chrome SpeechRecognition.
+    if(text===rt7WakeLastText && now-rt7WakeLastTextMs<1500) return;
+    rt7WakeLastText=text;
+    rt7WakeLastTextMs=now;
+    rt7WakeLastMs=now;
     setDebug('xiaoai heard '+text);
     var normalized=text.replace(/\s+/g,'');
-    var idx=normalized.indexOf('小艾');
-    if(idx<0) idx=normalized.indexOf('小愛');
-    if(idx<0) return;
-    rt7WakeLastMs=Date.now();
+    var hasWake=(normalized.indexOf('小艾')>=0 || normalized.indexOf('小愛')>=0);
     var cmd='';
-    try{
-      var raw=String(text||'');
-      var m=raw.match(/小[艾愛][，,。！!？?\s]*(.*)$/);
-      if(m) cmd=(m[1]||'').trim();
-    }catch(e){ cmd=''; }
-    if(cmd){
-      setAnswer('小艾已喚醒：'+cmd);
-      routeVoiceQuestion(cmd);
+    if(hasWake){
+      rt7WakeSession=true;
+      try{
+        var m=String(text||'').match(/小[艾愛][，,。！!？?\s]*(.*)$/);
+        if(m) cmd=(m[1]||'').trim();
+      }catch(e){ cmd=''; }
+      if(!cmd){
+        setAnswer('小艾已啟動，請直接說問題。30秒未說話會自動關閉。');
+        return;
+      }
+    }else if(rt7WakeSession){
+      // Continuous Q/A: after wake word, follow-up speech is treated as AI question.
+      cmd=text;
     }else{
-      setAnswer('小艾已喚醒，請說問題');
-      setTimeout(function(){ if(rt7WakeEnabled) startVoiceAsk(); },300);
+      return;
     }
+    if(rt7WakeBusy){ setDebug('xiaoai busy, ignored '+cmd); return; }
+    rt7WakeAsk_(cmd);
   }
   function rt7WakeStart_(){
     if(rt7WakeEnabled) return;
@@ -2037,9 +2071,11 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(!SR){ setAnswer('此瀏覽器不支援語音喚醒，請使用 AI語音助理按鍵。'); return; }
     try{
       rt7WakeEnabled=true;
+      rt7WakeSession=false;
+      rt7WakeBusy=false;
       rt7WakeLastMs=Date.now();
       rt7WakeButtonText_('關閉小艾');
-      setAnswer('小艾語音喚醒已啟用，30秒未說話會自動關閉。請說：小艾 開門 / 小艾 播放五月天溫柔');
+      setAnswer('小艾語音喚醒已啟用。先說「小艾」，之後可連續詢問；30秒未說話會自動關閉。');
       rt7WakeArmTimer_();
       var rec=new SR();
       rt7WakeRec=rec;
@@ -2057,7 +2093,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
         if(rt7WakeEnabled){
           setTimeout(function(){
             try{ if(rt7WakeEnabled && rt7WakeRec) rt7WakeRec.start(); }catch(e){ setDebug('xiaoai restart failed '+(e.message||e)); }
-          },500);
+          },400);
         }
       };
       try{ rec.start(); }catch(e){ rt7WakeStop_('小艾語音喚醒啟動失敗：'+(e.message||e)); }
