@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L4_WAKE_WORD_NO_ECHO_LOOP_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6L5_TTS_FULL_PLAY_NO_CUTOFF_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1926,15 +1926,45 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       txt=String(txt||'');
       if(!window.speechSynthesis || !txt.length){ resolve(); return; }
       try{
-        speechSynthesis.cancel();
+        // V5.6L5: do not cut the last sentence.  Android Chrome zh-TW TTS can be
+        // slower than the old txt.length*180ms watchdog, especially after wake-word
+        // continuous mode pauses/resumes recognition.  Use a much longer watchdog
+        // and only cancel on real error, not during normal long answers.
+        try{ speechSynthesis.cancel(); }catch(_e){}
         var u=new SpeechSynthesisUtterance(txt);
         u.lang='zh-TW';
+        u.rate=0.96;
+        u.pitch=1.0;
+        u.volume=1.0;
         var done=false;
-        var timeoutMs=Math.min(30000, Math.max(2500, txt.length*180));
-        var timer=setTimeout(function(){ if(done) return; done=true; try{speechSynthesis.cancel();}catch(e){} resolve(); }, timeoutMs);
-        function finish(){ if(done) return; done=true; clearTimeout(timer); resolve(); }
+        var lastProgress=Date.now();
+        var textLen=txt.replace(/\s+/g,'').length || txt.length || 1;
+        var timeoutMs=Math.min(120000, Math.max(15000, textLen*520));
+        var progressTimer=null;
+        function finish(){
+          if(done) return;
+          done=true;
+          try{ if(progressTimer) clearInterval(progressTimer); }catch(_e){}
+          resolve();
+        }
+        u.onstart=function(){ lastProgress=Date.now(); };
+        u.onboundary=function(){ lastProgress=Date.now(); };
+        u.onmark=function(){ lastProgress=Date.now(); };
         u.onend=finish;
-        u.onerror=finish;
+        u.onerror=function(ev){
+          // If the browser reports interrupted/canceled because of a new speak(), end safely.
+          // Do not forcibly restart here; routeVoiceQuestion will finish and wake-word will resume.
+          finish();
+        };
+        progressTimer=setInterval(function(){
+          if(done) return;
+          var elapsed=Date.now()-(lastProgress||Date.now());
+          // Safety only: if speechSynthesis hangs for a long time, resolve without cutting early.
+          if(elapsed>timeoutMs){
+            try{ speechSynthesis.cancel(); }catch(_e){}
+            finish();
+          }
+        },1000);
         speechSynthesis.speak(u);
       }catch(e){ resolve(); }
     });
@@ -2043,7 +2073,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       rt7WakePauseForAi=false;
       rt7WakeLastMs=Date.now();
       try{ if(rt7WakeRec) rt7WakeRec.start(); setDebug('xiaoai ready for next question'); }catch(e){ setDebug('xiaoai resume failed '+(e.message||e)); }
-    },900);
+    },1500);
   }
   function rt7WakeArmTimer_(){
     if(rt7WakeStopTimer) clearInterval(rt7WakeStopTimer);
