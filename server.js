@@ -3741,7 +3741,7 @@ app.get('/rt7_gpio_control', (req,res)=>{
   const camSrc = streamOn ? `http://${host}/api/camera/stream?_gpio=${Date.now()}` : '';
   const keys = ['1','2','3','A','4','5','6','B','7','8','9','C','*','0','#','D'];
   const keyHtml = keys.map(k=>`<button type="button" class="key ${/[ABCD*#]/.test(k)?'red':''}" data-key="${esc(k)}">${esc(k)}</button>`).join('');
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 GPIO Fast Control V5.6M14</title>
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 GPIO Fast Control V5.6M2</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;background:#fff;font-family:system-ui,-apple-system,'Noto Sans TC','Microsoft JhengHei',Arial,sans-serif;color:#17262a}body{max-width:520px;margin:0 auto;padding-bottom:34px}.top{height:56px;background:linear-gradient(90deg,#0b252b,#0d2c32);color:#fff;display:flex;align-items:center;padding:0 10px}.back{background:#41546b;color:#fff;text-decoration:none;border-radius:8px;padding:8px 10px;font-weight:900;font-size:13px}.menu{font-size:28px;margin-left:8px;color:#dbeafe;text-decoration:none}.title{flex:1;text-align:center;font-weight:900;line-height:1.05;font-size:12px;letter-spacing:.3px}.wrap{padding:7px}.deviceRow{display:grid;grid-template-columns:1fr 54px;gap:6px}.device{width:100%;height:36px;font-size:13px;font-weight:900;border:1px solid #334155;border-radius:4px;background:#fff;padding:0 7px}.apply{height:36px;border:0;border-radius:5px;background:#40516a;color:#fff;font-weight:900}.video{position:relative;background:#000;aspect-ratio:16/9;overflow:hidden;margin-top:6px}.video img{width:100%;height:100%;object-fit:cover;display:block;background:#000}.badge{position:absolute;top:10px;left:10px;background:#71839d;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.badge2{position:absolute;top:10px;right:10px;background:#e03131;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.hint{position:absolute;left:0;right:0;top:43%;text-align:center;color:#dbe3ee;font-weight:900;font-size:16px}.videoBtns{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.vbtn{display:block;text-align:center;text-decoration:none;color:#fff;border-radius:7px;padding:12px 8px;font-size:17px;font-weight:900;min-height:44px;background:#08272d}.vblue{background:#1293dd}.vdark{background:#0b252b}.keypadBox{display:flex;justify-content:center;margin:12px 0 6px}.keypad{background:#333;border:4px solid #777;border-radius:10px;padding:8px;display:grid;grid-template-columns:repeat(4,56px);gap:8px}.key{width:56px;height:45px;border-radius:6px;background:#2d8fd6;border:2px solid #9fc5dd;color:#fff;font-size:24px;font-weight:900;line-height:41px;padding:0;text-align:center;text-decoration:none;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.key:active{transform:scale(.96);filter:brightness(1.2)}.key.red{background:#c73b3b;border-color:#e6a0a0}.small{text-align:center;color:#64748b;font-size:12px;margin:7px 0}.card{border-top:1px solid #e5e7eb;padding:10px 8px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.btn{display:block;text-align:center;text-decoration:none;border:0;border-radius:8px;padding:13px 8px;font-weight:900;color:#fff;background:#0b88d8;font-size:16px}.green{background:#13a85a}.redBtn{background:#d12f2f}.orange{background:#f39c12}.gray{background:#40516a}input{width:100%;font-size:17px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:7px}.status{white-space:pre-wrap;background:#071120;color:#d8f7ff;border-radius:8px;padding:9px;font-family:monospace;font-size:12px;margin:8px;min-height:38px}@media(max-width:380px){.keypad{grid-template-columns:repeat(4,47px)}.key{width:47px;height:38px;line-height:34px;font-size:20px}.title{font-size:11px}}
 </style></head><body>
@@ -3751,13 +3751,13 @@ app.get('/rt7_gpio_control', (req,res)=>{
   <div class="video" id="videoBox"><img id="cam" alt="preview" ${camSrc?`src="${camSrc}"`:''}><div class="badge">${streamOn?'LAN':'IDLE'}</div><div class="badge2">LAN</div>${streamOn?'':`<div class="hint">等待影像串流<br><span style="font-size:12px;color:#94a3b8">按開始影像</span></div>`}</div>
   <div class="videoBtns"><a id="btnStartCam" class="vbtn vblue" href="/rt7_gpio_control?d=${di0}&stream=1">開始影像</a><a id="btnStopCam" class="vbtn vdark" href="/rt7_gpio_control?d=${di0}&stream=0">停止影像</a></div>
   <div class="keypadBox"><div class="keypad">${keyHtml}</div></div>
-  <div class="small">按下送原始 ESP-NOW 控制碼（1→15、2→16、3→19、A→13、4→11、5→12），放開送 99</div>
+  <div class="small">按下送控制碼（1→15、2→25、A→A5），放開送 99；ESP32 串口會顯示 [GPIO_KEYPAD] key=...</div>
   <div class="card">
     <div class="grid2"><a class="btn green" href="${mkUrl('/api/door/open_fast?tag=rt7_gpio_page_door_h11_tone')}" target="rt7_hidden">開門 GPIO40</a><a id="pulseLink" class="btn orange" href="${mkUrl('/api/gpio/pulse?pin=40&ms=300&tag=rt7_gpio_page')}" target="rt7_hidden">Pulse 指定 GPIO</a></div>
     <div class="grid2"><input id="pin" value="40" inputmode="numeric"><input id="ms" value="300" inputmode="numeric"></div>
     <div class="grid3" style="margin-top:8px"><a id="onLink" class="btn" href="${mkUrl('/api/gpio?pin=40&value=1&tag=rt7_gpio_page')}" target="rt7_hidden">ON</a><a id="offLink" class="btn redBtn" href="${mkUrl('/api/gpio?pin=40&value=0&tag=rt7_gpio_page')}" target="rt7_hidden">OFF</a><a class="btn gray" href="${mkUrl('/api/health?tag=rt7_gpio_ping')}" target="rt7_hidden">測試</a></div>
   </div>
-  <div id="status" class="status">ready V5.6M14 original espnow codemap / ${esc(dev.id||'')} / ${esc(host)}</div>
+  <div id="status" class="status">ready V5.6M2 instant release / ${esc(dev.id||'')} / ${esc(host)}</div>
 </div>
 <iframe name="rt7_hidden" style="display:none;width:0;height:0;border:0"></iframe>
 <script>
@@ -3777,17 +3777,15 @@ app.get('/rt7_gpio_control', (req,res)=>{
   var lastReleaseAt=0;
   var touchModeUntil=0;
   var pressMap={
-    // V5.6M14: align with original esp-now-multi transmitter control codes.
-    // Original receiver verified: 15,16,19,13,11,12 with release 99.
-    '1':'15','2':'16','3':'19','A':'13',
-    '4':'11','5':'12','6':'1C','B':'1D',
-    '7':'2C','8':'2D','9':'0','C':'A',
-    '*':'B','0':'C','#':'D','D':'99'
+    '1':'15','2':'25','3':'35','A':'A5',
+    '4':'45','5':'55','6':'65','B':'B5',
+    '7':'75','8':'85','9':'95','C':'C5',
+    '*':'S5','0':'05','#':'H5','D':'D5'
   };
   function setStatus(t){ var st=q('status'); if(st) st.textContent=t; }
   function sendCode(code, phase, rawKey){
     var now=Date.now();
-    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_press_release_m14&_='+now;
+    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_press_release_m2&_='+now;
     // Release(99) must be fastest: fire two image beacons with unique query ids.
     // Android Chrome allows mixed-content image requests more reliably than fetch from HTTPS to HTTP LAN.
     if(String(code)==='99'){
