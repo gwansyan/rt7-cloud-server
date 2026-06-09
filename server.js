@@ -3777,15 +3777,17 @@ app.get('/rt7_gpio_control', (req,res)=>{
   var lastReleaseAt=0;
   var touchModeUntil=0;
   var pressMap={
-    '1':'15','2':'25','3':'35','A':'A5',
-    '4':'45','5':'55','6':'65','B':'B5',
-    '7':'75','8':'85','9':'95','C':'C5',
-    '*':'S5','0':'05','#':'H5','D':'D5'
+    // V5.6M22: align to original ESP-NOW transmitter / original CAN receiver codes (ij=1 group).
+    // Original receiver understands these text codes directly over ESP-NOW broadcast.
+    '1':'15','2':'16','3':'19','A':'13',
+    '4':'11','5':'12','6':'1C','B':'1D',
+    '7':'15','8':'16','9':'19','C':'13',
+    '*':'11','0':'12','#':'1C','D':'1D'
   };
   function setStatus(t){ var st=q('status'); if(st) st.textContent=t; }
   function sendCode(code, phase, rawKey){
     var now=Date.now();
-    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_press_release_m2&_='+now;
+    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_original_receiver_m22&_='+now;
     // Release(99) must be fastest: fire two image beacons with unique query ids.
     // Android Chrome allows mixed-content image requests more reliably than fetch from HTTPS to HTTP LAN.
     if(String(code)==='99'){
