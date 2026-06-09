@@ -17,7 +17,7 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6M9_KEYPAD_ESPNOW_NO_REFERENCE_COMPILE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6M24_RELEASE99_PRIORITY_FASTPATH';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -3787,13 +3787,13 @@ app.get('/rt7_gpio_control', (req,res)=>{
   function setStatus(t){ var st=q('status'); if(st) st.textContent=t; }
   function sendCode(code, phase, rawKey){
     var now=Date.now();
-    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_original_receiver_m22&_='+now;
-    // Release(99) must be fastest: fire two image beacons with unique query ids.
-    // Android Chrome allows mixed-content image requests more reliably than fetch from HTTPS to HTTP LAN.
+    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_release99_priority_m24&_='+now;
+    // V5.6M24: Release(99) is priority stop. Send through multiple browser-safe LAN paths immediately.
     if(String(code)==='99'){
-      var img0=new Image();
-      img0.src=url+'&fast=1';
-      setStatus('RELEASE '+(rawKey||'')+' -> 99 sent instantly');
+      try{ fetch(url+'&fast=1&priority=stop', {method:'GET', mode:'no-cors', cache:'no-store', keepalive:true}); }catch(_){ }
+      try{ var img0=new Image(); img0.src=url+'&fast=2&priority=stop'; }catch(_){ }
+      try{ navigator.sendBeacon && navigator.sendBeacon(url+'&fast=3&priority=stop'); }catch(_){ }
+      setStatus('RELEASE '+(rawKey||'')+' -> 99 priority sent');
       return;
     }
     var img=new Image();
@@ -3855,6 +3855,10 @@ app.get('/rt7_gpio_control', (req,res)=>{
     b.addEventListener('contextmenu', function(ev){ ev.preventDefault(); }, {passive:false});
   });
   window.addEventListener('blur', function(){ releaseKey(); });
+  window.addEventListener('pagehide', function(){ releaseKey(); });
+  document.addEventListener('mouseup', function(){ releaseKey(); }, {passive:false});
+  document.addEventListener('touchend', function(){ releaseKey(); }, {passive:false});
+  document.addEventListener('touchcancel', function(){ releaseKey(); }, {passive:false});
   document.addEventListener('visibilitychange', function(){ if(document.hidden) releaseKey(); });
 })();
 </script></body></html>`);
