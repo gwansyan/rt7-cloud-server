@@ -86,7 +86,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N2_PUSH_BUTTON_ONCLICK_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N3_PUSH_ENABLE_PAGE_AND_VISIBLE_DEBUG';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -444,6 +444,13 @@ function htmlShell(title, body, extraHead = '') {
   function onPushClick(ev){
     if(ev){ ev.preventDefault(); ev.stopPropagation(); }
     state('推播：按鍵已觸發');
+    try{
+      var onSetupPage = location.pathname.indexOf('/rt7_push_enable') === 0;
+      if(!onSetupPage){
+        setTimeout(function(){ location.href='/rt7_push_enable'; }, 30);
+        return false;
+      }
+    }catch(_){ }
     enableRt7Push().then(refreshPushState).catch(function(e){ state('推播錯誤：'+(e.message||e), true); alert('啟用門鈴通知失敗：'+(e.message||e)); });
     return false;
   }
@@ -739,6 +746,38 @@ try{
   const ws=new WebSocket(wsProto+'://'+location.host+'/ws');
   ws.onmessage=(ev)=>{try{const m=JSON.parse(ev.data); if(m.type==='doorbell') poll(true);}catch(e){}};
 }catch(e){}
+</script>`));
+});
+
+
+// ---------- V5.6N3 standalone Push enable page ----------
+app.get('/rt7_push_enable', (req, res) => {
+  res.type('html').send(htmlShell('RT7 啟用門鈴通知', `${baseCss}
+<header class="top"><h1>RT7 門鈴背景通知</h1><p>請在手機上按一次啟用，允許通知權限。</p></header>
+<main class="wrap">
+<section class="card" style="text-align:center">
+  <div class="big">🔔</div>
+  <h2>啟用門鈴通知</h2>
+  <p class="muted">此頁是獨立測試頁，避免主頁其它按鍵或影像區影響通知註冊。</p>
+  <button id="rt7PushEnableNow" class="btn green" style="font-size:22px;min-height:64px;width:100%" onclick="return rt7StandalonePushClick(event)">🔔 立即啟用門鈴通知</button>
+  <a class="btn gray" href="/rt7_cloud_original_ui_doorbell">返回門禁主頁</a>
+  <button class="btn" onclick="location.href='/api/push/test'">測試通知 /api/push/test</button>
+  <pre id="rt7PushState" class="status" style="text-align:left;margin-top:12px">推播：等待按下啟用</pre>
+</section>
+<section class="card"><h3>測試順序</h3><p>1. 按「立即啟用門鈴通知」。<br>2. Android 跳出通知權限時選「允許」。<br>3. 顯示「推播：已啟用」後，打開 /api/push/test 測試。</p></section>
+</main>
+<script>
+function rt7StandalonePushClick(ev){
+  if(ev){ev.preventDefault();ev.stopPropagation();}
+  var st=document.getElementById('rt7PushState');
+  if(st) st.textContent='推播：獨立頁按鍵已觸發，正在啟用...';
+  if(window.rt7EnablePwaPush){
+    window.rt7EnablePwaPush().then(function(){ if(st) st.textContent='推播：已啟用，請測試 /api/push/test'; }).catch(function(e){ if(st) st.textContent='推播錯誤：'+(e.message||e); alert('啟用失敗：'+(e.message||e)); });
+  } else {
+    if(st) st.textContent='推播錯誤：rt7EnablePwaPush 未載入，請重新整理';
+  }
+  return false;
+}
 </script>`));
 });
 
@@ -1968,7 +2007,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle" type="button" onclick="return window.rt7PushNotifyClick&&window.rt7PushNotifyClick(event)">🔔</button><span id="lblPushNotify">通知</span></div></section><div id="rt7PushState" style="padding:2px 20px 8px;color:#16a34a;font-size:12px;font-weight:900;text-align:right">推播：未啟用</div>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle" type="button" onclick="document.getElementById('rt7PushState')&&(document.getElementById('rt7PushState').textContent='推播：開啟設定頁'); location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section><div id="rt7PushState" style="padding:2px 20px 8px;color:#16a34a;font-size:12px;font-weight:900;text-align:right">推播：未啟用</div>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
