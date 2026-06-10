@@ -96,7 +96,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N5_PUSH_SEND_FAIL_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N6_VAPID_KEY_SYNC_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -429,10 +429,20 @@ function htmlShell(title, body, extraHead = '') {
     var keyRes=await fetch('/api/push/vapid-public-key?_='+Date.now(),{cache:'no-store'});
     var key=await keyRes.json();
     if(!key.ok || !key.publicKey) throw new Error('推播 key 無效：'+(key.error||'no key'));
-    state('推播：建立訂閱');
+    state('推播：同步 VAPID key');
+    var appKey=b64ToUint8Array(key.publicKey);
     var sub=await reg.pushManager.getSubscription();
+    if(sub){
+      try{
+        var oldKey=sub.options&&sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+        var same=!!oldKey && oldKey.length===appKey.length;
+        if(same){ for(var ki=0; ki<oldKey.length; ki++){ if(oldKey[ki]!==appKey[ki]){ same=false; break; } } }
+        if(!same){ state('推播：舊訂閱 key 不同，重新訂閱'); await sub.unsubscribe(); sub=null; }
+      }catch(_){ try{ await sub.unsubscribe(); }catch(__){} sub=null; }
+    }
+    state('推播：建立訂閱');
     if(!sub){
-      sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64ToUint8Array(key.publicKey) });
+      sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:appKey });
     }
     state('推播：送出訂閱');
     var save=await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub)});
@@ -552,6 +562,7 @@ self.addEventListener('notificationclick', event=>{
 `);
 });
 app.get('/api/push/vapid-public-key', (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const setup = rt7SetupWebPush_();
   res.json(Object.assign({ version: SERVER_VERSION, supported: !!webpush }, setup));
 });
@@ -560,7 +571,8 @@ app.post('/api/push/subscribe', (req, res) => {
   if (!sub || !sub.endpoint) return res.status(400).json({ ok:false, error:'missing subscription endpoint' });
   const arr = rt7ReadPushSubs_();
   const idx = arr.findIndex(x => (x.subscription || x).endpoint === sub.endpoint);
-  const row = { subscription: sub, user_agent: safeString(req.headers['user-agent']), time: nowIso(), ip: clientIp(req) };
+  const setup = rt7SetupWebPush_();
+  const row = { subscription: sub, user_agent: safeString(req.headers['user-agent']), time: nowIso(), ip: clientIp(req), vapid_source: setup.source || '', server_public_key: setup.publicKey || '' };
   if (idx >= 0) arr[idx] = row; else arr.push(row);
   rt7SavePushSubs_(arr);
   res.json({ ok:true, count: arr.length, version: SERVER_VERSION });
@@ -571,7 +583,8 @@ app.get('/api/push/state', (req, res) => {
 });
 app.get('/api/push/reset', (req, res) => {
   rt7SavePushSubs_([]);
-  res.json({ ok:true, version:SERVER_VERSION, reset:true, subscriptions:0 });
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok:true, version:SERVER_VERSION, reset:true, subscriptions:0, note:'Server subscriptions cleared. Open /rt7_push_enable on phone and subscribe again.' });
 });
 app.post('/api/push/reset', (req, res) => {
   rt7SavePushSubs_([]);
