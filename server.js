@@ -69,12 +69,16 @@ async function rt7SendPushDoorbell_(payload) {
     body: '收到門鈴：有人按門鈴',
     url: '/rt7_cloud_original_ui_doorbell',
     tag: 'rt7-doorbell',
+    priority: 'high',
+    requireInteraction: true,
+    renotify: true,
+    vibrate: [500,200,500,200,500],
     time: nowIso()
   }, payload || {}));
   let sent = 0, removed = 0;
   const keep = [];
   for (const sub of subs) {
-    try { await webpush.sendNotification(sub.subscription || sub, body); sent++; keep.push(sub); }
+    try { await webpush.sendNotification(sub.subscription || sub, body, { TTL: 60, urgency: 'high' }); sent++; keep.push(sub); }
     catch (e) {
       const code = e && (e.statusCode || e.status);
       if (code === 404 || code === 410) removed++;
@@ -86,7 +90,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N3_PUSH_ENABLE_PAGE_AND_VISIBLE_DEBUG';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N4_DOORBELL_HIGH_PRIORITY_SOUND';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -512,21 +516,68 @@ app.get('/manifest.json', rt7SendPwaManifest_);
 app.get('/rt7-icon.svg', (req, res) => { res.type('image/svg+xml').send('<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="90" fill="#071f25"/><text x="256" y="302" text-anchor="middle" font-size="145" fill="white" font-family="Arial,sans-serif" font-weight="900">RT7</text></svg>'); });
 app.get('/sw.js', (req, res) => {
   res.type('application/javascript').send(`
-const RT7_CACHE='rt7-v56n2-pwa-cache-v1';
-self.addEventListener('install', e=>{ self.skipWaiting(); e.waitUntil(caches.open(RT7_CACHE).then(c=>c.addAll(['/rt7_cloud_original_ui_doorbell','/manifest.webmanifest','/manifest.json']).catch(()=>{}))); });
-self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
-self.addEventListener('push', event=>{
-  let data={title:'🔔 有人按門鈴', body:'收到門鈴事件', url:'/rt7_cloud_original_ui_doorbell', tag:'rt7-doorbell'};
-  try{ if(event.data) data=Object.assign(data,event.data.json()); }catch(e){}
-  const opt={ body:data.body||'收到門鈴事件', tag:data.tag||'rt7-doorbell', renotify:true, requireInteraction:true, data:{url:data.url||'/rt7_cloud_original_ui_doorbell'}, actions:[{action:'open',title:'返回門禁'},{action:'close',title:'關閉'}] };
-  event.waitUntil(self.registration.showNotification(data.title||'🔔 有人按門鈴', opt));
+const RT7_CACHE='rt7-v56n4-pwa-cache-v1';
+self.addEventListener('install', e=>{
+  self.skipWaiting();
+  e.waitUntil(caches.open(RT7_CACHE).then(c=>c.addAll(['/rt7_cloud_original_ui_doorbell','/rt7_push_enable','/manifest.webmanifest','/manifest.json','/rt7-icon.svg']).catch(()=>{})));
 });
+self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
+
+function rt7NotifyOptions_(data){
+  data = data || {};
+  return {
+    body: data.body || '收到門鈴：有人按門鈴',
+    icon: data.icon || '/rt7-icon.svg',
+    badge: data.badge || '/rt7-icon.svg',
+    tag: data.tag || 'rt7-doorbell',
+    renotify: true,
+    requireInteraction: true,
+    silent: false,
+    vibrate: data.vibrate || [500,200,500,200,500],
+    timestamp: Date.now(),
+    data: {
+      url: data.url || '/rt7_cloud_original_ui_doorbell',
+      doorUrl: data.doorUrl || '/api/rt7/door/open?source=push_action&device_id=%231',
+      time: data.time || new Date().toISOString()
+    },
+    actions: [
+      { action:'open', title:'返回門禁' },
+      { action:'door', title:'立即開門' },
+      { action:'close', title:'關閉' }
+    ]
+  };
+}
+
+self.addEventListener('push', event=>{
+  let data={title:'🔔 有人按門鈴', body:'收到門鈴：有人按門鈴', url:'/rt7_cloud_original_ui_doorbell', tag:'rt7-doorbell'};
+  try{ if(event.data) data=Object.assign(data,event.data.json()); }catch(e){}
+  event.waitUntil(self.registration.showNotification(data.title || '🔔 有人按門鈴', rt7NotifyOptions_(data)));
+});
+
 self.addEventListener('notificationclick', event=>{
+  const action = event.action || 'open';
+  const data = (event.notification && event.notification.data) || {};
   event.notification.close();
-  if(event.action==='close') return;
-  const url=(event.notification.data&&event.notification.data.url)||'/rt7_cloud_original_ui_doorbell';
+
+  if(action === 'close') return;
+
+  if(action === 'door'){
+    event.waitUntil(
+      fetch(data.doorUrl || '/api/rt7/door/open?source=push_action&device_id=%231', { method:'GET', credentials:'include', cache:'no-store' })
+        .catch(()=>{})
+        .then(()=>clients.openWindow(data.url || '/rt7_cloud_original_ui_doorbell'))
+    );
+    return;
+  }
+
+  const url=data.url || '/rt7_cloud_original_ui_doorbell';
   event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(list=>{
-    for(const c of list){ if(c.url.includes(location.origin) && 'focus' in c){ c.navigate(url); return c.focus(); } }
+    for(const c of list){
+      if(c.url.includes(location.origin) && 'focus' in c){
+        c.navigate(url);
+        return c.focus();
+      }
+    }
     return clients.openWindow(url);
   }));
 });
