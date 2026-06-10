@@ -4,6 +4,8 @@ const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
 const jpeg = require('jpeg-js');
+let webpush = null;
+try { webpush = require('web-push'); } catch (_) { webpush = null; }
 
 const app = express();
 const server = http.createServer(app);
@@ -17,7 +19,74 @@ const EVENT_LOG = path.join(DATA_DIR, 'rt7_event_log.jsonl');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6M24_RELEASE99_PRIORITY_FASTPATH';
+const PUSH_SUBS_FILE = path.join(DATA_DIR, 'push_subscriptions.json');
+const VAPID_FILE = path.join(DATA_DIR, 'vapid_keys.json');
+
+function rt7ReadJsonFile_(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8') || 'null') || fallback; } catch (_) { return fallback; }
+}
+function rt7WriteJsonFile_(file, data) {
+  ensureDataDir();
+  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+}
+function rt7GetVapidKeys_() {
+  ensureDataDir();
+  if (!webpush) return null;
+  const envPub = process.env.RT7_VAPID_PUBLIC_KEY || '';
+  const envPri = process.env.RT7_VAPID_PRIVATE_KEY || '';
+  if (envPub && envPri) return { publicKey: envPub, privateKey: envPri, source: 'env' };
+  let keys = rt7ReadJsonFile_(VAPID_FILE, null);
+  if (!keys || !keys.publicKey || !keys.privateKey) {
+    keys = webpush.generateVAPIDKeys();
+    rt7WriteJsonFile_(VAPID_FILE, keys);
+  }
+  return Object.assign({ source: 'data/vapid_keys.json' }, keys);
+}
+function rt7SetupWebPush_() {
+  if (!webpush) return { ok:false, error:'web-push package missing' };
+  const keys = rt7GetVapidKeys_();
+  if (!keys) return { ok:false, error:'no vapid keys' };
+  try {
+    webpush.setVapidDetails(process.env.RT7_VAPID_SUBJECT || 'mailto:rt7@example.com', keys.publicKey, keys.privateKey);
+    return { ok:true, publicKey: keys.publicKey, source: keys.source };
+  } catch (e) { return { ok:false, error:String(e && e.message || e) }; }
+}
+function rt7ReadPushSubs_() {
+  ensureDataDir();
+  const arr = rt7ReadJsonFile_(PUSH_SUBS_FILE, []);
+  return Array.isArray(arr) ? arr : [];
+}
+function rt7SavePushSubs_(arr) {
+  rt7WriteJsonFile_(PUSH_SUBS_FILE, Array.isArray(arr) ? arr : []);
+}
+async function rt7SendPushDoorbell_(payload) {
+  const setup = rt7SetupWebPush_();
+  if (!setup.ok) { console.log('[RT7_PUSH][SKIP]', setup.error); return { ok:false, sent:0, error:setup.error }; }
+  const subs = rt7ReadPushSubs_();
+  const body = JSON.stringify(Object.assign({
+    type: 'doorbell',
+    title: '🔔 有人按門鈴',
+    body: '收到門鈴：有人按門鈴',
+    url: '/rt7_cloud_original_ui_doorbell',
+    tag: 'rt7-doorbell',
+    time: nowIso()
+  }, payload || {}));
+  let sent = 0, removed = 0;
+  const keep = [];
+  for (const sub of subs) {
+    try { await webpush.sendNotification(sub.subscription || sub, body); sent++; keep.push(sub); }
+    catch (e) {
+      const code = e && (e.statusCode || e.status);
+      if (code === 404 || code === 410) removed++;
+      else { console.warn('[RT7_PUSH][SEND_FAIL]', code, String(e && e.message || e)); keep.push(sub); }
+    }
+  }
+  if (removed) rt7SavePushSubs_(keep);
+  console.log('[RT7_PUSH][DOORBELL] sent=' + sent + ' removed=' + removed + ' total=' + subs.length);
+  return { ok:true, sent, removed, total:subs.length };
+}
+
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N_PWA_DOORBELL_PUSH_NOTIFY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -28,6 +97,7 @@ function ensureDataDir() {
     else fs.writeFileSync(DEVICES_FILE, JSON.stringify(defaultDevices(), null, 2), 'utf8');
   }
   if (!fs.existsSync(EVENT_LOG)) fs.writeFileSync(EVENT_LOG, '', 'utf8');
+  if (!fs.existsSync(PUSH_SUBS_FILE)) fs.writeFileSync(PUSH_SUBS_FILE, '[]', 'utf8');
 }
 
 function defaultDevices() {
@@ -291,7 +361,7 @@ function registerOrUpdateDevice(dev) {
 }
 
 function htmlShell(title, body, extraHead = '') {
-  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>${title}</title>${extraHead}</head><body>${body}
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>${title}</title><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#071f25">${extraHead}</head><body>${body}
 <script id="rt7-v48f4-button-layout-fix-js">
 (function(){
   function bindTextButton(label, fn){
@@ -313,6 +383,35 @@ function htmlShell(title, body, extraHead = '') {
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', install); else install();
 })();
 </script>
+
+<script id="rt7-v56n-pwa-push-js">
+(function(){
+  if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
+  function log(msg){ try{ console.log('[RT7_PWA]', msg); }catch(e){} }
+  function b64ToUint8Array(base64String){ const padding='='.repeat((4-base64String.length%4)%4); const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); const raw=atob(base64); const out=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i); return out; }
+  async function enableRt7Push(){
+    if(!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)){ alert('此瀏覽器不支援背景推播'); return false; }
+    const reg=await navigator.serviceWorker.register('/sw.js');
+    let perm=Notification.permission;
+    if(perm!=='granted') perm=await Notification.requestPermission();
+    if(perm!=='granted'){ alert('通知權限未允許'); return false; }
+    const keyRes=await fetch('/api/push/vapid-public-key?_='+Date.now(),{cache:'no-store'}); const key=await keyRes.json();
+    if(!key.ok || !key.publicKey){ alert('推播尚未啟用：'+(key.error||'no key')); return false; }
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub) sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64ToUint8Array(key.publicKey) });
+    await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub)});
+    alert('RT7 門鈴背景通知已啟用');
+    return true;
+  }
+  window.rt7EnablePwaPush=enableRt7Push;
+  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').then(()=>log('sw registered')).catch(e=>log('sw fail '+e.message)); }
+  document.addEventListener('DOMContentLoaded', function(){
+    var btn=document.createElement('button'); btn.textContent='啟用門鈴通知'; btn.style.cssText='position:fixed;right:10px;bottom:78px;z-index:2147483647;background:#16a34a;color:#fff;border:0;border-radius:999px;padding:10px 12px;font-weight:900;box-shadow:0 3px 12px rgba(0,0,0,.25);';
+    btn.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); enableRt7Push(); };
+    document.body.appendChild(btn);
+  });
+})();
+</script>
 </body></html>`;
 }
 
@@ -327,6 +426,75 @@ code{background:#eef4f8;padding:2px 6px;border-radius:6px}.status{background:#08
 table{width:100%;border-collapse:collapse;background:white}th,td{border-bottom:1px solid #e6edf3;padding:9px;text-align:left;vertical-align:top;font-size:14px}th{background:#edf6ff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
 @media(max-width:640px){.btn{width:100%;margin:6px 0}.top h1{font-size:19px}th,td{font-size:12px;padding:7px}.wrap{padding:10px}}
 </style>`;
+
+
+// ---------- V5.6N PWA + Doorbell Push Notification ----------
+app.get('/manifest.webmanifest', (req, res) => {
+  res.type('application/manifest+json').send(JSON.stringify({
+    name: 'RT7 Cloud AI Doorbell',
+    short_name: 'RT7 Doorbell',
+    start_url: '/rt7_cloud_original_ui_doorbell',
+    scope: '/',
+    display: 'standalone',
+    background_color: '#071f25',
+    theme_color: '#071f25',
+    description: 'RT7 Cloud AI Doorbell / GPIO / Face / Music',
+    icons: [
+      { src: '/rt7-icon-192.png', sizes: '192x192', type: 'image/png' },
+      { src: '/rt7-icon-512.png', sizes: '512x512', type: 'image/png' }
+    ]
+  }));
+});
+app.get('/rt7-icon-192.png', (req, res) => { res.redirect('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192"><rect width="192" height="192" rx="34" fill="%23071f25"/><text x="96" y="112" text-anchor="middle" font-size="56" fill="white" font-family="Arial">RT7</text></svg>'); });
+app.get('/rt7-icon-512.png', (req, res) => { res.redirect('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="90" fill="%23071f25"/><text x="256" y="300" text-anchor="middle" font-size="150" fill="white" font-family="Arial">RT7</text></svg>'); });
+app.get('/sw.js', (req, res) => {
+  res.type('application/javascript').send(`
+const RT7_CACHE='rt7-v56n-pwa-cache-v1';
+self.addEventListener('install', e=>{ self.skipWaiting(); e.waitUntil(caches.open(RT7_CACHE).then(c=>c.addAll(['/rt7_cloud_original_ui_doorbell','/manifest.webmanifest']).catch(()=>{}))); });
+self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
+self.addEventListener('push', event=>{
+  let data={title:'🔔 有人按門鈴', body:'收到門鈴事件', url:'/rt7_cloud_original_ui_doorbell', tag:'rt7-doorbell'};
+  try{ if(event.data) data=Object.assign(data,event.data.json()); }catch(e){}
+  const opt={ body:data.body||'收到門鈴事件', tag:data.tag||'rt7-doorbell', renotify:true, requireInteraction:true, data:{url:data.url||'/rt7_cloud_original_ui_doorbell'}, actions:[{action:'open',title:'返回門禁'},{action:'close',title:'關閉'}] };
+  event.waitUntil(self.registration.showNotification(data.title||'🔔 有人按門鈴', opt));
+});
+self.addEventListener('notificationclick', event=>{
+  event.notification.close();
+  if(event.action==='close') return;
+  const url=(event.notification.data&&event.notification.data.url)||'/rt7_cloud_original_ui_doorbell';
+  event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(list=>{
+    for(const c of list){ if(c.url.includes(location.origin) && 'focus' in c){ c.navigate(url); return c.focus(); } }
+    return clients.openWindow(url);
+  }));
+});
+`);
+});
+app.get('/api/push/vapid-public-key', (req, res) => {
+  const setup = rt7SetupWebPush_();
+  res.json(Object.assign({ version: SERVER_VERSION, supported: !!webpush }, setup));
+});
+app.post('/api/push/subscribe', (req, res) => {
+  const sub = req.body && req.body.subscription ? req.body.subscription : req.body;
+  if (!sub || !sub.endpoint) return res.status(400).json({ ok:false, error:'missing subscription endpoint' });
+  const arr = rt7ReadPushSubs_();
+  const idx = arr.findIndex(x => (x.subscription || x).endpoint === sub.endpoint);
+  const row = { subscription: sub, user_agent: safeString(req.headers['user-agent']), time: nowIso(), ip: clientIp(req) };
+  if (idx >= 0) arr[idx] = row; else arr.push(row);
+  rt7SavePushSubs_(arr);
+  res.json({ ok:true, count: arr.length, version: SERVER_VERSION });
+});
+app.get('/api/push/state', (req, res) => {
+  const setup = rt7SetupWebPush_();
+  res.json({ ok:true, version:SERVER_VERSION, webpush:setup, subscriptions:rt7ReadPushSubs_().length });
+});
+app.post('/api/push/test', async (req, res) => {
+  const r = await rt7SendPushDoorbell_({ title:'🔔 RT7 測試通知', body:'這是 RT7 Web Push 測試', url:'/rt7_cloud_original_ui_doorbell' });
+  res.json(Object.assign({ version: SERVER_VERSION }, r));
+});
+app.get('/api/push/test', async (req, res) => {
+  const r = await rt7SendPushDoorbell_({ title:'🔔 RT7 測試通知', body:'這是 RT7 Web Push 測試', url:'/rt7_cloud_original_ui_doorbell' });
+  res.json(Object.assign({ version: SERVER_VERSION }, r));
+});
 
 app.get('/', (req, res) => {
   res.type('html').send(htmlShell('RT7 Cloud Server V4.3', `${baseCss}
@@ -397,6 +565,7 @@ function handleDoorbell(req, res, endpointName) {
   doorbellState.last = last;
   const event = appendEvent(last);
   broadcast('doorbell', event);
+  rt7SendPushDoorbell_({ body: '收到門鈴：' + safeString(last.message || '有人按門鈴'), url: '/rt7_cloud_original_ui_doorbell', device_id: dev.id, device_name: dev.name }).catch(e => console.warn('[RT7_PUSH][ERR]', String(e && e.message || e)));
   console.log('[RT7][DOORBELL]', JSON.stringify(event));
   res.json({ ok: true, message: 'doorbell received', state: doorbellState, event });
 }
@@ -3787,13 +3956,13 @@ app.get('/rt7_gpio_control', (req,res)=>{
   function setStatus(t){ var st=q('status'); if(st) st.textContent=t; }
   function sendCode(code, phase, rawKey){
     var now=Date.now();
-    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_release99_priority_m24&_='+now;
-    // V5.6M24: Release(99) is priority stop. Send through multiple browser-safe LAN paths immediately.
+    var url='http://'+h+':8081/api/keypad?key='+encodeURIComponent(code)+'&phase='+encodeURIComponent(phase||'')+'&raw='+encodeURIComponent(rawKey||'')+'&tag=rt7_gpio_original_receiver_m22&_='+now;
+    // Release(99) must be fastest: fire two image beacons with unique query ids.
+    // Android Chrome allows mixed-content image requests more reliably than fetch from HTTPS to HTTP LAN.
     if(String(code)==='99'){
-      try{ fetch(url+'&fast=1&priority=stop', {method:'GET', mode:'no-cors', cache:'no-store', keepalive:true}); }catch(_){ }
-      try{ var img0=new Image(); img0.src=url+'&fast=2&priority=stop'; }catch(_){ }
-      try{ navigator.sendBeacon && navigator.sendBeacon(url+'&fast=3&priority=stop'); }catch(_){ }
-      setStatus('RELEASE '+(rawKey||'')+' -> 99 priority sent');
+      var img0=new Image();
+      img0.src=url+'&fast=1';
+      setStatus('RELEASE '+(rawKey||'')+' -> 99 sent instantly');
       return;
     }
     var img=new Image();
@@ -3855,10 +4024,6 @@ app.get('/rt7_gpio_control', (req,res)=>{
     b.addEventListener('contextmenu', function(ev){ ev.preventDefault(); }, {passive:false});
   });
   window.addEventListener('blur', function(){ releaseKey(); });
-  window.addEventListener('pagehide', function(){ releaseKey(); });
-  document.addEventListener('mouseup', function(){ releaseKey(); }, {passive:false});
-  document.addEventListener('touchend', function(){ releaseKey(); }, {passive:false});
-  document.addEventListener('touchcancel', function(){ releaseKey(); }, {passive:false});
   document.addEventListener('visibilitychange', function(){ if(document.hidden) releaseKey(); });
 })();
 </script></body></html>`);
