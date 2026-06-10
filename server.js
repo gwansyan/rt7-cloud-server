@@ -86,7 +86,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N1_REAL_PWA_PUSH_COMPLETE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N2_PUSH_BUTTON_ONCLICK_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -384,37 +384,73 @@ function htmlShell(title, body, extraHead = '') {
 })();
 </script>
 
-<script id="rt7-v56n-pwa-push-js">
+<script id="rt7-v56n2-pwa-push-js">
 (function(){
   if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
-  function log(msg){ try{ console.log('[RT7_PWA]', msg); }catch(e){} }
-  function b64ToUint8Array(base64String){ const padding='='.repeat((4-base64String.length%4)%4); const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); const raw=atob(base64); const out=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i); return out; }
+  function log(msg){ try{ console.log('[RT7_PWA_N2]', msg); }catch(e){} }
+  function state(msg, err){
+    try{
+      var el=document.getElementById('rt7PushState')||document.getElementById('lblPushNotify');
+      if(el){ el.textContent=msg; el.style.color=err?'#dc2626':'#16a34a'; }
+      var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent=(msg||'通知').replace(/^推播：/,'');
+      log(msg);
+    }catch(e){}
+  }
+  function b64ToUint8Array(base64String){
+    var padding='='.repeat((4-base64String.length%4)%4);
+    var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
+    var raw=atob(base64); var out=new Uint8Array(raw.length);
+    for(var i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+    return out;
+  }
   async function enableRt7Push(){
-    if(!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)){ alert('此瀏覽器不支援背景推播'); return false; }
-    const reg=await navigator.serviceWorker.register('/sw.js');
-    let perm=Notification.permission;
+    state('推播：檢查瀏覽器支援');
+    if(!('serviceWorker' in navigator)){ throw new Error('此瀏覽器不支援 Service Worker'); }
+    if(!('PushManager' in window)){ throw new Error('此瀏覽器不支援 PushManager'); }
+    if(!('Notification' in window)){ throw new Error('此瀏覽器不支援通知'); }
+    state('推播：註冊 Service Worker');
+    var reg=await navigator.serviceWorker.register('/sw.js',{scope:'/'});
+    try{ await navigator.serviceWorker.ready; }catch(e){}
+    state('推播：要求通知權限');
+    var perm=Notification.permission;
     if(perm!=='granted') perm=await Notification.requestPermission();
-    if(perm!=='granted'){ alert('通知權限未允許'); return false; }
-    const keyRes=await fetch('/api/push/vapid-public-key?_='+Date.now(),{cache:'no-store'}); const key=await keyRes.json();
-    if(!key.ok || !key.publicKey){ alert('推播尚未啟用：'+(key.error||'no key')); return false; }
-    let sub=await reg.pushManager.getSubscription();
-    if(!sub) sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64ToUint8Array(key.publicKey) });
-    await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub)});
+    if(perm!=='granted') throw new Error('通知權限未允許：'+perm);
+    state('推播：取得 VAPID key');
+    var keyRes=await fetch('/api/push/vapid-public-key?_='+Date.now(),{cache:'no-store'});
+    var key=await keyRes.json();
+    if(!key.ok || !key.publicKey) throw new Error('推播 key 無效：'+(key.error||'no key'));
+    state('推播：建立訂閱');
+    var sub=await reg.pushManager.getSubscription();
+    if(!sub){
+      sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64ToUint8Array(key.publicKey) });
+    }
+    state('推播：送出訂閱');
+    var save=await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub)});
+    var sj=await save.json().catch(function(){return {ok:false,error:'bad json'};});
+    if(!save.ok || !sj.ok) throw new Error('訂閱儲存失敗：'+(sj.error||save.status));
+    state('推播：已啟用');
     alert('RT7 門鈴背景通知已啟用');
     return true;
   }
-  window.rt7EnablePwaPush=enableRt7Push;
-  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').then(()=>log('sw registered')).catch(e=>log('sw fail '+e.message)); }
   async function refreshPushState(){
     try{
-      var el=document.getElementById('rt7PushState')||document.getElementById('lblPushNotify');
-      if(Notification&&Notification.permission==='granted'){ if(el) el.textContent='通知已啟用'; }
-      var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(r=>r.json());
+      var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();});
+      if(Notification && Notification.permission==='granted' && st.subscriptions>0) state('推播：已啟用');
+      else if(Notification && Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
+      else state('推播：未啟用');
       log('push state '+JSON.stringify(st));
-    }catch(e){ log('push state fail '+(e.message||e)); }
+    }catch(e){ state('推播：狀態讀取失敗 '+(e.message||e), true); }
   }
-  document.addEventListener('DOMContentLoaded', function(){
-    var btn=document.getElementById('btnPushNotify');
+  function onPushClick(ev){
+    if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+    state('推播：按鍵已觸發');
+    enableRt7Push().then(refreshPushState).catch(function(e){ state('推播錯誤：'+(e.message||e), true); alert('啟用門鈴通知失敗：'+(e.message||e)); });
+    return false;
+  }
+  window.rt7EnablePwaPush=enableRt7Push;
+  window.rt7PushNotifyClick=onPushClick;
+  function installPushButton(){
+    var btn=document.getElementById('btnPushNotify')||document.getElementById('btnPushNotifyFloat');
     if(!btn){
       btn=document.createElement('button');
       btn.id='btnPushNotifyFloat';
@@ -422,9 +458,14 @@ function htmlShell(title, body, extraHead = '') {
       btn.style.cssText='position:fixed;right:10px;bottom:92px;z-index:2147483647;background:#16a34a;color:#fff;border:0;border-radius:999px;padding:10px 12px;font-weight:900;box-shadow:0 3px 12px rgba(0,0,0,.25);';
       document.body.appendChild(btn);
     }
-    btn.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); enableRt7Push().then(refreshPushState).catch(function(e){ alert('啟用門鈴通知失敗：'+(e.message||e)); }); };
+    btn.style.pointerEvents='auto'; btn.style.zIndex='2147483647'; btn.setAttribute('onclick','return window.rt7PushNotifyClick&&window.rt7PushNotifyClick(event)');
+    btn.onclick=onPushClick;
+    btn.addEventListener('click', onPushClick, true);
+    btn.addEventListener('touchend', onPushClick, {capture:true, passive:false});
+    if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){log('sw registered');}).catch(function(e){state('推播：SW註冊失敗 '+e.message,true);}); }
     refreshPushState();
-  });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', installPushButton); else installPushButton();
 })();
 </script>
 </body></html>`;
@@ -464,7 +505,7 @@ app.get('/manifest.json', rt7SendPwaManifest_);
 app.get('/rt7-icon.svg', (req, res) => { res.type('image/svg+xml').send('<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="90" fill="#071f25"/><text x="256" y="302" text-anchor="middle" font-size="145" fill="white" font-family="Arial,sans-serif" font-weight="900">RT7</text></svg>'); });
 app.get('/sw.js', (req, res) => {
   res.type('application/javascript').send(`
-const RT7_CACHE='rt7-v56n-pwa-cache-v1';
+const RT7_CACHE='rt7-v56n2-pwa-cache-v1';
 self.addEventListener('install', e=>{ self.skipWaiting(); e.waitUntil(caches.open(RT7_CACHE).then(c=>c.addAll(['/rt7_cloud_original_ui_doorbell','/manifest.webmanifest','/manifest.json']).catch(()=>{}))); });
 self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
 self.addEventListener('push', event=>{
@@ -1905,7 +1946,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6N1 PWA Push Complete</title>
+<title>RT7 Cloud Original UI V5.6N2 Push Button OnClick Fix</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1927,7 +1968,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle" type="button">🔔</button><span id="lblPushNotify">通知</span></div></section><div id="rt7PushState" style="padding:2px 20px 8px;color:#16a34a;font-size:12px;font-weight:900;text-align:right">推播：未啟用</div>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle" type="button" onclick="return window.rt7PushNotifyClick&&window.rt7PushNotifyClick(event)">🔔</button><span id="lblPushNotify">通知</span></div></section><div id="rt7PushState" style="padding:2px 20px 8px;color:#16a34a;font-size:12px;font-weight:900;text-align:right">推播：未啟用</div>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
