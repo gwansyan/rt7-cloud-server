@@ -86,7 +86,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N_PWA_DOORBELL_PUSH_NOTIFY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N1_REAL_PWA_PUSH_COMPLETE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -405,10 +405,25 @@ function htmlShell(title, body, extraHead = '') {
   }
   window.rt7EnablePwaPush=enableRt7Push;
   if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').then(()=>log('sw registered')).catch(e=>log('sw fail '+e.message)); }
+  async function refreshPushState(){
+    try{
+      var el=document.getElementById('rt7PushState')||document.getElementById('lblPushNotify');
+      if(Notification&&Notification.permission==='granted'){ if(el) el.textContent='通知已啟用'; }
+      var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(r=>r.json());
+      log('push state '+JSON.stringify(st));
+    }catch(e){ log('push state fail '+(e.message||e)); }
+  }
   document.addEventListener('DOMContentLoaded', function(){
-    var btn=document.createElement('button'); btn.textContent='啟用門鈴通知'; btn.style.cssText='position:fixed;right:10px;bottom:78px;z-index:2147483647;background:#16a34a;color:#fff;border:0;border-radius:999px;padding:10px 12px;font-weight:900;box-shadow:0 3px 12px rgba(0,0,0,.25);';
-    btn.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); enableRt7Push(); };
-    document.body.appendChild(btn);
+    var btn=document.getElementById('btnPushNotify');
+    if(!btn){
+      btn=document.createElement('button');
+      btn.id='btnPushNotifyFloat';
+      btn.textContent='🔔 啟用門鈴通知';
+      btn.style.cssText='position:fixed;right:10px;bottom:92px;z-index:2147483647;background:#16a34a;color:#fff;border:0;border-radius:999px;padding:10px 12px;font-weight:900;box-shadow:0 3px 12px rgba(0,0,0,.25);';
+      document.body.appendChild(btn);
+    }
+    btn.onclick=function(ev){ ev.preventDefault(); ev.stopPropagation(); enableRt7Push().then(refreshPushState).catch(function(e){ alert('啟用門鈴通知失敗：'+(e.message||e)); }); };
+    refreshPushState();
   });
 })();
 </script>
@@ -429,7 +444,7 @@ table{width:100%;border-collapse:collapse;background:white}th,td{border-bottom:1
 
 
 // ---------- V5.6N PWA + Doorbell Push Notification ----------
-app.get('/manifest.webmanifest', (req, res) => {
+function rt7SendPwaManifest_(req, res) {
   res.type('application/manifest+json').send(JSON.stringify({
     name: 'RT7 Cloud AI Doorbell',
     short_name: 'RT7 Doorbell',
@@ -440,17 +455,17 @@ app.get('/manifest.webmanifest', (req, res) => {
     theme_color: '#071f25',
     description: 'RT7 Cloud AI Doorbell / GPIO / Face / Music',
     icons: [
-      { src: '/rt7-icon-192.png', sizes: '192x192', type: 'image/png' },
-      { src: '/rt7-icon-512.png', sizes: '512x512', type: 'image/png' }
+      { src: '/rt7-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }
     ]
   }));
-});
-app.get('/rt7-icon-192.png', (req, res) => { res.redirect('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192"><rect width="192" height="192" rx="34" fill="%23071f25"/><text x="96" y="112" text-anchor="middle" font-size="56" fill="white" font-family="Arial">RT7</text></svg>'); });
-app.get('/rt7-icon-512.png', (req, res) => { res.redirect('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="90" fill="%23071f25"/><text x="256" y="300" text-anchor="middle" font-size="150" fill="white" font-family="Arial">RT7</text></svg>'); });
+}
+app.get('/manifest.webmanifest', rt7SendPwaManifest_);
+app.get('/manifest.json', rt7SendPwaManifest_);
+app.get('/rt7-icon.svg', (req, res) => { res.type('image/svg+xml').send('<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><rect width="512" height="512" rx="90" fill="#071f25"/><text x="256" y="302" text-anchor="middle" font-size="145" fill="white" font-family="Arial,sans-serif" font-weight="900">RT7</text></svg>'); });
 app.get('/sw.js', (req, res) => {
   res.type('application/javascript').send(`
 const RT7_CACHE='rt7-v56n-pwa-cache-v1';
-self.addEventListener('install', e=>{ self.skipWaiting(); e.waitUntil(caches.open(RT7_CACHE).then(c=>c.addAll(['/rt7_cloud_original_ui_doorbell','/manifest.webmanifest']).catch(()=>{}))); });
+self.addEventListener('install', e=>{ self.skipWaiting(); e.waitUntil(caches.open(RT7_CACHE).then(c=>c.addAll(['/rt7_cloud_original_ui_doorbell','/manifest.webmanifest','/manifest.json']).catch(()=>{}))); });
 self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
 self.addEventListener('push', event=>{
   let data={title:'🔔 有人按門鈴', body:'收到門鈴事件', url:'/rt7_cloud_original_ui_doorbell', tag:'rt7-doorbell'};
@@ -1890,7 +1905,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6L7 XiaoAi Start Button Fix</title>
+<title>RT7 Cloud Original UI V5.6N1 PWA Push Complete</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -1901,7 +1916,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.wakePanel{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:#fff}.wakeBtn{border:0;border-radius:8px;color:#fff;background:#16a34a;font-weight:900;font-size:14px;height:38px}.wakeHint{font-size:12px;color:#64748b;font-weight:800;display:flex;align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
-.actions{display:flex;justify-content:center;gap:10px;padding:10px 8px 4px}.act{width:66px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:58px;height:58px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
+.actions{display:flex;justify-content:center;gap:6px;padding:10px 4px 4px}.act{width:60px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:52px;height:52px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
 .selfiePanel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:9999;padding:14px;color:#fff;overflow:auto}.selfieCard{max-width:500px;margin:0 auto;background:#0b252b;border-radius:16px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.45)}.selfieTitle{font-size:20px;font-weight:900;margin:4px 0 10px;text-align:center}.selfieVideo{width:100%;background:#000;border-radius:12px;border:2px solid #334155;aspect-ratio:3/4;object-fit:cover}.selfieBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.selfieBtns button{border:0;border-radius:10px;height:46px;font-size:17px;font-weight:900}.selfieShot{background:#22c55e;color:#fff}.selfieCancel{background:#ef4444;color:#fff}.selfieHint{font-size:13px;color:#dbeafe;line-height:1.45;margin-top:8px;text-align:center}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
@@ -1912,7 +1927,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle" type="button">🔔</button><span id="lblPushNotify">通知</span></div></section><div id="rt7PushState" style="padding:2px 20px 8px;color:#16a34a;font-size:12px;font-weight:900;text-align:right">推播：未啟用</div>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
