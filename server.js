@@ -96,7 +96,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N6_VAPID_KEY_SYNC_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N7_ESPNOW_GATEWAY_PUSH_NOTIFY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
