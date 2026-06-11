@@ -96,7 +96,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N7_ESPNOW_GATEWAY_PUSH_NOTIFY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N8_ESPNOW_EVENT_NOTIFY_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -654,23 +654,29 @@ function handleDoorbell(req, res, endpointName) {
   doorbellState.count += 1;
   const dev = normalizeDevice(body, req);
   registerOrUpdateDevice(dev);
+  const isEspNow = String(body.source || '').toLowerCase() === 'espnow' || !!body.espnow_code || String(body.type || '').toLowerCase() === 'espnow_event';
+  const espnowCode = safeString(body.espnow_code || body.code || '');
   const last = {
-    type: 'doorbell',
+    type: isEspNow ? 'espnow_event' : 'doorbell',
     endpoint: endpointName,
     device_id: dev.id,
     device_name: dev.name,
     ip: body.ip || dev.ip,
-    source: body.source || 'esp32_button',
+    source: isEspNow ? 'espnow' : (body.source || 'esp32_button'),
+    espnow_code: espnowCode || undefined,
     count: body.count || doorbellState.count,
-    message: body.message || '有人按門鈴',
+    message: body.message || (isEspNow ? ('ESP-NOW事件：控制碼 ' + (espnowCode || '-')) : '有人按門鈴'),
     time: nowIso()
   };
   doorbellState.last = last;
   const event = appendEvent(last);
+  // Keep websocket type as doorbell for backward-compatible UI/audio, but event.type is espnow_event.
   broadcast('doorbell', event);
-  rt7SendPushDoorbell_({ body: '收到門鈴：' + safeString(last.message || '有人按門鈴'), url: '/rt7_cloud_original_ui_doorbell', device_id: dev.id, device_name: dev.name }).catch(e => console.warn('[RT7_PUSH][ERR]', String(e && e.message || e)));
-  console.log('[RT7][DOORBELL]', JSON.stringify(event));
-  res.json({ ok: true, message: 'doorbell received', state: doorbellState, event });
+  const pushTitle = isEspNow ? '📡 ESP-NOW事件' : '🔔 有人按門鈴';
+  const pushBody = isEspNow ? ('收到 ESP-NOW 控制碼：' + (espnowCode || '-')) : ('收到門鈴：' + safeString(last.message || '有人按門鈴'));
+  rt7SendPushDoorbell_({ title: pushTitle, body: pushBody, url: '/rt7_cloud_original_ui_doorbell', device_id: dev.id, device_name: dev.name }).catch(e => console.warn('[RT7_PUSH][ERR]', String(e && e.message || e)));
+  console.log(isEspNow ? '[RT7][ESPNOW_EVENT]' : '[RT7][DOORBELL]', JSON.stringify(event));
+  res.json({ ok: true, message: isEspNow ? 'espnow event received' : 'doorbell received', state: doorbellState, event });
 }
 
 app.post('/api/rt7/phase9n/doorbell/event', (req, res) => handleDoorbell(req, res, 'legacy_phase9n'));
@@ -685,6 +691,11 @@ app.post('/api/doorbell', (req, res) => handleDoorbell(req, res, 'cloud_v3'));
 app.get('/api/doorbell', (req, res) => handleDoorbell(req, res, 'cloud_v3_get'));
 app.get('/api/rt7/doorbell/state', (req, res) => { res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate'); res.json({ ok: true, state: doorbellState }); });
 app.get('/api/doorbell/state', (req, res) => { res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate'); res.json({ ok: true, state: doorbellState }); });
+app.get('/api/rt7/espnow/state', (req, res) => {
+  res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
+  const latestEspnow = readEvents(50).find(e => e && (e.type === 'espnow_event' || e.source === 'espnow'));
+  res.json({ ok: true, version: SERVER_VERSION, last: latestEspnow || null, state: doorbellState });
+});
 
 // ---------- Event Logger ----------
 app.post('/api/events/log', (req, res) => {
