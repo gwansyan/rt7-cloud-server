@@ -102,7 +102,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7B_USER_MANAGER_DELETE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7B1_USER_MANAGER_ROUTE_CRASH_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -3997,7 +3997,8 @@ loadDevices();
 });
 
 app.get('/rt7_log_viewer', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
-app.get('/rt7_user_manager','/rt7_event_log', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
+app.get('/rt7_user_manager', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
+app.get('/rt7_event_log', (req,res)=>res.redirect(307,'/rt7_cloud_admin'));
 
 
 
