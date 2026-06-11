@@ -156,7 +156,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D2_USER_SYSTEM_ACCESS_TOGGLE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D4_DEVICE_TRANSFER_OWNER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -312,7 +312,25 @@ body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-syst
 <div class="card"><div class="label">你的設備</div><div class="value">${esc(userDevices.join(', '))}</div><div class="label">綁定說明</div><div class="small">#1 是 RT7 主門禁；#2~#4 是附屬影像門禁。admin 可查看全部設備，一般使用者只可查看綁定設備。</div>${isAdmin?`<div class="actions"><form method="post" action="/api/rt7/master/bind"><input name="master_uid" value="${esc(master.master_uid)}" placeholder="RT7-MASTER-XXXXXXXXXXXX"><button class="btn green">重新綁定主門禁</button></form></div>`:''}</div></div>
 <div class="card"><h2>#1~#4 設備狀態</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態 / 最後上線</th><th>綁定</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無設備資料</td></tr>'}</tbody></table></div>
 ${isAdmin?`<div class="card"><h2>使用者綁定清單</h2><table><thead><tr><th>帳號</th><th>角色</th><th>開通</th><th>主門禁 UID</th><th>設備</th></tr></thead><tbody>${userRows || '<tr><td colspan="4">尚無使用者</td></tr>'}</tbody></table></div>`:''}
-<div class="actions"><a class="btn" href="/api/rt7/master/status">Master JSON</a><a class="btn" href="/api/rt7/master/devices">Devices JSON</a><a class="btn gray" href="/rt7_user_manager">使用者管理</a></div>
+<div class="actions"><a class="btn" href="/api/rt7/master/status">Master JSON</a><a class="btn" href="/api/rt7/master/devices">Devices JSON</a><a class="btn gray" href="/rt7_user_manager">使用者管理</a><a class="btn gray" href="/rt7_device_transfer_owner">轉移Owner</a></div>
+</div></body></html>`;
+}
+
+
+function rt7DeviceTransferOwnerPage_(req, message) {
+  const current = rt7GetSessionUser_(req);
+  const master = rt7ReadMasterRegistry_();
+  const users = rt7ReadUsers_().sort((a,b)=>String(a.username||'').localeCompare(String(b.username||'')));
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const options = users.map(u => `<option value="${esc(u.id)}">${esc(u.username)} / ${esc(u.role||'user')} / ${u.enabled!==false?'帳號啟用':'帳號停用'} / ${u.system_enabled!==false?'系統開通':'系統解除'}</option>`).join('');
+  const rows = users.map(u => `<tr><td><b>${esc(u.username)}</b></td><td>${esc(u.role||'user')}</td><td>${u.enabled!==false?'<span class="ok">帳號啟用</span>':'<span class="bad">帳號停用</span>'}<br>${u.system_enabled!==false?'<span class="ok">系統開通</span>':'<span class="bad">系統解除</span>'}</td><td><code>${esc(u.master_uid||'')}</code></td><td>${esc((u.devices||[]).join(', ')||'-')}</td><td>${master.owner===u.username?'<span class="owner">目前 Owner</span>':''}</td></tr>`).join('');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 轉移主門禁 Owner</title><style>
+body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1050px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto;margin-bottom:14px}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#5d6b76;line-height:1.6;margin:8px 0 16px}.uid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f1f5f9;border:1px solid #d9e2ec;border-radius:10px;padding:8px;display:inline-block;font-weight:900}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.owner{display:inline-block;background:#fff1c2;color:#8a4b00;border-radius:999px;padding:4px 10px;font-weight:900}select,input{box-sizing:border-box;width:100%;font-size:16px;padding:12px;border:1px solid #cbd5e1;border-radius:10px;margin:8px 0 12px}button,.btn{display:inline-block;text-decoration:none;border:0;border-radius:10px;background:#159bd7;color:#fff;font-weight:900;padding:12px 14px}.btn.gray{background:#475569}button.red{background:#d12f2f}table{width:100%;border-collapse:collapse;min-width:840px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:18px}table{min-width:760px}}</style></head><body>
+<div class="top"><a href="/rt7_device_bind_status">← 設備綁定</a><h1>RT7 轉移主門禁 Owner</h1><a href="/rt7_user_manager">使用者管理</a><a href="/api/auth/logout">登出</a></div>
+<div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}
+<div class="grid"><div class="card"><h2>目前主門禁</h2><div class="hint">主門禁 UID</div><div class="uid">${esc(master.master_uid)}</div><div class="hint">目前 Owner：<b>${esc(master.owner||'尚未綁定')}</b><br>目前登入：admin ${esc(current && current.username || '')}</div></div>
+<div class="card"><h2>轉移 Owner</h2><form method="post" action="/api/rt7/master/transfer_owner" onsubmit="return confirm('確定轉移主門禁 Owner？新 Owner 會自動開通並綁定 #1~#4。')"><label>選擇新 Owner 帳號</label><select name="target_user_id" required>${options}</select><label><input type="checkbox" name="promote_admin" value="1" checked> 新 Owner 設為 admin</label><label><input type="checkbox" name="release_old" value="1"> 轉移後解除舊 Owner 的系統綁定</label><button class="red">轉移主門禁 Owner</button></form><div class="hint">此功能用於主門禁所有權轉移。轉移後，新 Owner 會綁定同一個 master_uid，並取得 #1~#4 設備權限。</div></div></div>
+<div class="card"><h2>使用者清單</h2><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>主門禁 UID</th><th>設備</th><th>Owner</th></tr></thead><tbody>${rows || '<tr><td colspan="6">尚無使用者</td></tr>'}</tbody></table></div>
 </div></body></html>`;
 }
 
@@ -339,7 +357,7 @@ function rt7UserManagerPage_(req, message) {
 </tr>`;
   }).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 使用者管理</title><style>
-body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1050px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#5d6b76;line-height:1.5;margin:8px 0 16px}table{width:100%;border-collapse:collapse;min-width:850px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:900;background:#e8eef4;color:#40516a;margin-top:4px}.tag.admin{background:#ffe5b5;color:#8a4b00}.tag.user{background:#dff3ff;color:#075985}.tag.self{background:#e8ffe8;color:#097b35}.ops{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:8px}.ops form{display:flex;gap:5px;align-items:center}.ops input,.ops select{min-width:0;width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:8px}.ops button{white-space:nowrap;border:0;border-radius:8px;background:#13a85a;color:#fff;font-weight:900;padding:8px 10px}.ops button.gray{background:#475569}.ops button.blue{background:#0b88d8}.ops button.red{background:#d12f2f}.ops button.green{background:#0eaa5b}.ops button:disabled{opacity:.45}@media(max-width:720px){.ops{grid-template-columns:1fr}.top h1{font-size:18px}}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/rt7_device_bind_status">設備綁定</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可刪除帳號、停用帳號、修改角色、重設密碼，也可用「開通/解除系統」控制帳號是否可使用本系統。解除後該帳號無法進入主頁、GPIO、人臉資料庫與通知設定；ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
+body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1050px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#5d6b76;line-height:1.5;margin:8px 0 16px}table{width:100%;border-collapse:collapse;min-width:850px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:900;background:#e8eef4;color:#40516a;margin-top:4px}.tag.admin{background:#ffe5b5;color:#8a4b00}.tag.user{background:#dff3ff;color:#075985}.tag.self{background:#e8ffe8;color:#097b35}.ops{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:8px}.ops form{display:flex;gap:5px;align-items:center}.ops input,.ops select{min-width:0;width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:8px}.ops button{white-space:nowrap;border:0;border-radius:8px;background:#13a85a;color:#fff;font-weight:900;padding:8px 10px}.ops button.gray{background:#475569}.ops button.blue{background:#0b88d8}.ops button.red{background:#d12f2f}.ops button.green{background:#0eaa5b}.ops button:disabled{opacity:.45}@media(max-width:720px){.ops{grid-template-columns:1fr}.top h1{font-size:18px}}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/rt7_device_bind_status">設備綁定</a><a href="/rt7_device_transfer_owner">轉移Owner</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可刪除帳號、停用帳號、修改角色、重設密碼，也可用「開通/解除系統」控制帳號是否可使用本系統。解除後該帳號無法進入主頁、GPIO、人臉資料庫與通知設定；ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
 }
 
 function readDevices() {
@@ -913,6 +931,43 @@ app.post('/api/rt7/master/bind', rt7RequireAdmin_, (req, res) => {
   res.json({ ok:true, version:SERVER_VERSION, master });
 });
 
+
+
+app.get('/rt7_device_transfer_owner', rt7RequireAdmin_, (req, res) => res.type('html').send(rt7DeviceTransferOwnerPage_(req, req.query.msg || '')));
+app.post('/api/rt7/master/transfer_owner', rt7RequireAdmin_, (req, res) => {
+  const targetId = safeString(req.body.target_user_id || req.query.target_user_id).trim();
+  const promoteAdmin = safeString(req.body.promote_admin || req.query.promote_admin) !== '0';
+  const releaseOld = safeString(req.body.release_old || req.query.release_old) === '1';
+  const current = req.rt7User;
+  const master = rt7ReadMasterRegistry_();
+  let users = rt7ReadUsers_();
+  const target = users.find(u => u.id === targetId);
+  if (!target) return res.redirect('/rt7_device_transfer_owner?msg=' + encodeURIComponent('找不到新 Owner 帳號'));
+  const oldOwnerName = master.owner || (current && current.username) || '';
+  target.enabled = true;
+  target.system_enabled = true;
+  target.master_uid = master.master_uid;
+  target.devices = ['#1','#2','#3','#4'];
+  if (promoteAdmin) target.role = 'admin';
+  master.owner = target.username;
+  master.devices = ['#1','#2','#3','#4'];
+  master.transferred_at = nowIso();
+  master.transferred_by = current && current.username;
+  if (releaseOld && oldOwnerName && oldOwnerName !== target.username) {
+    const old = users.find(u => u.username === oldOwnerName);
+    if (old) {
+      if ((old.role || 'user') === 'admin' && users.filter(x => x.id !== old.id && x.enabled !== false && x.system_enabled !== false && (x.role || 'user') === 'admin').length < 1) {
+        return res.redirect('/rt7_device_transfer_owner?msg=' + encodeURIComponent('不能解除舊 Owner：會造成沒有已開通 admin'));
+      }
+      old.system_enabled = false;
+      old.devices = [];
+    }
+  }
+  rt7SaveUsers_(users);
+  rt7SaveMasterRegistry_(master);
+  appendEvent({ type:'master_transfer_owner', master_uid:master.master_uid, old_owner:oldOwnerName, new_owner:target.username, by:current && current.username, release_old:releaseOld, ip:clientIp(req) });
+  res.redirect('/rt7_device_bind_status?msg=' + encodeURIComponent('已轉移主門禁 Owner：' + (oldOwnerName || '-') + ' → ' + target.username));
+});
 
 app.get('/rt7_device_bind_status', rt7RequireLogin_, (req, res) => res.type('html').send(rt7DeviceBindStatusPage_(req, req.query.msg || '')));
 app.get('/rt7_user_manager', rt7RequireAdmin_, (req, res) => res.type('html').send(rt7UserManagerPage_(req, req.query.msg || '')));
