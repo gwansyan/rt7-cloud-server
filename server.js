@@ -152,7 +152,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D_MASTER_DEVICE_UID_BIND';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D1_DEVICE_BIND_STATUS_PAGE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -267,6 +267,44 @@ function rt7InvalidateUserSessions_(userId) {
 function rt7CountAdmins_(users) {
   return (Array.isArray(users) ? users : []).filter(u => u && u.enabled !== false && (u.role || 'user') === 'admin').length;
 }
+
+function rt7DeviceBindStatusPage_(req, message) {
+  const current = rt7GetSessionUser_(req);
+  const master = rt7ReadMasterRegistry_();
+  const devices = rt7FilterDevicesForRequest_(req, readDevices());
+  const allDevices = readDevices();
+  const users = rt7ReadUsers_();
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const isAdmin = current && (current.role || 'user') === 'admin';
+  const userDevices = rt7UserAllowedDeviceIds_(current);
+  const onlineCut = Date.now() - 120000;
+  const parseTime = (t) => { const n = Date.parse(t || ''); return Number.isFinite(n) ? n : 0; };
+  const rows = (isAdmin ? allDevices : devices).map(d => {
+    const bound = userDevices.includes(d.id);
+    const t = parseTime(d.last_online);
+    const online = t && t >= onlineCut;
+    const role = d.id === '#1' ? '主門禁' : '附屬門禁';
+    return `<tr class="${bound?'bound':'unbound'}">
+<td><b>${esc(d.id)}</b><div class="small">${esc(role)}</div></td>
+<td>${esc(d.name || '')}</td>
+<td><code>${esc(d.ip || '-')}</code></td>
+<td>${online?'<span class="ok">ONLINE</span>':'<span class="bad">OFFLINE</span>'}<div class="small">${esc(d.last_online || '尚無上線紀錄')}</div></td>
+<td>${bound?'<span class="pill okp">已綁定</span>':'<span class="pill badp">未綁定</span>'}</td>
+</tr>`;
+  }).join('');
+  const userRows = users.map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.role||'user')}</td><td><code>${esc(u.master_uid||'')}</code></td><td>${esc((u.devices||[]).join(', '))}</td></tr>`).join('');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 設備綁定狀態</title><style>
+body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1100px;margin:0 auto;padding:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto;margin-bottom:14px}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.label{font-size:13px;color:#64748b;font-weight:800}.value{font-size:18px;font-weight:900;margin:4px 0 10px}.uid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f1f5f9;border:1px solid #d9e2ec;border-radius:10px;padding:8px;display:inline-block}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.pill{display:inline-block;border-radius:999px;padding:4px 9px;font-weight:900}.okp{background:#e8ffe8;color:#097b35}.badp{background:#ffe8e8;color:#b42318}.small{font-size:12px;color:#64748b;margin-top:4px}table{width:100%;border-collapse:collapse;min-width:780px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.btn{display:inline-block;text-decoration:none;border:0;border-radius:10px;background:#159bd7;color:#fff;font-weight:900;padding:10px 12px}.btn.gray{background:#475569}.btn.green{background:#0eaa5b}input{padding:10px;border:1px solid #cbd5e1;border-radius:10px;min-width:260px}form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:18px}table{min-width:700px}}</style></head><body>
+<div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 設備綁定狀態</h1><a href="/rt7_user_manager">使用者管理</a><a href="/api/auth/logout">登出</a></div>
+<div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}
+<div class="grid"><div class="card"><div class="label">主門禁 UID</div><div class="value"><span class="uid">${esc(master.master_uid)}</span></div><div class="label">Owner</div><div class="value">${esc(master.owner || '尚未綁定')}</div><div class="label">目前登入</div><div class="value">${esc(current && current.username || '')} <span class="small">${esc(current && current.role || '')}</span></div></div>
+<div class="card"><div class="label">你的設備</div><div class="value">${esc(userDevices.join(', '))}</div><div class="label">綁定說明</div><div class="small">#1 是 RT7 主門禁；#2~#4 是附屬影像門禁。admin 可查看全部設備，一般使用者只可查看綁定設備。</div>${isAdmin?`<div class="actions"><form method="post" action="/api/rt7/master/bind"><input name="master_uid" value="${esc(master.master_uid)}" placeholder="RT7-MASTER-XXXXXXXXXXXX"><button class="btn green">重新綁定主門禁</button></form></div>`:''}</div></div>
+<div class="card"><h2>#1~#4 設備狀態</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態 / 最後上線</th><th>綁定</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無設備資料</td></tr>'}</tbody></table></div>
+${isAdmin?`<div class="card"><h2>使用者綁定清單</h2><table><thead><tr><th>帳號</th><th>角色</th><th>主門禁 UID</th><th>設備</th></tr></thead><tbody>${userRows || '<tr><td colspan="4">尚無使用者</td></tr>'}</tbody></table></div>`:''}
+<div class="actions"><a class="btn" href="/api/rt7/master/status">Master JSON</a><a class="btn" href="/api/rt7/master/devices">Devices JSON</a><a class="btn gray" href="/rt7_user_manager">使用者管理</a></div>
+</div></body></html>`;
+}
+
 function rt7UserManagerPage_(req, message) {
   const current = rt7GetSessionUser_(req);
   const users = rt7ReadUsers_().sort((a,b) => String(a.created_at||'').localeCompare(String(b.created_at||'')));
@@ -288,7 +326,7 @@ function rt7UserManagerPage_(req, message) {
 </tr>`;
   }).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 使用者管理</title><style>
-body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1050px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#5d6b76;line-height:1.5;margin:8px 0 16px}table{width:100%;border-collapse:collapse;min-width:850px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:900;background:#e8eef4;color:#40516a;margin-top:4px}.tag.admin{background:#ffe5b5;color:#8a4b00}.tag.user{background:#dff3ff;color:#075985}.tag.self{background:#e8ffe8;color:#097b35}.ops{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px}.ops form{display:flex;gap:5px;align-items:center}.ops input,.ops select{min-width:0;width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:8px}.ops button{white-space:nowrap;border:0;border-radius:8px;background:#13a85a;color:#fff;font-weight:900;padding:8px 10px}.ops button.gray{background:#475569}.ops button.blue{background:#0b88d8}.ops button.red{background:#d12f2f}.ops button:disabled{opacity:.45}@media(max-width:720px){.ops{grid-template-columns:1fr}.top h1{font-size:18px}}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可刪除帳號、停用帳號、修改角色與重設密碼。ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
+body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1050px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#5d6b76;line-height:1.5;margin:8px 0 16px}table{width:100%;border-collapse:collapse;min-width:850px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:900;background:#e8eef4;color:#40516a;margin-top:4px}.tag.admin{background:#ffe5b5;color:#8a4b00}.tag.user{background:#dff3ff;color:#075985}.tag.self{background:#e8ffe8;color:#097b35}.ops{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px}.ops form{display:flex;gap:5px;align-items:center}.ops input,.ops select{min-width:0;width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:8px}.ops button{white-space:nowrap;border:0;border-radius:8px;background:#13a85a;color:#fff;font-weight:900;padding:8px 10px}.ops button.gray{background:#475569}.ops button.blue{background:#0b88d8}.ops button.red{background:#d12f2f}.ops button:disabled{opacity:.45}@media(max-width:720px){.ops{grid-template-columns:1fr}.top h1{font-size:18px}}</style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/rt7_device_bind_status">設備綁定</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可刪除帳號、停用帳號、修改角色與重設密碼。ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
 }
 
 function readDevices() {
@@ -831,7 +869,7 @@ app.post('/api/auth/register', (req, res) => {
   }
   rt7CreateSession_(req, res, u);
   appendEvent({ type:'auth_register', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin });
-  res.redirect(makeAdmin ? '/rt7_user_manager?msg=' + encodeURIComponent('註冊成功，您是 admin，可管理使用者') : '/rt7_cloud_original_ui_doorbell');
+  res.redirect(makeAdmin ? '/rt7_device_bind_status?msg=' + encodeURIComponent('註冊成功，已綁定主門禁與設備') : '/rt7_cloud_original_ui_doorbell');
 });
 app.get('/api/auth/logout', (req, res) => {
   const sid = rt7ParseCookies_(req)[AUTH_COOKIE];
@@ -863,6 +901,7 @@ app.post('/api/rt7/master/bind', rt7RequireAdmin_, (req, res) => {
 });
 
 
+app.get('/rt7_device_bind_status', rt7RequireLogin_, (req, res) => res.type('html').send(rt7DeviceBindStatusPage_(req, req.query.msg || '')));
 app.get('/rt7_user_manager', rt7RequireAdmin_, (req, res) => res.type('html').send(rt7UserManagerPage_(req, req.query.msg || '')));
 app.post('/api/auth/users/delete', rt7RequireAdmin_, (req, res) => {
   const id = safeString(req.body.id).trim();
