@@ -26,6 +26,8 @@ const VAPID_FILE = path.join(DATA_DIR, 'vapid_keys.json');
 // V5.7A user login/register
 const USERS_FILE = path.join(DATA_DIR, 'rt7_users.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'rt7_sessions.json');
+// V5.7D master device UID binding
+const MASTER_REGISTRY_FILE = path.join(DATA_DIR, 'rt7_master_registry.json');
 const AUTH_COOKIE = 'rt7_sid';
 
 function rt7ReadJsonFile_(file, fallback) {
@@ -34,6 +36,54 @@ function rt7ReadJsonFile_(file, fallback) {
 function rt7WriteJsonFile_(file, data) {
   ensureDataDir();
   fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function rt7NormalizeMasterUid_(v) {
+  v = safeString(v).trim().toUpperCase().replace(/[^A-Z0-9\-_:]/g, '');
+  if (!v) return '';
+  if (v.indexOf('RT7-MASTER-') !== 0) v = 'RT7-MASTER-' + v.replace(/^RT7[-_]?/,'').replace(/^MASTER[-_]?/,'');
+  return v.slice(0, 64);
+}
+function rt7DefaultMasterUid_() {
+  return rt7NormalizeMasterUid_(process.env.RT7_MASTER_UID || process.env.MASTER_UID || 'RT7-MASTER-0001');
+}
+function rt7ReadMasterRegistry_() {
+  ensureDataDir();
+  const fallback = { master_uid: rt7DefaultMasterUid_(), owner: null, devices: ['#1','#2','#3','#4'], created_at: nowIso(), updated_at: nowIso() };
+  const obj = rt7ReadJsonFile_(MASTER_REGISTRY_FILE, fallback);
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return fallback;
+  obj.master_uid = rt7NormalizeMasterUid_(obj.master_uid || fallback.master_uid) || fallback.master_uid;
+  obj.devices = Array.isArray(obj.devices) && obj.devices.length ? obj.devices : ['#1','#2','#3','#4'];
+  return obj;
+}
+function rt7SaveMasterRegistry_(obj) {
+  obj = obj && typeof obj === 'object' ? obj : {};
+  obj.master_uid = rt7NormalizeMasterUid_(obj.master_uid || rt7DefaultMasterUid_()) || rt7DefaultMasterUid_();
+  obj.devices = Array.isArray(obj.devices) && obj.devices.length ? obj.devices : ['#1','#2','#3','#4'];
+  obj.updated_at = nowIso();
+  rt7WriteJsonFile_(MASTER_REGISTRY_FILE, obj);
+  return obj;
+}
+function rt7NormalizeDeviceIds_(v) {
+  const arr = Array.isArray(v) ? v : String(v || '').split(/[,\s]+/);
+  const out = [];
+  arr.forEach(x => {
+    x = safeString(x).trim().toUpperCase();
+    if (/^[1-4]$/.test(x)) x = '#' + x;
+    if (/^#[1-4]$/.test(x) && !out.includes(x)) out.push(x);
+  });
+  return out.length ? out : ['#1'];
+}
+function rt7UserAllowedDeviceIds_(u) {
+  if (!u) return ['#1','#2','#3','#4'];
+  if ((u.role || 'user') === 'admin') return ['#1','#2','#3','#4'];
+  return rt7NormalizeDeviceIds_(u.devices || u.device_ids || '#1');
+}
+function rt7FilterDevicesForRequest_(req, devices) {
+  const u = req && (req.rt7User || rt7GetSessionUser_(req));
+  if (!u) return devices;
+  const allowed = new Set(rt7UserAllowedDeviceIds_(u));
+  return (devices || []).filter(d => allowed.has(d.id));
 }
 function rt7GetVapidKeys_() {
   ensureDataDir();
@@ -102,7 +152,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7B2_REGISTER_ADMIN_REDIRECT_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D_MASTER_DEVICE_UID_BIND';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -158,7 +208,7 @@ function rt7HashPassword_(password, salt) {
   return crypto.pbkdf2Sync(String(password || ''), salt, 120000, 32, 'sha256').toString('hex');
 }
 function rt7NewId_(prefix) { return prefix + '_' + crypto.randomBytes(16).toString('hex'); }
-function rt7PublicUser_(u) { return u ? { id:u.id, username:u.username, role:u.role || 'user', enabled:u.enabled !== false, created_at:u.created_at } : null; }
+function rt7PublicUser_(u) { return u ? { id:u.id, username:u.username, role:u.role || 'user', enabled:u.enabled !== false, created_at:u.created_at, master_uid:u.master_uid || '', devices:rt7UserAllowedDeviceIds_(u) } : null; }
 function rt7GetSessionUser_(req) {
   const sid = rt7ParseCookies_(req)[AUTH_COOKIE];
   if (!sid) return null;
@@ -186,7 +236,7 @@ function rt7AuthPage_(mode, message) {
   const isReg = mode === 'register';
   const title = isReg ? 'RT7 註冊' : 'RT7 登入';
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}"><label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin。之後註冊需輸入註冊碼。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}"><label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊需輸入註冊碼。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
 }
 function rt7RequireLogin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
@@ -754,6 +804,8 @@ app.post('/api/auth/register', (req, res) => {
   const username = safeString(req.body.username).trim().replace(/[^a-zA-Z0-9_@.\-]/g, '').slice(0, 40);
   const password = safeString(req.body.password);
   const code = safeString(req.body.register_code).trim();
+  const masterUidInput = rt7NormalizeMasterUid_(req.body.master_uid || '');
+  const devicePair = safeString(req.body.device_pair || '#1').trim();
   if (!username || password.length < 4) return res.status(400).type('html').send(rt7AuthPage_('register', '帳號或密碼太短'));
   const users = rt7ReadUsers_();
   if (users.some(u => String(u.username).toLowerCase() === username.toLowerCase())) return res.status(409).type('html').send(rt7AuthPage_('register', '帳號已存在'));
@@ -764,11 +816,21 @@ app.post('/api/auth/register', (req, res) => {
   const makeAdmin = first || noAdmin;
   const needCode = process.env.RT7_REGISTER_CODE || 'rt7';
   if (!makeAdmin && code !== needCode) return res.status(403).type('html').send(rt7AuthPage_('register', '註冊碼錯誤'));
+  const masterReg = rt7ReadMasterRegistry_();
+  const masterUid = masterUidInput || masterReg.master_uid || rt7DefaultMasterUid_();
+  const userDevices = makeAdmin ? ['#1','#2','#3','#4'] : rt7NormalizeDeviceIds_(devicePair || '#1');
   const salt = crypto.randomBytes(16).toString('hex');
-  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:makeAdmin?'admin':'user', enabled:true, created_at:nowIso(), ip:clientIp(req) };
+  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:makeAdmin?'admin':'user', enabled:true, master_uid:masterUid, devices:userDevices, created_at:nowIso(), ip:clientIp(req) };
   users.push(u); rt7SaveUsers_(users);
+  if (makeAdmin) {
+    masterReg.master_uid = masterUid;
+    masterReg.owner = username;
+    masterReg.devices = ['#1','#2','#3','#4'];
+    masterReg.bound_at = nowIso();
+    rt7SaveMasterRegistry_(masterReg);
+  }
   rt7CreateSession_(req, res, u);
-  appendEvent({ type:'auth_register', username:u.username, role:u.role, ip:clientIp(req), auto_admin:makeAdmin });
+  appendEvent({ type:'auth_register', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin });
   res.redirect(makeAdmin ? '/rt7_user_manager?msg=' + encodeURIComponent('註冊成功，您是 admin，可管理使用者') : '/rt7_cloud_original_ui_doorbell');
 });
 app.get('/api/auth/logout', (req, res) => {
@@ -779,6 +841,27 @@ app.get('/api/auth/logout', (req, res) => {
 });
 app.get('/api/auth/me', (req, res) => res.json({ ok:true, version:SERVER_VERSION, user:rt7PublicUser_(rt7GetSessionUser_(req)) }));
 app.get('/api/auth/users', rt7RequireAdmin_, (req, res) => res.json({ ok:true, users:rt7ReadUsers_().map(rt7PublicUser_) }));
+app.get('/api/rt7/master/status', (req, res) => {
+  const master = rt7ReadMasterRegistry_();
+  const user = rt7GetSessionUser_(req);
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, user:rt7PublicUser_(user) });
+});
+app.get('/api/rt7/master/devices', rt7RequireLogin_, (req, res) => {
+  res.json({ ok:true, version:SERVER_VERSION, master:rt7ReadMasterRegistry_(), devices:rt7FilterDevicesForRequest_(req, readDevices()) });
+});
+app.post('/api/rt7/master/bind', rt7RequireAdmin_, (req, res) => {
+  const master = rt7ReadMasterRegistry_();
+  master.master_uid = rt7NormalizeMasterUid_(req.body.master_uid || req.query.master_uid || master.master_uid);
+  master.owner = req.rt7User.username;
+  master.devices = ['#1','#2','#3','#4'];
+  rt7SaveMasterRegistry_(master);
+  let users = rt7ReadUsers_();
+  users = users.map(u => u.id === req.rt7User.id ? Object.assign({}, u, { master_uid:master.master_uid, devices:['#1','#2','#3','#4'] }) : u);
+  rt7SaveUsers_(users);
+  appendEvent({ type:'master_bind', master_uid:master.master_uid, owner:master.owner, ip:clientIp(req) });
+  res.json({ ok:true, version:SERVER_VERSION, master });
+});
+
 
 app.get('/rt7_user_manager', rt7RequireAdmin_, (req, res) => res.type('html').send(rt7UserManagerPage_(req, req.query.msg || '')));
 app.post('/api/auth/users/delete', rt7RequireAdmin_, (req, res) => {
@@ -956,7 +1039,7 @@ app.post('/api/device/register', (req, res) => {
   res.json({ ok: true, device: dev, devices: readDevices() });
 });
 
-app.get('/api/devices', (req, res) => res.json({ ok: true, version:SERVER_VERSION, devices: readDevices(), file:'data/devices.json' }));
+app.get('/api/devices', (req, res) => res.json({ ok: true, version:SERVER_VERSION, devices: rt7FilterDevicesForRequest_(req, readDevices()), master:rt7ReadMasterRegistry_(), file:'data/devices.json' }));
 app.post('/api/devices/save', (req, res) => {
   const devices = saveDevices(req.body?.devices || req.body || []);
   const event = appendEvent({ type: 'devices_save', device_count: devices.length, message: 'devices saved' });
@@ -3263,7 +3346,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 
 app.get('/api/rt7/events/latest', (req,res)=>res.redirect(307, '/api/events/latest?limit=' + encodeURIComponent(req.query.limit || '200')));
 app.get('/api/rt7/events/clear', (req,res)=>res.redirect(307, '/api/events/clear'));
-app.get('/api/rt7/devices/list', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, devices:readDevices(), current_device_id:cloudState.current_device_id, file:'data/devices.json' }));
+app.get('/api/rt7/devices/list', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, devices:rt7FilterDevicesForRequest_(req, readDevices()), master:rt7ReadMasterRegistry_(), current_device_id:cloudState.current_device_id, file:'data/devices.json' }));
 app.post('/api/rt7/devices/save', (req,res)=>{
   const devices = saveDevices(req.body?.devices || req.body || []);
   appendEvent({ type:'devices_save', device_count:devices.length, file:'data/devices.json', message:'devices saved from V5.6B Device Manager' });
