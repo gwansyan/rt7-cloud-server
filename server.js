@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const jpeg = require('jpeg-js');
 let webpush = null;
@@ -21,6 +22,11 @@ const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
 const PUSH_SUBS_FILE = path.join(DATA_DIR, 'push_subscriptions.json');
 const VAPID_FILE = path.join(DATA_DIR, 'vapid_keys.json');
+
+// V5.7A user login/register
+const USERS_FILE = path.join(DATA_DIR, 'rt7_users.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'rt7_sessions.json');
+const AUTH_COOKIE = 'rt7_sid';
 
 function rt7ReadJsonFile_(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8') || 'null') || fallback; } catch (_) { return fallback; }
@@ -96,7 +102,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_6N8_ESPNOW_EVENT_NOTIFY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7A_USER_LOGIN_REGISTER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -124,6 +130,80 @@ function safeString(v) { return (v === undefined || v === null) ? '' : String(v)
 function clientIp(req) {
   const fwd = safeString(req.headers['x-forwarded-for']).split(',')[0].trim();
   return fwd || req.socket.remoteAddress || '';
+}
+
+
+// ---------------- V5.7A Auth helpers ----------------
+function rt7ReadUsers_() {
+  ensureDataDir();
+  const arr = rt7ReadJsonFile_(USERS_FILE, []);
+  return Array.isArray(arr) ? arr : [];
+}
+function rt7SaveUsers_(arr) { rt7WriteJsonFile_(USERS_FILE, Array.isArray(arr) ? arr : []); }
+function rt7ReadSessions_() {
+  ensureDataDir();
+  const obj = rt7ReadJsonFile_(SESSIONS_FILE, {});
+  return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+}
+function rt7SaveSessions_(obj) { rt7WriteJsonFile_(SESSIONS_FILE, obj || {}); }
+function rt7ParseCookies_(req) {
+  const out = {};
+  String(req.headers.cookie || '').split(';').forEach(part => {
+    const i = part.indexOf('=');
+    if (i > 0) out[decodeURIComponent(part.slice(0, i).trim())] = decodeURIComponent(part.slice(i + 1).trim());
+  });
+  return out;
+}
+function rt7HashPassword_(password, salt) {
+  return crypto.pbkdf2Sync(String(password || ''), salt, 120000, 32, 'sha256').toString('hex');
+}
+function rt7NewId_(prefix) { return prefix + '_' + crypto.randomBytes(16).toString('hex'); }
+function rt7PublicUser_(u) { return u ? { id:u.id, username:u.username, role:u.role || 'user', enabled:u.enabled !== false, created_at:u.created_at } : null; }
+function rt7GetSessionUser_(req) {
+  const sid = rt7ParseCookies_(req)[AUTH_COOKIE];
+  if (!sid) return null;
+  const sessions = rt7ReadSessions_();
+  const ss = sessions[sid];
+  if (!ss || !ss.user_id || (ss.expires_at && Date.now() > ss.expires_at)) return null;
+  const user = rt7ReadUsers_().find(u => u.id === ss.user_id && u.enabled !== false);
+  return user || null;
+}
+function rt7SetLoginCookie_(res, sid) {
+  res.setHeader('Set-Cookie', AUTH_COOKIE + '=' + encodeURIComponent(sid) + '; Path=/; Max-Age=' + (60*60*24*30) + '; HttpOnly; SameSite=Lax; Secure');
+}
+function rt7ClearLoginCookie_(res) {
+  res.setHeader('Set-Cookie', AUTH_COOKIE + '=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure');
+}
+function rt7CreateSession_(req, res, user) {
+  const sid = rt7NewId_('sid');
+  const sessions = rt7ReadSessions_();
+  sessions[sid] = { user_id:user.id, created_at:Date.now(), expires_at:Date.now()+60*60*24*30*1000, ip:clientIp(req), user_agent:safeString(req.headers['user-agent']) };
+  rt7SaveSessions_(sessions);
+  rt7SetLoginCookie_(res, sid);
+  return sid;
+}
+function rt7AuthPage_(mode, message) {
+  const isReg = mode === 'register';
+  const title = isReg ? 'RT7 註冊' : 'RT7 登入';
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}"><label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者會自動成為 admin。之後註冊需輸入註冊碼。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+}
+function rt7RequireLogin_(req, res, next) {
+  const u = rt7GetSessionUser_(req);
+  if (u) { req.rt7User = u; return next(); }
+  if (req.path.startsWith('/api/')) return res.status(401).json({ ok:false, error:'login_required', login:'/rt7_login' });
+  return res.redirect('/rt7_login?next=' + encodeURIComponent(req.originalUrl || '/rt7_cloud_original_ui_doorbell'));
+}
+function rt7RequireAdmin_(req, res, next) {
+  const u = rt7GetSessionUser_(req);
+  if (!u) return rt7RequireLogin_(req, res, next);
+  if ((u.role || 'user') !== 'admin') return res.status(403).send('需要 admin 權限');
+  req.rt7User = u; return next();
+}
+function rt7AuthNav_(req) {
+  const u = rt7GetSessionUser_(req);
+  if (!u) return '<a href="/rt7_login">登入</a>';
+  return '<span style="font-weight:900;color:#0a2">' + u.username + '</span> <a href="/api/auth/logout">登出</a>';
 }
 
 function readDevices() {
@@ -606,6 +686,7 @@ app.get('/', (req, res) => {
 <main class="wrap">
 <section class="card"><h2 class="ok">Server OK</h2><p>Railway Node.js Server is running.</p>
 <a class="btn" href="/rt7_cloud_original_ui_doorbell">原始 UI 雲端門鈴</a>
+<a class="btn" href="/rt7_login">登入 / 註冊</a>
 <a class="btn green" href="/rt7_cloud_phase10_no_nodered">Phase10 雲端影像/對講/AI（無 Node-RED）</a>
 <a class="btn" href="/rt7_cloud_doorbell_player">雲端門鈴播放器</a>
 <a class="btn" href="/rt7_cloud_admin">雲端管理頁</a>
@@ -616,6 +697,57 @@ app.get('/', (req, res) => {
 </section>
 <section class="card"><h3>部署策略</h3><p>V4.3 採「原始手機 UI + 最新 Snapshot」：保留原始 UI 風格，只把 ESP32 主動上傳的最新照片整合到手機畫面；不混入對講或 Face Match。</p></section>
 </main>`));
+});
+
+
+// ---------------- V5.7A Auth routes ----------------
+app.get('/rt7_login', (req, res) => res.type('html').send(rt7AuthPage_('login', req.query.msg || '')));
+app.get('/rt7_register', (req, res) => res.type('html').send(rt7AuthPage_('register', req.query.msg || '')));
+app.post('/api/auth/login', (req, res) => {
+  const username = safeString(req.body.username).trim();
+  const password = safeString(req.body.password);
+  const users = rt7ReadUsers_();
+  const u = users.find(x => String(x.username).toLowerCase() === username.toLowerCase() && x.enabled !== false);
+  if (!u || rt7HashPassword_(password, u.salt) !== u.password_hash) return res.status(401).type('html').send(rt7AuthPage_('login', '帳號或密碼錯誤'));
+  rt7CreateSession_(req, res, u);
+  appendEvent({ type:'auth_login', username:u.username, role:u.role, ip:clientIp(req) });
+  const next = safeString(req.query.next || req.body.next || '/rt7_cloud_original_ui_doorbell');
+  res.redirect(next.startsWith('/') ? next : '/rt7_cloud_original_ui_doorbell');
+});
+app.post('/api/auth/register', (req, res) => {
+  const username = safeString(req.body.username).trim().replace(/[^a-zA-Z0-9_@.\-]/g, '').slice(0, 40);
+  const password = safeString(req.body.password);
+  const code = safeString(req.body.register_code).trim();
+  if (!username || password.length < 4) return res.status(400).type('html').send(rt7AuthPage_('register', '帳號或密碼太短'));
+  const users = rt7ReadUsers_();
+  if (users.some(u => String(u.username).toLowerCase() === username.toLowerCase())) return res.status(409).type('html').send(rt7AuthPage_('register', '帳號已存在'));
+  const first = users.length === 0;
+  const needCode = process.env.RT7_REGISTER_CODE || 'rt7';
+  if (!first && code !== needCode) return res.status(403).type('html').send(rt7AuthPage_('register', '註冊碼錯誤'));
+  const salt = crypto.randomBytes(16).toString('hex');
+  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:first?'admin':'user', enabled:true, created_at:nowIso(), ip:clientIp(req) };
+  users.push(u); rt7SaveUsers_(users);
+  rt7CreateSession_(req, res, u);
+  appendEvent({ type:'auth_register', username:u.username, role:u.role, ip:clientIp(req) });
+  res.redirect('/rt7_cloud_original_ui_doorbell');
+});
+app.get('/api/auth/logout', (req, res) => {
+  const sid = rt7ParseCookies_(req)[AUTH_COOKIE];
+  if (sid) { const sessions = rt7ReadSessions_(); delete sessions[sid]; rt7SaveSessions_(sessions); }
+  rt7ClearLoginCookie_(res);
+  res.redirect('/rt7_login?msg=' + encodeURIComponent('已登出'));
+});
+app.get('/api/auth/me', (req, res) => res.json({ ok:true, version:SERVER_VERSION, user:rt7PublicUser_(rt7GetSessionUser_(req)) }));
+app.get('/api/auth/users', rt7RequireAdmin_, (req, res) => res.json({ ok:true, users:rt7ReadUsers_().map(rt7PublicUser_) }));
+
+// Protect human-facing pages. ESP32 device APIs remain open for device compatibility.
+app.use((req, res, next) => {
+  const p = req.path || '';
+  const protectedPages = [
+    '/rt7_cloud_original_ui_doorbell','/rt7_cloud_admin','/rt7_device_manager','/rt7_face_db_manager','/rt7_gpio_control','/rt7_push_enable','/rt7_music_player','/rt7_cloud_doorbell_player','/rt7_snapshot_bridge_test','/rt7_cloud_phase10_no_nodered','/rt7_independent_full_video_intercom','/rt7_face_guard','/rt7_event_log','/rt7_log_viewer','/rt7_mapping','/rt7_stream_compare_test','/rt7_auto_stream_test'
+  ];
+  if (protectedPages.some(x => p === x || p.startsWith(x + '/'))) return rt7RequireLogin_(req, res, next);
+  next();
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, version: SERVER_VERSION, time: nowIso() }));
