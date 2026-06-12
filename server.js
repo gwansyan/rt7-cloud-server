@@ -156,7 +156,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D6_SYSTEM_CHECKBOX_ONCHANGE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D7_MULTI_USER_REGISTER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -240,7 +240,7 @@ function rt7AuthPage_(mode, message) {
   const isReg = mode === 'register';
   const title = isReg ? 'RT7 註冊' : 'RT7 登入';
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}"><label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊需輸入註冊碼。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}"><label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊者預設為 user，可由 admin 在使用者管理頁改成 admin 或開通/解除。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
 }
 function rt7RequireLogin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
@@ -373,7 +373,7 @@ function rt7SubmitSystemCheckbox_(cb){
   form.submit();
   return true;
 }
-</script></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/rt7_device_bind_status">設備綁定</a><a href="/rt7_device_transfer_owner">轉移Owner</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可刪除帳號、停用帳號、修改角色、重設密碼，也可用「開通/解除系統」控制帳號是否可使用本系統。解除後該帳號無法進入主頁、GPIO、人臉資料庫與通知設定；ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
+</script></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/rt7_device_bind_status">設備綁定</a><a href="/rt7_register">新增帳號</a><a href="/rt7_device_transfer_owner">轉移Owner</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可按右上「新增帳號」建立第二個帳號；第一個帳號自動 admin，後續帳號預設 user。可刪除帳號、停用帳號、修改角色、重設密碼，也可用「系統開通」勾選框控制帳號是否可使用本系統。解除後該帳號無法進入主頁、GPIO、人臉資料庫與通知設定；ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><div class="hint"><b>帳號數：</b>${users.length}　<b>已開通 admin：</b>${activeAdminCount}　<b>目前登入：</b>${esc(current && current.username || '-')}</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
 }
 
 function readDevices() {
@@ -914,8 +914,14 @@ app.post('/api/auth/register', (req, res) => {
     masterReg.bound_at = nowIso();
     rt7SaveMasterRegistry_(masterReg);
   }
+  const currentUser = rt7GetSessionUser_(req);
+  const currentIsAdmin = currentUser && (currentUser.role || 'user') === 'admin' && rt7UserSystemEnabled_(currentUser);
+  appendEvent({ type:'auth_register', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin, created_by: currentUser && currentUser.username });
+  // V5.7D7: 若 admin 在 /rt7_register 新增第二個帳號，不切換登入者，避免建立 user01 後失去 /rt7_user_manager 權限。
+  if (currentIsAdmin && !makeAdmin) {
+    return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('已新增帳號：' + u.username + '（預設 user，請在本頁改角色或開通/解除）'));
+  }
   rt7CreateSession_(req, res, u);
-  appendEvent({ type:'auth_register', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin });
   res.redirect(makeAdmin ? '/rt7_device_bind_status?msg=' + encodeURIComponent('註冊成功，已綁定主門禁與設備') : '/rt7_cloud_original_ui_doorbell');
 });
 app.get('/api/auth/logout', (req, res) => {
