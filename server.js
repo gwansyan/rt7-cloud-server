@@ -29,6 +29,7 @@ const SESSIONS_FILE = path.join(DATA_DIR, 'rt7_sessions.json');
 // V5.7D master device UID binding
 const MASTER_REGISTRY_FILE = path.join(DATA_DIR, 'rt7_master_registry.json');
 const AUTH_COOKIE = 'rt7_sid';
+const PLATFORM_COOKIE = 'rt7_platform_admin';
 
 function rt7ReadJsonFile_(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8') || 'null') || fallback; } catch (_) { return fallback; }
@@ -156,7 +157,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7D7_MULTI_USER_REGISTER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E_PLATFORM_ADMIN_COMMUNITY_MANAGER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -254,6 +255,56 @@ function rt7RequireLogin_(req, res, next) {
   if (req.path.startsWith('/api/')) return res.status(401).json({ ok:false, error:'login_required', login:'/rt7_login' });
   return res.redirect('/rt7_login?next=' + encodeURIComponent(req.originalUrl || '/rt7_cloud_original_ui_doorbell'));
 }
+
+
+// ---------------- V5.7E Railway Platform Admin helpers ----------------
+function rt7PlatformUsername_() { return safeString(process.env.RT7_PLATFORM_ADMIN_USER || process.env.RT7_CLOUD_ADMIN_USER || 'rt7cloud'); }
+function rt7PlatformPassword_() { return safeString(process.env.RT7_PLATFORM_ADMIN_PASS || process.env.RT7_CLOUD_ADMIN_PASS || 'rt7cloud'); }
+function rt7PlatformSecret_() { return safeString(process.env.RT7_PLATFORM_SECRET || process.env.SESSION_SECRET || 'rt7-platform-local-secret'); }
+function rt7PlatformToken_() {
+  return crypto.createHmac('sha256', rt7PlatformSecret_()).update(rt7PlatformUsername_() + ':' + rt7PlatformPassword_()).digest('hex');
+}
+function rt7IsPlatformAdmin_(req) {
+  const c = rt7ParseCookies_(req);
+  return c[PLATFORM_COOKIE] && c[PLATFORM_COOKIE] === rt7PlatformToken_();
+}
+function rt7SetPlatformCookie_(res) {
+  res.setHeader('Set-Cookie', PLATFORM_COOKIE + '=' + encodeURIComponent(rt7PlatformToken_()) + '; Path=/; Max-Age=' + (30*24*3600) + '; SameSite=Lax; HttpOnly');
+}
+function rt7ClearPlatformCookie_(res) {
+  res.setHeader('Set-Cookie', PLATFORM_COOKIE + '=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly');
+}
+function rt7RequirePlatformAdmin_(req, res, next) {
+  if (!rt7IsPlatformAdmin_(req)) return res.redirect('/rt7_platform_login?msg=' + encodeURIComponent('請先登入 Railway 雲端管理平台'));
+  next();
+}
+function rt7CommunityName_(u) {
+  return safeString(u && (u.community || u.community_name || u.site || '')).trim() || '未分類社區';
+}
+function rt7PlatformLoginPage_(message) {
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Railway 雲端管理登入</title><style>
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:420px;margin:0 auto;padding:42px 18px}.logo{color:white;text-align:center;font-size:26px;font-weight:900;margin:28px 0 8px}.sub{color:#cde6ee;text-align:center;margin-bottom:24px}.card{background:white;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}label{display:block;font-weight:900;margin-top:12px}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border:1px solid #cbd5e1;border-radius:13px;margin-top:7px}button{width:100%;border:0;border-radius:14px;background:#0ea5e9;color:white;font-weight:900;font-size:18px;padding:14px;margin-top:18px}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#64748b;line-height:1.6;margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 Railway 雲端管理平台</div><div class="sub">唯一管理帳密 / 社區與設備開通管理</div><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<form method="post" action="/api/platform/login"><label>平台管理帳號</label><input name="username" autocomplete="username" required placeholder="rt7cloud"><label>平台管理密碼</label><input name="password" type="password" autocomplete="current-password" required><button>登入平台管理</button></form><div class="hint">此帳號獨立於 A社區/B社區住戶帳號。正式部署請在 Railway Variables 設定 RT7_PLATFORM_ADMIN_USER / RT7_PLATFORM_ADMIN_PASS。</div></div></div></body></html>`;
+}
+function rt7PlatformAdminPage_(req, message) {
+  const users = rt7ReadUsers_().sort((a,b)=> (rt7CommunityName_(a)+String(a.username)).localeCompare(rt7CommunityName_(b)+String(b.username)));
+  const devices = readDevices();
+  const master = rt7ReadMasterRegistry_();
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const enabledUsers = users.filter(u => u.enabled !== false && u.system_enabled !== false).length;
+  const communities = Array.from(new Set(users.map(rt7CommunityName_)));
+  const rows = users.map(u => {
+    const sys = u.enabled !== false && u.system_enabled !== false && rt7NormalizeMasterUid_(u.master_uid||'');
+    const devs = (u.devices || []).join(', ');
+    return `<tr><td><b>${esc(u.username)}</b><div class="small">${esc(u.id)}</div></td><td><input name="community" value="${esc(rt7CommunityName_(u))}"></td><td>${esc(u.role||'user')}</td><td>${sys?'<span class="ok">開通</span>':'<span class="bad">解除</span>'}</td><td><input name="master_uid" value="${esc(u.master_uid||'')}" placeholder="RT7-MASTER-..."></td><td><input name="devices" value="${esc(devs || '#1')}" placeholder="#1,#2,#3,#4"></td><td class="ops"><form method="post" action="/api/platform/user/binding"><input type="hidden" name="id" value="${esc(u.id)}"><input type="hidden" name="community" value=""><input type="hidden" name="master_uid" value=""><input type="hidden" name="devices" value=""><button onclick="rt7CopyRowInputs_(this.form);return true;">更新綁定</button></form><form method="post" action="/api/platform/user/system_enabled"><input type="hidden" name="id" value="${esc(u.id)}"><input type="hidden" name="system_enabled" value="${sys?'0':'1'}"><button class="${sys?'red':'green'}">${sys?'解除':'開通'}</button></form></td></tr>`;
+  }).join('');
+  const devRows = devices.map(d => `<tr><td>${esc(d.id)}</td><td>${esc(d.name)}</td><td>${esc(d.ip)}</td><td>${d.enabled===false?'<span class="bad">停用</span>':'<span class="ok">啟用</span>'}</td></tr>`).join('');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Railway 雲端管理平台</title><style>
+body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px;display:flex;align-items:center;gap:12px}.top h1{margin:0;font-size:22px;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;margin-bottom:14px;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#f6fafc;border-radius:14px;padding:12px}.label{font-size:13px;color:#64748b;font-weight:900}.value{font-size:22px;font-weight:900}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}table{width:100%;border-collapse:collapse;min-width:1050px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.ops{display:flex;gap:8px;flex-wrap:wrap}.ops form{display:inline}.ops button,button{border:0;border-radius:9px;background:#0ea5e9;color:white;font-weight:900;padding:9px 10px}.ops button.red{background:#d12f2f}.ops button.green{background:#0eaa5b}.hint{font-size:13px;color:#5d6b76;line-height:1.6}@media(max-width:760px){.stats{grid-template-columns:1fr 1fr}.top h1{font-size:18px}table{min-width:950px}}</style><script>
+function rt7CopyRowInputs_(form){ const tr=form.closest('tr'); ['community','master_uid','devices'].forEach(n=>{ form.querySelector('input[name="'+n+'"]').value = tr.querySelector('input[name="'+n+'"]').value; }); }
+</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_user_manager">社區管理頁</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。</div></div><div class="card"><h2>社區帳號與設備綁定</h2><table><thead><tr><th>帳號</th><th>社區</th><th>角色</th><th>狀態</th><th>主門禁 UID</th><th>設備</th><th>平台操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7">尚無帳號</td></tr>'}</tbody></table></div><div class="card"><h2>全域設備清單</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態</th></tr></thead><tbody>${devRows}</tbody></table></div><div class="card"><h2>目前預設 Master Registry</h2><pre>${esc(JSON.stringify(master,null,2))}</pre></div></div></body></html>`;
+}
+
 function rt7RequireAdmin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
   if (!u) return rt7RequireLogin_(req, res, next);
@@ -312,7 +363,8 @@ body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-syst
 <div class="card"><div class="label">你的設備</div><div class="value">${esc(userDevices.join(', '))}</div><div class="label">綁定說明</div><div class="small">#1 是 RT7 主門禁；#2~#4 是附屬影像門禁。admin 可查看全部設備，一般使用者只可查看綁定設備。</div>${isAdmin?`<div class="actions"><form method="post" action="/api/rt7/master/bind"><input name="master_uid" value="${esc(master.master_uid)}" placeholder="RT7-MASTER-XXXXXXXXXXXX"><button class="btn green">重新綁定主門禁</button></form></div>`:''}</div></div>
 <div class="card"><h2>#1~#4 設備狀態</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態 / 最後上線</th><th>綁定</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無設備資料</td></tr>'}</tbody></table></div>
 ${isAdmin?`<div class="card"><h2>使用者綁定清單</h2><table><thead><tr><th>帳號</th><th>角色</th><th>開通</th><th>主門禁 UID</th><th>設備</th></tr></thead><tbody>${userRows || '<tr><td colspan="4">尚無使用者</td></tr>'}</tbody></table></div>`:''}
-<div class="actions"><a class="btn" href="/api/rt7/master/status">Master JSON</a><a class="btn" href="/api/rt7/master/devices">Devices JSON</a><a class="btn gray" href="/rt7_user_manager">使用者管理</a><a class="btn gray" href="/rt7_device_transfer_owner">轉移Owner</a></div>
+<div class="actions"><a class="btn" href="/api/rt7/master/status">Master JSON</a><a class="btn" href="/api/rt7/master/devices">Devices JSON</a><a class="btn gray" href="/rt7_user_manager">使用者管理</a>
+<a class="btn gray" href="/rt7_platform_login">Railway 雲端管理平台</a><a class="btn gray" href="/rt7_device_transfer_owner">轉移Owner</a></div>
 </div></body></html>`;
 }
 
@@ -858,6 +910,7 @@ app.get('/', (req, res) => {
 <a class="btn" href="/rt7_cloud_original_ui_doorbell">原始 UI 雲端門鈴</a>
 <a class="btn" href="/rt7_login">登入 / 註冊</a>
 <a class="btn gray" href="/rt7_user_manager">使用者管理</a>
+<a class="btn gray" href="/rt7_platform_login">Railway 雲端管理平台</a>
 <a class="btn green" href="/rt7_cloud_phase10_no_nodered">Phase10 雲端影像/對講/AI（無 Node-RED）</a>
 <a class="btn" href="/rt7_cloud_doorbell_player">雲端門鈴播放器</a>
 <a class="btn" href="/rt7_cloud_admin">雲端管理頁</a>
@@ -870,6 +923,55 @@ app.get('/', (req, res) => {
 </main>`));
 });
 
+
+
+// ---------------- V5.7E Railway Platform Admin routes ----------------
+app.get('/rt7_platform_login', (req, res) => res.type('html').send(rt7PlatformLoginPage_(req.query.msg || '')));
+app.post('/api/platform/login', (req, res) => {
+  const username = safeString(req.body.username).trim();
+  const password = safeString(req.body.password);
+  if (username !== rt7PlatformUsername_() || password !== rt7PlatformPassword_()) return res.status(401).type('html').send(rt7PlatformLoginPage_('平台管理帳號或密碼錯誤'));
+  rt7SetPlatformCookie_(res);
+  appendEvent({ type:'platform_login', username, ip:clientIp(req) });
+  res.redirect('/rt7_platform_admin');
+});
+app.get('/rt7_platform_logout', (req, res) => { rt7ClearPlatformCookie_(res); res.redirect('/rt7_platform_login?msg=' + encodeURIComponent('已登出平台管理')); });
+app.get('/rt7_platform_admin', rt7RequirePlatformAdmin_, (req, res) => res.type('html').send(rt7PlatformAdminPage_(req, req.query.msg || '')));
+app.post('/api/platform/user/system_enabled', rt7RequirePlatformAdmin_, (req, res) => {
+  const id = safeString(req.body.id).trim();
+  const systemEnabled = safeString(req.body.system_enabled) === '1';
+  const master = rt7ReadMasterRegistry_();
+  const users = rt7ReadUsers_();
+  const target = users.find(u => u.id === id);
+  if (!target) return res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent('找不到帳號'));
+  target.enabled = true;
+  target.system_enabled = systemEnabled;
+  if (systemEnabled) {
+    target.master_uid = rt7NormalizeMasterUid_(target.master_uid || master.master_uid || rt7DefaultMasterUid_());
+    target.devices = (target.role || 'user') === 'admin' ? ['#1','#2','#3','#4'] : rt7NormalizeDeviceIds_(target.devices || '#1');
+  } else {
+    target.master_uid = '';
+    target.devices = [];
+    rt7InvalidateUserSessions_(id);
+  }
+  rt7SaveUsers_(users);
+  appendEvent({ type:'platform_user_system_enabled', username:target.username, system_enabled:systemEnabled, master_uid:target.master_uid, devices:target.devices, ip:clientIp(req) });
+  res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent((systemEnabled?'已由平台開通：':'已由平台解除：') + target.username));
+});
+app.post('/api/platform/user/binding', rt7RequirePlatformAdmin_, (req, res) => {
+  const id = safeString(req.body.id).trim();
+  const users = rt7ReadUsers_();
+  const target = users.find(u => u.id === id);
+  if (!target) return res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent('找不到帳號'));
+  target.community = safeString(req.body.community || '').trim().slice(0, 80) || '未分類社區';
+  target.master_uid = rt7NormalizeMasterUid_(req.body.master_uid || target.master_uid || rt7DefaultMasterUid_());
+  target.devices = rt7NormalizeDeviceIds_(req.body.devices || target.devices || '#1');
+  target.system_enabled = !!target.master_uid;
+  target.enabled = true;
+  rt7SaveUsers_(users);
+  appendEvent({ type:'platform_user_binding_update', username:target.username, community:target.community, master_uid:target.master_uid, devices:target.devices, ip:clientIp(req) });
+  res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent('已更新平台綁定：' + target.username));
+});
 
 // ---------------- V5.7A Auth routes ----------------
 app.get('/rt7_login', (req, res) => res.type('html').send(rt7AuthPage_('login', req.query.msg || '')));
