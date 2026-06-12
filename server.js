@@ -65,6 +65,24 @@ function rt7SaveMasterRegistry_(obj) {
   rt7WriteJsonFile_(MASTER_REGISTRY_FILE, obj);
   return obj;
 }
+
+// V5.7E3: #1 master door unit heartbeat / UID verification
+function rt7MasterHeartbeatMaxAgeMs_() {
+  return Number(process.env.RT7_MASTER_HEARTBEAT_MAX_AGE_MS || 120000);
+}
+function rt7MasterVerifyState_(master) {
+  master = master || rt7ReadMasterRegistry_();
+  const expected = rt7NormalizeMasterUid_(master.master_uid || '');
+  const actual = rt7NormalizeMasterUid_(master.real_master_uid || master.last_master_uid || '');
+  const lastSeenMs = Number(master.last_seen_ms || 0);
+  const ageMs = lastSeenMs ? (Date.now() - lastSeenMs) : null;
+  const online = !!(ageMs !== null && ageMs >= 0 && ageMs <= rt7MasterHeartbeatMaxAgeMs_());
+  const uid_match = !!(expected && actual && expected === actual);
+  return { expected_uid: expected, actual_uid: actual, uid_match, online, verified: uid_match && online, last_seen: master.last_seen || '', last_seen_ms: lastSeenMs || 0, age_ms: ageMs, ip: master.real_ip || master.ip || '', device_no: master.real_device_no || '#1' };
+}
+function rt7MasterVerified_(master) {
+  return rt7MasterVerifyState_(master).verified;
+}
 function rt7NormalizeDeviceIds_(v) {
   const arr = Array.isArray(v) ? v : String(v || '').split(/[,\s]+/);
   const out = [];
@@ -157,7 +175,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E2_FORCE_LOGIN_EACH_OPEN';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E3_MASTER_UID_HEARTBEAT_VERIFY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -316,7 +334,7 @@ function rt7PlatformAdminPage_(req, message) {
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Railway 雲端管理平台</title><style>
 body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px;display:flex;align-items:center;gap:12px}.top h1{margin:0;font-size:22px;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;margin-bottom:14px;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#f6fafc;border-radius:14px;padding:12px}.label{font-size:13px;color:#64748b;font-weight:900}.value{font-size:22px;font-weight:900}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}table{width:100%;border-collapse:collapse;min-width:1050px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.ops{display:flex;gap:8px;flex-wrap:wrap}.ops form{display:inline}.ops button,button{border:0;border-radius:9px;background:#0ea5e9;color:white;font-weight:900;padding:9px 10px}.ops button.red{background:#d12f2f}.ops button.green{background:#0eaa5b}.hint{font-size:13px;color:#5d6b76;line-height:1.6}@media(max-width:760px){.stats{grid-template-columns:1fr 1fr}.top h1{font-size:18px}table{min-width:950px}}</style><script>
 function rt7CopyRowInputs_(form){ const tr=form.closest('tr'); ['community','master_uid','devices'].forEach(n=>{ form.querySelector('input[name="'+n+'"]').value = tr.querySelector('input[name="'+n+'"]').value; }); }
-</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_user_manager">社區管理頁</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。</div></div><div class="card"><h2>社區帳號與設備綁定</h2><table><thead><tr><th>帳號</th><th>社區</th><th>角色</th><th>狀態</th><th>主門禁 UID</th><th>設備</th><th>平台操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7">尚無帳號</td></tr>'}</tbody></table></div><div class="card"><h2>全域設備清單</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態</th></tr></thead><tbody>${devRows}</tbody></table></div><div class="card"><h2>目前預設 Master Registry</h2><pre>${esc(JSON.stringify(master,null,2))}</pre></div></div></body></html>`;
+</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_user_manager">社區管理頁</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">#1 UID驗證</div><div class="value">${verify.verified?'OK':'NO'}</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。</div></div><div class="card"><h2>社區帳號與設備綁定</h2><table><thead><tr><th>帳號</th><th>社區</th><th>角色</th><th>狀態</th><th>主門禁 UID</th><th>設備</th><th>平台操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7">尚無帳號</td></tr>'}</tbody></table></div><div class="card"><h2>全域設備清單</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態</th></tr></thead><tbody>${devRows}</tbody></table></div><div class="card"><h2>目前預設 Master Registry</h2><pre>${esc(JSON.stringify(master,null,2))}</pre></div></div></body></html>`;
 }
 
 function rt7RequireAdmin_(req, res, next) {
@@ -373,7 +391,7 @@ function rt7DeviceBindStatusPage_(req, message) {
 body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1100px;margin:0 auto;padding:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto;margin-bottom:14px}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.label{font-size:13px;color:#64748b;font-weight:800}.value{font-size:18px;font-weight:900;margin:4px 0 10px}.uid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f1f5f9;border:1px solid #d9e2ec;border-radius:10px;padding:8px;display:inline-block}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.pill{display:inline-block;border-radius:999px;padding:4px 9px;font-weight:900}.okp{background:#e8ffe8;color:#097b35}.badp{background:#ffe8e8;color:#b42318}.small{font-size:12px;color:#64748b;margin-top:4px}table{width:100%;border-collapse:collapse;min-width:780px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.btn{display:inline-block;text-decoration:none;border:0;border-radius:10px;background:#159bd7;color:#fff;font-weight:900;padding:10px 12px}.btn.gray{background:#475569}.btn.green{background:#0eaa5b}input{padding:10px;border:1px solid #cbd5e1;border-radius:10px;min-width:260px}form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:18px}table{min-width:700px}}</style></head><body>
 <div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 設備綁定狀態</h1><a href="/rt7_user_manager">使用者管理</a><a href="/api/auth/logout">登出</a></div>
 <div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}
-<div class="grid"><div class="card"><div class="label">主門禁 UID</div><div class="value"><span class="uid">${esc(master.master_uid)}</span></div><div class="label">Owner</div><div class="value">${esc(master.owner || '尚未綁定')}</div><div class="label">目前登入</div><div class="value">${esc(current && current.username || '')} <span class="small">${esc(current && current.role || '')}</span></div></div>
+<div class="grid"><div class="card"><div class="label">主門禁 UID</div><div class="value"><span class="uid">${esc(master.master_uid)}</span></div><div class="label">#1 真實 UID 驗證</div><div class="value">${verify.verified?'<span class="ok">UID 已驗證 / ONLINE</span>':'<span class="bad">UID 未驗證 / OFFLINE</span>'}</div><div class="small">#1回報UID：<code>${esc(verify.actual_uid || '尚未回報')}</code><br>最後上線：${esc(verify.last_seen || '尚無')} ${verify.age_ms!==null?' / '+Math.round(verify.age_ms/1000)+'秒前':''}<br>IP：${esc(verify.ip || '-')}</div><div class="label">Owner</div><div class="value">${esc(master.owner || '尚未綁定')}</div><div class="label">目前登入</div><div class="value">${esc(current && current.username || '')} <span class="small">${esc(current && current.role || '')}</span></div></div>
 <div class="card"><div class="label">你的設備</div><div class="value">${esc(userDevices.join(', '))}</div><div class="label">綁定說明</div><div class="small">#1 是 RT7 主門禁；#2~#4 是附屬影像門禁。admin 可查看全部設備，一般使用者只可查看綁定設備。</div>${isAdmin?`<div class="actions"><form method="post" action="/api/rt7/master/bind"><input name="master_uid" value="${esc(master.master_uid)}" placeholder="RT7-MASTER-XXXXXXXXXXXX"><button class="btn green">重新綁定主門禁</button></form></div>`:''}</div></div>
 <div class="card"><h2>#1~#4 設備狀態</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態 / 最後上線</th><th>綁定</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無設備資料</td></tr>'}</tbody></table></div>
 ${isAdmin?`<div class="card"><h2>使用者綁定清單</h2><table><thead><tr><th>帳號</th><th>角色</th><th>開通</th><th>主門禁 UID</th><th>設備</th></tr></thead><tbody>${userRows || '<tr><td colspan="4">尚無使用者</td></tr>'}</tbody></table></div>`:''}
@@ -955,9 +973,11 @@ app.post('/api/platform/user/system_enabled', rt7RequirePlatformAdmin_, (req, re
   const id = safeString(req.body.id).trim();
   const systemEnabled = safeString(req.body.system_enabled) === '1';
   const master = rt7ReadMasterRegistry_();
+  const verify = rt7MasterVerifyState_(master);
   const users = rt7ReadUsers_();
   const target = users.find(u => u.id === id);
   if (!target) return res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent('找不到帳號'));
+  if (systemEnabled && !rt7MasterVerified_(master)) return res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent('不能開通：#1主門禁 UID 尚未驗證或已離線'));
   target.enabled = true;
   target.system_enabled = systemEnabled;
   if (systemEnabled) {
@@ -1060,10 +1080,34 @@ app.get('/api/auth/logout', (req, res) => {
 });
 app.get('/api/auth/me', (req, res) => res.json({ ok:true, version:SERVER_VERSION, user:rt7PublicUser_(rt7GetSessionUser_(req)) }));
 app.get('/api/auth/users', rt7RequireAdmin_, (req, res) => res.json({ ok:true, users:rt7ReadUsers_().map(rt7PublicUser_) }));
+
+// V5.7E3: #1 主門禁定時回報真實 UID。ESP32 API 不需登入，避免影響設備連線。
+app.all('/api/rt7/master/heartbeat', (req, res) => {
+  const body = Object.assign({}, req.query || {}, req.body || {});
+  const uid = rt7NormalizeMasterUid_(body.master_uid || body.uid || body.masterUid || '');
+  const deviceNo = safeString(body.device_no || body.device || '#1').trim() || '#1';
+  if (!uid) return res.status(400).json({ ok:false, version:SERVER_VERSION, error:'MISSING_MASTER_UID' });
+  const master = rt7ReadMasterRegistry_();
+  master.real_master_uid = uid;
+  master.real_device_no = deviceNo;
+  master.real_ip = body.ip || clientIp(req);
+  master.last_seen = nowIso();
+  master.last_seen_ms = Date.now();
+  master.last_heartbeat_user_agent = safeString(req.headers['user-agent'] || '').slice(0,160);
+  master.uid_match = rt7NormalizeMasterUid_(master.master_uid) === uid;
+  master.verified = master.uid_match;
+  rt7SaveMasterRegistry_(master);
+  appendEvent({ type:'master_heartbeat', master_uid:master.master_uid, real_master_uid:uid, uid_match:master.uid_match, device_no:deviceNo, ip:master.real_ip });
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, real_master_uid:uid, verify:rt7MasterVerifyState_(master) });
+});
+app.get('/api/rt7/master/verify', (req,res)=>{
+  const master = rt7ReadMasterRegistry_();
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, verify:rt7MasterVerifyState_(master), master });
+});
 app.get('/api/rt7/master/status', (req, res) => {
   const master = rt7ReadMasterRegistry_();
   const user = rt7GetSessionUser_(req);
-  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, user:rt7PublicUser_(user) });
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, verify:rt7MasterVerifyState_(master), user:rt7PublicUser_(user) });
 });
 app.get('/api/rt7/master/devices', rt7RequireLogin_, (req, res) => {
   res.json({ ok:true, version:SERVER_VERSION, master:rt7ReadMasterRegistry_(), devices:rt7FilterDevicesForRequest_(req, readDevices()) });
@@ -1159,6 +1203,7 @@ app.post('/api/auth/users/system_enabled', rt7RequireAdmin_, (req, res) => {
   const target = users.find(u => u.id === id);
   if (!target) return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('找不到帳號'));
   if ((target.role || 'user') === 'admin' && !systemEnabled && rt7CountAdmins_(users) <= 1) return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('不能解除最後一個 admin'));
+  if (systemEnabled && !rt7MasterVerified_(master)) return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('不能開通：#1主門禁 UID 尚未驗證或已離線，請先讓 #1 ESP32 回報 /api/rt7/master/heartbeat'));
   target.system_enabled = systemEnabled;
   if (systemEnabled) {
     target.master_uid = rt7NormalizeMasterUid_(target.master_uid || master.master_uid || rt7DefaultMasterUid_());
