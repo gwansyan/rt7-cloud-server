@@ -176,7 +176,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E7_REGISTER_IP_AUTOFILL_VERIFY';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8A_COMMUNITY_MANAGER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -315,6 +315,52 @@ function rt7CommunityName_(u) {
   return safeString(u && (u.community || u.community_name || u.site || '')).trim() || '未分類社區';
 }
 
+
+// ---------------- V5.8A Community Manager helpers ----------------
+function rt7CommunityKey_(name) {
+  const n = safeString(name || '').trim() || '未分類社區';
+  return n.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_\-\u4e00-\u9fff]/gi,'').slice(0,80) || 'community';
+}
+function rt7BuildCommunities_() {
+  const users = rt7ReadUsers_();
+  const groups = {};
+  users.forEach(u => {
+    const name = rt7CommunityName_(u);
+    const key = rt7CommunityKey_(name);
+    if (!groups[key]) groups[key] = { community_id:key, community_name:name, users:[], admins:[], enabled_users:0, master_uids:new Set(), ips:new Set(), devices:new Set() };
+    const g = groups[key];
+    g.users.push(u.username);
+    if ((u.role || 'user') === 'admin') g.admins.push(u.username);
+    if (u.enabled !== false && u.system_enabled !== false) g.enabled_users++;
+    if (rt7NormalizeMasterUid_(u.master_uid || '')) g.master_uids.add(rt7NormalizeMasterUid_(u.master_uid));
+    if (safeString(u.master_ip || '').trim()) g.ips.add(safeString(u.master_ip).trim());
+    (Array.isArray(u.devices) ? u.devices : rt7NormalizeDeviceIds_(u.devices || '')).forEach(d => g.devices.add(d));
+  });
+  return Object.values(groups).map(g => ({
+    community_id:g.community_id,
+    community_name:g.community_name,
+    users:g.users,
+    admins:g.admins,
+    enabled_users:g.enabled_users,
+    master_uids:Array.from(g.master_uids),
+    master_uid:Array.from(g.master_uids)[0] || '',
+    master_ips:Array.from(g.ips),
+    master_ip:Array.from(g.ips)[0] || '',
+    devices:Array.from(g.devices).sort(),
+    user_count:g.users.length,
+    admin_count:g.admins.length
+  })).sort((a,b)=>String(a.community_name).localeCompare(String(b.community_name)));
+}
+function rt7CommunityManagerPage_(req, message) {
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const communities = rt7BuildCommunities_();
+  const rows = communities.map(c => `<tr><td><b>${esc(c.community_name)}</b><div class="small">${esc(c.community_id)}</div></td><td>${esc(c.admins.join(', ') || '-')}</td><td>${esc(c.users.join(', '))}</td><td>${c.enabled_users}/${c.user_count}</td><td><input name="community_name" value="${esc(c.community_name)}"></td><td><input name="master_uid" value="${esc(c.master_uid)}" placeholder="RT7-MASTER-..."></td><td><input name="master_ip" value="${esc(c.master_ip)}" placeholder="192.168.0.179"></td><td><input name="devices" value="${esc(c.devices.join(', ') || '#1,#2,#3,#4')}"></td><td><form method="post" action="/api/platform/community/update"><input type="hidden" name="community_id" value="${esc(c.community_id)}"><input type="hidden" name="old_community" value="${esc(c.community_name)}"><input type="hidden" name="community_name" value=""><input type="hidden" name="master_uid" value=""><input type="hidden" name="master_ip" value=""><input type="hidden" name="devices" value=""><button onclick="rt7CopyCommunityRow_(this.form);return true;">更新社區</button></form></td></tr>`).join('') || '<tr><td colspan="9">尚無社區資料</td></tr>';
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 社區管理</title><style>
+body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:14px;display:flex;gap:10px;align-items:center}.top h1{margin:0;font-size:22px;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;margin-bottom:14px;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{color:#64748b;font-size:13px;line-height:1.6}.small{font-size:12px;color:#64748b}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}button{border:0;border-radius:9px;background:#0ea5e9;color:white;font-weight:900;padding:9px 12px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#f6fafc;border-radius:14px;padding:12px}.value{font-size:24px;font-weight:900}.label{font-size:13px;color:#64748b;font-weight:900}@media(max-width:760px){.grid{grid-template-columns:1fr 1fr}.top h1{font-size:18px}}</style><script>
+function rt7CopyCommunityRow_(form){ const tr=form.closest('tr'); ['community_name','master_uid','master_ip','devices'].forEach(n=>{ form.querySelector('input[name="'+n+'"]').value = tr.querySelector('input[name="'+n+'"]').value; }); }
+</script></head><body><div class="top"><h1>RT7 社區管理</h1><a href="/rt7_platform_admin">平台首頁</a><a href="/rt7_user_manager">使用者管理</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="grid"><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${communities.reduce((a,c)=>a+c.user_count,0)}</div></div><div class="stat"><div class="label">已開通</div><div class="value">${communities.reduce((a,c)=>a+c.enabled_users,0)}</div></div><div class="stat"><div class="label">主門禁 UID 數</div><div class="value">${new Set(communities.flatMap(c=>c.master_uids)).size}</div></div></div><div class="hint">V5.8A：Railway 雲端服務作為獨立管理平台，以「社區」為單位管理 A社區/B社區。每個社區可有自己的 admin/user、主門禁 UID、#1 IP 與 #1~#4 設備綁定。</div></div><div class="card"><h2>社區清單</h2><table><thead><tr><th>社區</th><th>社區 admin</th><th>帳號</th><th>開通</th><th>社區名稱</th><th>主門禁 UID</th><th>#1 IP</th><th>設備</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div><div class="card"><h2>建立新社區管理員</h2><form method="post" action="/api/platform/community/create_admin" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:10px;align-items:end"><label><div class="label">社區名稱</div><input name="community" placeholder="A社區" required></label><label><div class="label">admin 帳號</div><input name="username" placeholder="admin_A" required></label><label><div class="label">密碼</div><input name="password" placeholder="至少4碼" required></label><label><div class="label">主門禁 UID</div><input name="master_uid" placeholder="RT7-MASTER-..."></label><button>建立社區 admin</button></form></div></div></body></html>`;
+}
+
 function rt7MasterCandidateFromUsers_() {
   const users = rt7ReadUsers_();
   const master = rt7ReadMasterRegistry_();
@@ -350,7 +396,7 @@ function rt7PlatformAdminPage_(req, message) {
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Railway 雲端管理平台</title><style>
 body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px;display:flex;align-items:center;gap:12px}.top h1{margin:0;font-size:22px;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;margin-bottom:14px;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#f6fafc;border-radius:14px;padding:12px}.label{font-size:13px;color:#64748b;font-weight:900}.value{font-size:22px;font-weight:900}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}table{width:100%;border-collapse:collapse;min-width:1050px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.ops{display:flex;gap:8px;flex-wrap:wrap}.ops form{display:inline}.ops button,button{border:0;border-radius:9px;background:#0ea5e9;color:white;font-weight:900;padding:9px 10px}.ops button.red{background:#d12f2f}.ops button.green{background:#0eaa5b}.hint{font-size:13px;color:#5d6b76;line-height:1.6}@media(max-width:760px){.stats{grid-template-columns:1fr 1fr}.top h1{font-size:18px}table{min-width:950px}}</style><script>
 function rt7CopyRowInputs_(form){ const tr=form.closest('tr'); ['community','master_uid','master_ip','devices'].forEach(n=>{ form.querySelector('input[name="'+n+'"]').value = tr.querySelector('input[name="'+n+'"]').value; }); }
-</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_user_manager">社區管理頁</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。<br>主門禁即時 UID：${esc(master.real_master_uid || '尚未回報')} / 驗證：${masterVerified?'<span class="ok">已驗證</span>':'<span class="bad">未驗證</span>'} / 在線：${masterOnline?'<span class="ok">ONLINE</span>':'<span class="bad">OFFLINE</span>'} / 最後 heartbeat：${esc(master.last_master_heartbeat || '-')} / IP：${esc(master.heartbeat_ip || '-')}</div></div>
+</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_community_manager">社區管理</a><a href="/rt7_user_manager">使用者管理</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。<br>主門禁即時 UID：${esc(master.real_master_uid || '尚未回報')} / 驗證：${masterVerified?'<span class="ok">已驗證</span>':'<span class="bad">未驗證</span>'} / 在線：${masterOnline?'<span class="ok">ONLINE</span>':'<span class="bad">OFFLINE</span>'} / 最後 heartbeat：${esc(master.last_master_heartbeat || '-')} / IP：${esc(master.heartbeat_ip || '-')}</div></div>
 <div class="card"><h2>#1 主門禁 UID/IP 手動取得與比對</h2><div class="hint">正常正式版應由 #1 ESP32 開機後自動 heartbeat。本區是平台管理測試/維護用：會自動帶入手機註冊/社區帳號填寫的主門禁 UID 與 #1 IP；按下後寫入 heartbeat 並立即比對綁定 UID，減少手動輸入錯誤。</div><form method="post" action="/api/platform/master/manual_verify" style="display:grid;grid-template-columns:1.3fr 1fr auto;gap:10px;align-items:end"><label><div class="label">#1 真實 Master UID</div><input name="master_uid" value="${esc(master.real_master_uid || candidate.master_uid || master.master_uid || '')}" placeholder="RT7-MASTER-68F2299FC114" required></label><label><div class="label">#1 IP</div><input name="ip" value="${esc(master.heartbeat_ip || candidate.ip || '192.168.0.179')}" placeholder="192.168.0.179"></label><button class="green" style="background:#0eaa5b">取得/比對 #1 UID</button><input type="hidden" name="device_id" value="#1"></form><div class="hint">比對規則：註冊/綁定 UID = #1 heartbeat real_master_uid，且 heartbeat 未逾時，登入才會放行。</div></div>
 <div class="card"><h2>社區帳號與設備綁定</h2><table><thead><tr><th>帳號</th><th>社區</th><th>角色</th><th>狀態</th><th>主門禁 UID</th><th>#1 IP</th><th>設備</th><th>平台操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8">尚無帳號</td></tr>'}</tbody></table></div><div class="card"><h2>全域設備清單</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態</th></tr></thead><tbody>${devRows}</tbody></table></div><div class="card"><h2>目前預設 Master Registry</h2><pre>${esc(JSON.stringify(master,null,2))}</pre></div></div></body></html>`;
 }
@@ -993,6 +1039,50 @@ app.get('/rt7_platform_admin', rt7RequirePlatformAdmin_, (req, res) => {
     console.error('[RT7_PLATFORM_ADMIN][ERROR]', e && e.stack || e);
     res.status(500).type('text/plain').send('RT7 platform admin error: ' + String(e && e.message || e));
   }
+});
+
+app.get('/rt7_community_manager', rt7RequirePlatformAdmin_, (req, res) => {
+  try { res.type('html').send(rt7CommunityManagerPage_(req, req.query.msg || '')); }
+  catch(e) { console.error('[RT7_COMMUNITY_MANAGER][ERROR]', e && e.stack || e); res.status(500).type('text/plain').send('RT7 community manager error: ' + String(e && e.message || e)); }
+});
+app.get('/api/platform/communities', rt7RequirePlatformAdmin_, (req,res)=>{
+  res.json({ ok:true, version:SERVER_VERSION, communities:rt7BuildCommunities_() });
+});
+app.post('/api/platform/community/update', rt7RequirePlatformAdmin_, (req,res)=>{
+  const oldCommunity = safeString(req.body.old_community || '').trim() || '未分類社區';
+  const newCommunity = safeString(req.body.community_name || oldCommunity).trim().slice(0,80) || oldCommunity;
+  const masterUid = rt7NormalizeMasterUid_(req.body.master_uid || '');
+  const masterIp = safeString(req.body.master_ip || '').trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,'').slice(0,80);
+  const devices = rt7NormalizeDeviceIds_(req.body.devices || '#1,#2,#3,#4');
+  const users = rt7ReadUsers_();
+  let changed = 0;
+  users.forEach(u=>{
+    if (rt7CommunityName_(u) === oldCommunity) {
+      u.community = newCommunity;
+      if (masterUid) u.master_uid = masterUid;
+      if (masterIp) u.master_ip = masterIp;
+      if (devices.length) u.devices = devices;
+      if (masterUid) { u.enabled = true; u.system_enabled = true; }
+      changed++;
+    }
+  });
+  rt7SaveUsers_(users);
+  appendEvent({ type:'platform_community_update', old_community:oldCommunity, community:newCommunity, master_uid:masterUid, master_ip:masterIp, devices, changed, ip:clientIp(req) });
+  res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('已更新社區：' + newCommunity + '，帳號數：' + changed));
+});
+app.post('/api/platform/community/create_admin', rt7RequirePlatformAdmin_, (req,res)=>{
+  const community = safeString(req.body.community || '').trim().slice(0,80) || '未分類社區';
+  const username = safeString(req.body.username).trim().replace(/[^a-zA-Z0-9_@.\-]/g, '').slice(0,40);
+  const password = safeString(req.body.password || '');
+  const masterUid = rt7NormalizeMasterUid_(req.body.master_uid || '');
+  if (!username || password.length < 4) return res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('帳號或密碼太短'));
+  const users = rt7ReadUsers_();
+  if (users.some(u=>String(u.username).toLowerCase() === username.toLowerCase())) return res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('帳號已存在：' + username));
+  const salt = crypto.randomBytes(16).toString('hex');
+  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:'admin', enabled:true, system_enabled:!!masterUid, community, master_uid:masterUid, master_ip:'', devices:['#1','#2','#3','#4'], created_at:nowIso(), ip:clientIp(req) };
+  users.push(u); rt7SaveUsers_(users);
+  appendEvent({ type:'platform_community_create_admin', community, username, master_uid:masterUid, ip:clientIp(req) });
+  res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('已建立社區 admin：' + community + ' / ' + username));
 });
 app.post('/api/platform/user/system_enabled', rt7RequirePlatformAdmin_, (req, res) => {
   const id = safeString(req.body.id).trim();
