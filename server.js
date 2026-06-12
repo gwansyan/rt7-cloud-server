@@ -157,7 +157,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E1_LOGIN_GATE_ALWAYS_CHECK';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E2_FORCE_LOGIN_EACH_OPEN';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -229,6 +229,19 @@ function rt7SetLoginCookie_(res, sid) {
 function rt7ClearLoginCookie_(res) {
   res.setHeader('Set-Cookie', AUTH_COOKIE + '=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure');
 }
+const RT7_FORCE_LOGIN_COOKIE = 'rt7_main_gate_once';
+function rt7SetMainGateCookie_(res) {
+  // V5.7E2: one-time ticket issued only after an explicit login.
+  // It lets the browser enter the main page once, then is cleared by the main-page gate.
+  res.append('Set-Cookie', RT7_FORCE_LOGIN_COOKIE + '=1; Path=/rt7_cloud_original_ui_doorbell; Max-Age=120; SameSite=Lax; Secure');
+}
+function rt7ClearMainGateCookie_(res) {
+  res.append('Set-Cookie', RT7_FORCE_LOGIN_COOKIE + '=; Path=/rt7_cloud_original_ui_doorbell; Max-Age=0; SameSite=Lax; Secure');
+}
+function rt7HasMainGateCookie_(req) {
+  const c = rt7ParseCookies_(req);
+  return c[RT7_FORCE_LOGIN_COOKIE] === '1';
+}
 function rt7CreateSession_(req, res, user) {
   const sid = rt7NewId_('sid');
   const sessions = rt7ReadSessions_();
@@ -237,11 +250,12 @@ function rt7CreateSession_(req, res, user) {
   rt7SetLoginCookie_(res, sid);
   return sid;
 }
-function rt7AuthPage_(mode, message) {
+function rt7AuthPage_(mode, message, nextUrl) {
   const isReg = mode === 'register';
+  const nextHidden = (!isReg && nextUrl) ? '<input type="hidden" name="next" value="' + String(nextUrl).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c] || c)) + '">' : '';
   const title = isReg ? 'RT7 註冊' : 'RT7 登入';
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}"><label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊者預設為 user，可由 admin 在使用者管理頁改成 admin 或開通/解除。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊者預設為 user，可由 admin 在使用者管理頁改成 admin 或開通/解除。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
 }
 function rt7RequireLogin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
@@ -974,7 +988,7 @@ app.post('/api/platform/user/binding', rt7RequirePlatformAdmin_, (req, res) => {
 });
 
 // ---------------- V5.7A Auth routes ----------------
-app.get('/rt7_login', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('login', req.query.msg || '')); });
+app.get('/rt7_login', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('login', req.query.msg || '', req.query.next || '')); });
 app.get('/rt7_register', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('register', req.query.msg || '')); });
 app.post('/api/auth/login', (req, res) => {
   const username = safeString(req.body.username).trim();
@@ -991,7 +1005,9 @@ app.post('/api/auth/login', (req, res) => {
   rt7CreateSession_(req, res, u);
   appendEvent({ type:'auth_login', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req) });
   const next = safeString(req.query.next || req.body.next || '/rt7_cloud_original_ui_doorbell');
-  res.redirect(next.startsWith('/') ? next : '/rt7_cloud_original_ui_doorbell');
+  const safeNext = next.startsWith('/') ? next : '/rt7_cloud_original_ui_doorbell';
+  if (safeNext === '/rt7_cloud_original_ui_doorbell' || safeNext.startsWith('/rt7_cloud_original_ui_doorbell?')) rt7SetMainGateCookie_(res);
+  res.redirect(safeNext);
 });
 app.post('/api/auth/register', (req, res) => {
   const username = safeString(req.body.username).trim().replace(/[^a-zA-Z0-9_@.\-]/g, '').slice(0, 40);
@@ -1194,6 +1210,15 @@ app.use((req, res, next) => {
   ];
   if (protectedPages.some(x => p === x || p.startsWith(x + '/'))) {
     res.set('Cache-Control','no-store');
+    // V5.7E2: opening the main doorbell page must always pass through login.
+    // A valid session alone is not enough for /rt7_cloud_original_ui_doorbell;
+    // only the one-time cookie issued by a successful login can open it once.
+    if (p === '/rt7_cloud_original_ui_doorbell') {
+      if (!rt7HasMainGateCookie_(req)) {
+        return res.redirect('/rt7_login?next=' + encodeURIComponent(req.originalUrl || '/rt7_cloud_original_ui_doorbell') + '&msg=' + encodeURIComponent('請先登入後進入主頁'));
+      }
+      rt7ClearMainGateCookie_(res);
+    }
     return rt7RequireLogin_(req, res, next);
   }
   next();
