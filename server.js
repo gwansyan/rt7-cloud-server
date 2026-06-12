@@ -157,7 +157,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E_PLATFORM_ADMIN_COMMUNITY_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E1_LOGIN_GATE_ALWAYS_CHECK';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -974,16 +974,22 @@ app.post('/api/platform/user/binding', rt7RequirePlatformAdmin_, (req, res) => {
 });
 
 // ---------------- V5.7A Auth routes ----------------
-app.get('/rt7_login', (req, res) => res.type('html').send(rt7AuthPage_('login', req.query.msg || '')));
-app.get('/rt7_register', (req, res) => res.type('html').send(rt7AuthPage_('register', req.query.msg || '')));
+app.get('/rt7_login', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('login', req.query.msg || '')); });
+app.get('/rt7_register', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('register', req.query.msg || '')); });
 app.post('/api/auth/login', (req, res) => {
   const username = safeString(req.body.username).trim();
   const password = safeString(req.body.password);
   const users = rt7ReadUsers_();
   const u = users.find(x => String(x.username).toLowerCase() === username.toLowerCase() && x.enabled !== false);
   if (!u || rt7HashPassword_(password, u.salt) !== u.password_hash) return res.status(401).type('html').send(rt7AuthPage_('login', '帳號或密碼錯誤'));
+  // V5.7E1: 主頁登入閘門必須每次登入都檢查系統開通、主門禁 UID、設備綁定。
+  // 未開通帳號不可建立 session 進入主頁，避免未綁定者直接觀看/操作門禁。
+  if (!rt7UserSystemEnabled_(u)) {
+    appendEvent({ type:'auth_login_blocked_not_activated', username:u.username, role:u.role, ip:clientIp(req) });
+    return res.status(403).type('html').send(rt7AuthPage_('login', '帳號尚未開通或尚未綁定主門禁 UID，請聯絡 Railway 雲端管理平台或社區 admin 開通。'));
+  }
   rt7CreateSession_(req, res, u);
-  appendEvent({ type:'auth_login', username:u.username, role:u.role, ip:clientIp(req) });
+  appendEvent({ type:'auth_login', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req) });
   const next = safeString(req.query.next || req.body.next || '/rt7_cloud_original_ui_doorbell');
   res.redirect(next.startsWith('/') ? next : '/rt7_cloud_original_ui_doorbell');
 });
@@ -1023,8 +1029,12 @@ app.post('/api/auth/register', (req, res) => {
   if (currentIsAdmin && !makeAdmin) {
     return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('已新增帳號：' + u.username + '（預設 user，請在本頁改角色或開通/解除）'));
   }
-  rt7CreateSession_(req, res, u);
-  res.redirect(makeAdmin ? '/rt7_device_bind_status?msg=' + encodeURIComponent('註冊成功，已綁定主門禁與設備') : '/rt7_cloud_original_ui_doorbell');
+  // V5.7E1: 註冊不再自動登入，也不直接進入主頁。
+  // 註冊完成後必須回登入頁輸入帳密；登入時再檢查是否已開通、已綁定 UID 與設備。
+  const msg = makeAdmin
+    ? '註冊成功，已建立第一個 admin 並綁定主門禁。請用 admin 帳密登入後進入主頁。'
+    : '註冊成功，請等待 Railway 雲端管理平台或社區 admin 開通後再登入。';
+  res.redirect('/rt7_login?msg=' + encodeURIComponent(msg));
 });
 app.get('/api/auth/logout', (req, res) => {
   const sid = rt7ParseCookies_(req)[AUTH_COOKIE];
@@ -1182,7 +1192,10 @@ app.use((req, res, next) => {
   const protectedPages = [
     '/rt7_cloud_original_ui_doorbell','/rt7_cloud_admin','/rt7_device_manager','/rt7_face_db_manager','/rt7_gpio_control','/rt7_push_enable','/rt7_music_player','/rt7_cloud_doorbell_player','/rt7_snapshot_bridge_test','/rt7_cloud_phase10_no_nodered','/rt7_independent_full_video_intercom','/rt7_face_guard','/rt7_user_manager','/rt7_device_bind_status','/rt7_event_log','/rt7_log_viewer','/rt7_mapping','/rt7_stream_compare_test','/rt7_auto_stream_test'
   ];
-  if (protectedPages.some(x => p === x || p.startsWith(x + '/'))) return rt7RequireLogin_(req, res, next);
+  if (protectedPages.some(x => p === x || p.startsWith(x + '/'))) {
+    res.set('Cache-Control','no-store');
+    return rt7RequireLogin_(req, res, next);
+  }
   next();
 });
 
@@ -2604,7 +2617,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.6N2 Push Button OnClick Fix</title>
+<title>RT7 Cloud Original UI V5.7E1 Login Gate</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
