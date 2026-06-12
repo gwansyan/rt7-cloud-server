@@ -81,6 +81,22 @@ function rt7NormalizeDeviceIds_(v) {
 function rt7UserSystemEnabled_(u) {
   return !!(u && u.enabled !== false && u.system_enabled !== false && rt7NormalizeMasterUid_(u.master_uid || ''));
 }
+function rt7RealMasterVerifyForUser_(u) {
+  const userUid = rt7NormalizeMasterUid_(u && u.master_uid || '');
+  const master = rt7ReadMasterRegistry_();
+  const realUid = rt7NormalizeMasterUid_(master.real_master_uid || master.heartbeat_master_uid || '');
+  const boundUid = rt7NormalizeMasterUid_(master.master_uid || '');
+  const heartbeatMs = master.last_master_heartbeat ? Date.parse(master.last_master_heartbeat) : 0;
+  const online = !!(heartbeatMs && (Date.now() - heartbeatMs) < 120000);
+  const ok = !!(userUid && realUid && online && userUid === realUid && (!boundUid || boundUid === realUid));
+  let reason = '';
+  if (!userUid) reason = 'USER_MASTER_UID_EMPTY';
+  else if (!realUid) reason = 'REAL_MASTER_UID_EMPTY';
+  else if (!online) reason = 'MASTER_OFFLINE';
+  else if (userUid !== realUid) reason = 'USER_UID_NOT_MATCH_REAL_MASTER_UID';
+  else if (boundUid && boundUid !== realUid) reason = 'BOUND_UID_NOT_MATCH_REAL_MASTER_UID';
+  return { ok, reason, user_master_uid:userUid, bound_master_uid:boundUid, real_master_uid:realUid, online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '' };
+}
 function rt7UserAllowedDeviceIds_(u) {
   if (!u) return ['#1','#2','#3','#4'];
   if (!rt7UserSystemEnabled_(u)) return [];
@@ -160,7 +176,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E4_PLATFORM_ADMIN_UID_VERIFY_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_7E5_LOGIN_REAL_MASTER_UID_VERIFY';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1012,6 +1028,16 @@ app.post('/api/auth/login', (req, res) => {
     appendEvent({ type:'auth_login_blocked_not_activated', username:u.username, role:u.role, ip:clientIp(req) });
     return res.status(403).type('html').send(rt7AuthPage_('login', '帳號尚未開通或尚未綁定主門禁 UID，請聯絡 Railway 雲端管理平台或社區 admin 開通。'));
   }
+  // V5.7E5: 登入前即時比對帳號綁定 UID 與 #1 主門禁 heartbeat 回報的真實 UID。
+  // 只有 user.master_uid === real_master_uid 且 #1 模組在線，才建立登入 session。
+  const verify = rt7RealMasterVerifyForUser_(u);
+  if (!verify.ok) {
+    appendEvent({ type:'auth_login_blocked_master_uid_verify_failed', username:u.username, role:u.role, reason:verify.reason, user_master_uid:verify.user_master_uid, real_master_uid:verify.real_master_uid, bound_master_uid:verify.bound_master_uid, online:verify.online, ip:clientIp(req) });
+    const msg = verify.reason === 'MASTER_OFFLINE'
+      ? '無法登入：#1 主門禁未在線或 heartbeat 已逾時，請確認 #1 模組已上線。'
+      : '無法登入：帳號綁定 UID 與 #1 主門禁真實 UID 不一致，請聯絡 Railway 雲端管理平台重新綁定。';
+    return res.status(403).type('html').send(rt7AuthPage_('login', msg));
+  }
   rt7CreateSession_(req, res, u);
   appendEvent({ type:'auth_login', username:u.username, role:u.role, master_uid:u.master_uid, devices:u.devices, ip:clientIp(req) });
   const next = safeString(req.query.next || req.body.next || '/rt7_cloud_original_ui_doorbell');
@@ -1073,9 +1099,10 @@ app.get('/api/auth/users', rt7RequireAdmin_, (req, res) => res.json({ ok:true, u
 app.get('/api/rt7/master/status', (req, res) => {
   const master = rt7ReadMasterRegistry_();
   const user = rt7GetSessionUser_(req);
-  const verified = !!(master.real_master_uid && master.real_master_uid === master.master_uid);
   const online = !!(master.last_master_heartbeat && (Date.now() - Date.parse(master.last_master_heartbeat)) < 120000);
-  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, real_master_uid:master.real_master_uid || '', master_uid_verified:verified, master_online:online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '', user:rt7PublicUser_(user) });
+  const verified = !!(master.real_master_uid && master.real_master_uid === master.master_uid && online);
+  const userVerify = user ? rt7RealMasterVerifyForUser_(user) : null;
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, real_master_uid:master.real_master_uid || '', master_uid_verified:verified, master_online:online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '', login_uid_verify:userVerify, user:rt7PublicUser_(user) });
 });
 
 // V5.7E4: #1 主門禁 UID heartbeat / verify.
@@ -1107,6 +1134,10 @@ app.get('/api/rt7/master/verify', (req, res) => {
   const online = !!(master.last_master_heartbeat && (Date.now() - Date.parse(master.last_master_heartbeat)) < 120000);
   const verified = !!(master.real_master_uid && master.real_master_uid === master.master_uid && online);
   res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, real_master_uid:master.real_master_uid || '', verified, online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '' });
+});
+app.get('/api/rt7/master/verify_user', rt7RequireLogin_, (req, res) => {
+  const verify = rt7RealMasterVerifyForUser_(req.rt7User);
+  res.json({ ok:true, version:SERVER_VERSION, username:req.rt7User.username, verify });
 });
 app.get('/api/rt7/platform/status', (req, res) => {
   const users = rt7ReadUsers_();
