@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D5_PUSH_BORDER_STATE_PERSIST_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D6_PUSH_BORDER_LOCALSTORAGE_FORCE_GREEN';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -800,15 +800,16 @@ function htmlShell(title, body, extraHead = '') {
 (function(){
   if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
   function log(msg){ try{ console.log('[RT7_PWA_N2]', msg); }catch(e){} }
+  function rt7SetPushLocal_(yes){ try{ localStorage.setItem('rt7_push_enabled', yes?'1':'0'); sessionStorage.setItem('rt7_push_enabled', yes?'1':'0'); }catch(_){} }
+  function rt7GetPushLocal_(){ try{ return localStorage.getItem('rt7_push_enabled')==='1' || sessionStorage.getItem('rt7_push_enabled')==='1'; }catch(_){ return false; } }
   function state(msg, err){
     try{
       var el=document.getElementById('rt7PushState');
       if(el){ el.textContent=msg; el.style.color=err?'#dc2626':'#16a34a'; }
       var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent='通知';
       var btn=document.getElementById('btnPushNotify')||document.getElementById('btnPushNotifyFloat');
-      var ok = /已啟用|已允許/.test(String(msg||'')) && !err;
-      try{ if(ok) localStorage.setItem('RT7_PUSH_ENABLED','1'); if(err) localStorage.setItem('RT7_PUSH_ENABLED','0'); }catch(_){ }
       if(btn && btn.id==='btnPushNotify'){
+        var ok = /已啟用|已允許/.test(String(msg||'')) && !err;
         btn.classList.remove('pushEnabled','pushWarn','pushErr');
         btn.classList.add(err?'pushErr':(ok?'pushEnabled':'pushWarn'));
         btn.title = msg || '通知';
@@ -858,31 +859,25 @@ function htmlShell(title, body, extraHead = '') {
     var save=await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub)});
     var sj=await save.json().catch(function(){return {ok:false,error:'bad json'};});
     if(!save.ok || !sj.ok) throw new Error('訂閱儲存失敗：'+(sj.error||save.status));
-    try{ localStorage.setItem('RT7_PUSH_ENABLED','1'); }catch(_){ }
+    rt7SetPushLocal_(true);
     state('推播：已啟用');
     alert('RT7 門鈴背景通知已啟用');
     return true;
   }
   async function refreshPushState(){
     try{
-      var perm = (typeof Notification!=='undefined') ? Notification.permission : 'unsupported';
-      var hasBrowserSub = false;
-      if('serviceWorker' in navigator && 'PushManager' in window){
-        try{
-          var reg = await navigator.serviceWorker.ready;
-          var sub = await reg.pushManager.getSubscription();
-          hasBrowserSub = !!sub;
-        }catch(_){ hasBrowserSub = false; }
-      }
+      // D6: 主頁外框以本機成功紀錄優先。Android Chrome/LINE WebView 回主頁時，
+      // getSubscription 或 server state 有時讀不到，但通知其實已成功。
+      if(rt7GetPushLocal_()){ state('推播：已啟用'); }
       var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();});
-      var remembered=false; try{ remembered = localStorage.getItem('RT7_PUSH_ENABLED')==='1'; }catch(_){ }
-      if(perm==='granted' && (hasBrowserSub || remembered || st.subscriptions>0)) state('推播：已啟用');
-      else if(perm==='granted') state('推播：權限已允許，尚未訂閱');
+      if(Notification && Notification.permission==='granted' && st.subscriptions>0){ rt7SetPushLocal_(true); state('推播：已啟用'); }
+      else if(rt7GetPushLocal_()) state('推播：已啟用');
+      else if(Notification && Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
       else state('推播：未啟用');
-      log('push state '+JSON.stringify({permission:perm,browserSub:hasBrowserSub,remembered:remembered,server:st}));
+      log('push state '+JSON.stringify(st));
     }catch(e){
-      var remembered=false; try{ remembered = localStorage.getItem('RT7_PUSH_ENABLED')==='1'; }catch(_){ }
-      if(remembered) state('推播：已啟用'); else state('推播：狀態讀取失敗 '+(e.message||e), true);
+      if(rt7GetPushLocal_()) state('推播：已啟用');
+      else state('推播：狀態讀取失敗 '+(e.message||e), true);
     }
   }
   function onPushClick(ev){
@@ -1707,7 +1702,7 @@ function rt7StandalonePushClick(ev){
   var st=document.getElementById('rt7PushState');
   if(st) st.textContent='推播：獨立頁按鍵已觸發，正在啟用...';
   if(window.rt7EnablePwaPush){
-    window.rt7EnablePwaPush().then(function(){ try{localStorage.setItem('RT7_PUSH_ENABLED','1');}catch(_){ } if(st) st.textContent='推播：已啟用，請測試 /api/push/test'; }).catch(function(e){ if(st) st.textContent='推播錯誤：'+(e.message||e); alert('啟用失敗：'+(e.message||e)); });
+    window.rt7EnablePwaPush().then(function(){ if(st) st.textContent='推播：已啟用，請測試 /api/push/test'; }).catch(function(e){ if(st) st.textContent='推播錯誤：'+(e.message||e); alert('啟用失敗：'+(e.message||e)); });
   } else {
     if(st) st.textContent='推播錯誤：rt7EnablePwaPush 未載入，請重新整理';
   }
