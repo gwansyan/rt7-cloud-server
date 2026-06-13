@@ -88,14 +88,18 @@ function rt7RealMasterVerifyForUser_(u) {
   const boundUid = rt7NormalizeMasterUid_(master.master_uid || '');
   const heartbeatMs = master.last_master_heartbeat ? Date.parse(master.last_master_heartbeat) : 0;
   const online = !!(heartbeatMs && (Date.now() - heartbeatMs) < 120000);
-  const ok = !!(userUid && realUid && online && userUid === realUid && (!boundUid || boundUid === realUid));
+  // V5.8B: UID/IP 不變時，只要平台曾經按「取得/比對 #1 UID」成功，
+  // 就保留 master_uid_verified=true 作為持久授權依據；登入不再因 heartbeat 超過 120 秒而被擋。
+  // heartbeat 仍保留用來顯示 ONLINE/OFFLINE 與最後回報時間。
+  const verified = !!(master.master_uid_verified && userUid && realUid && userUid === realUid && (!boundUid || boundUid === realUid));
+  const ok = verified;
   let reason = '';
   if (!userUid) reason = 'USER_MASTER_UID_EMPTY';
   else if (!realUid) reason = 'REAL_MASTER_UID_EMPTY';
-  else if (!online) reason = 'MASTER_OFFLINE';
   else if (userUid !== realUid) reason = 'USER_UID_NOT_MATCH_REAL_MASTER_UID';
   else if (boundUid && boundUid !== realUid) reason = 'BOUND_UID_NOT_MATCH_REAL_MASTER_UID';
-  return { ok, reason, user_master_uid:userUid, bound_master_uid:boundUid, real_master_uid:realUid, online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '' };
+  else if (!master.master_uid_verified) reason = 'MASTER_UID_NOT_VERIFIED_ON_PLATFORM';
+  return { ok, reason, user_master_uid:userUid, bound_master_uid:boundUid, real_master_uid:realUid, online, verified, persistent_verified:verified, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '' };
 }
 function rt7UserAllowedDeviceIds_(u) {
   if (!u) return ['#1','#2','#3','#4'];
@@ -176,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8A_COMMUNITY_MANAGER';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8B_MASTER_UID_VERIFY_PERSIST';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1174,12 +1178,12 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(403).type('html').send(rt7AuthPage_('login', '帳號尚未開通或尚未綁定主門禁 UID，請聯絡 Railway 雲端管理平台或社區 admin 開通。'));
   }
   // V5.7E5: 登入前即時比對帳號綁定 UID 與 #1 主門禁 heartbeat 回報的真實 UID。
-  // 只有 user.master_uid === real_master_uid 且 #1 模組在線，才建立登入 session。
+  // 只有 user.master_uid === real_master_uid，且平台曾成功比對 #1 真實 UID，才建立登入 session。
   const verify = rt7RealMasterVerifyForUser_(u);
   if (!verify.ok) {
     appendEvent({ type:'auth_login_blocked_master_uid_verify_failed', username:u.username, role:u.role, reason:verify.reason, user_master_uid:verify.user_master_uid, real_master_uid:verify.real_master_uid, bound_master_uid:verify.bound_master_uid, online:verify.online, ip:clientIp(req) });
     const msg = verify.reason === 'MASTER_OFFLINE'
-      ? '無法登入：#1 主門禁未在線或 heartbeat 已逾時，請確認 #1 模組已上線。'
+      ? '無法登入：#1 主門禁尚未完成 UID 比對，請先到 Railway 雲端管理平台按「取得/比對 #1 UID」。'
       : '無法登入：帳號綁定 UID 與 #1 主門禁真實 UID 不一致，請聯絡 Railway 雲端管理平台重新綁定。';
     return res.status(403).type('html').send(rt7AuthPage_('login', msg));
   }
