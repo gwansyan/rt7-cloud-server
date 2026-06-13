@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D7_PUSH_BORDER_SERVER_STATE_GREEN_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D8_PUSH_BORDER_REAL_SUBSCRIPTION_CHECK';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -800,8 +800,17 @@ function htmlShell(title, body, extraHead = '') {
 (function(){
   if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
   function log(msg){ try{ console.log('[RT7_PWA_N2]', msg); }catch(e){} }
+  // V5.8D8: 通知鍵外框不再依賴 localStorage，也不只看 Railway server count。
+  // 主頁每次載入都直接讀取此手機瀏覽器目前真正存在的 Push Subscription。
   function rt7SetPushLocal_(yes){ try{ localStorage.setItem('rt7_push_enabled', yes?'1':'0'); sessionStorage.setItem('rt7_push_enabled', yes?'1':'0'); }catch(_){} }
-  function rt7GetPushLocal_(){ try{ return localStorage.getItem('rt7_push_enabled')==='1' || sessionStorage.getItem('rt7_push_enabled')==='1'; }catch(_){ return false; } }
+  async function rt7GetRealPushSubscription_(){
+    if(!('serviceWorker' in navigator)) throw new Error('此瀏覽器不支援 Service Worker');
+    if(!('PushManager' in window)) throw new Error('此瀏覽器不支援 PushManager');
+    var reg=await navigator.serviceWorker.register('/sw.js',{scope:'/'});
+    try{ reg=await navigator.serviceWorker.ready; }catch(_){ }
+    var sub=await reg.pushManager.getSubscription();
+    return { reg:reg, subscription:sub };
+  }
   function state(msg, err){
     try{
       var el=document.getElementById('rt7PushState');
@@ -860,26 +869,31 @@ function htmlShell(title, body, extraHead = '') {
     var sj=await save.json().catch(function(){return {ok:false,error:'bad json'};});
     if(!save.ok || !sj.ok) throw new Error('訂閱儲存失敗：'+(sj.error||save.status));
     rt7SetPushLocal_(true);
-    state('推播：已啟用');
+    state('推播：已訂閱');
     alert('RT7 門鈴背景通知已啟用');
     return true;
   }
   async function refreshPushState(){
     try{
-      // D6: 主頁外框以本機成功紀錄優先。Android Chrome/LINE WebView 回主頁時，
-      // getSubscription 或 server state 有時讀不到，但通知其實已成功。
-      if(rt7GetPushLocal_()){ state('推播：已啟用'); }
-      var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();});
-      // D7: 以 Railway 伺服器已有訂閱為最高優先，避免 Android/LINE WebView 回主頁時
-      // Notification.permission 或 getSubscription 讀取不穩，導致外框又變黃。
-      if(st && Number(st.subscriptions||0)>0){ rt7SetPushLocal_(true); state('推播：已啟用'); }
-      else if(rt7GetPushLocal_()) state('推播：已啟用');
-      else if(Notification && Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
+      // V5.8D8：主頁通知鍵外框只以此手機瀏覽器的真實 Subscription 判斷。
+      // subscription != null => 綠框；subscription == null => 黃框。
+      if(!('Notification' in window)){ state('推播：此瀏覽器不支援通知', true); return false; }
+      if(Notification.permission==='denied'){ state('推播：通知權限已封鎖', true); return false; }
+      var real=await rt7GetRealPushSubscription_();
+      if(real && real.subscription){
+        state('推播：已訂閱');
+        // 若瀏覽器有真訂閱但 Railway 遺失，背景補送一次，不影響外框判斷。
+        fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(real.subscription)}).catch(function(){});
+        log('real subscription yes');
+        return true;
+      }
+      if(Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
       else state('推播：未啟用');
-      log('push state '+JSON.stringify(st));
+      log('real subscription no');
+      return false;
     }catch(e){
-      if(rt7GetPushLocal_()) state('推播：已啟用');
-      else state('推播：狀態讀取失敗 '+(e.message||e), true);
+      state('推播：狀態讀取失敗 '+(e.message||e), true);
+      return false;
     }
   }
   function onPushClick(ev){
@@ -2939,7 +2953,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="${rt7ReadPushSubs_().length>0?'circle pushEnabled':'circle pushWarn'}" type="button" title="通知設定" onclick="location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle pushWarn" type="button" title="通知設定" onclick="location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
