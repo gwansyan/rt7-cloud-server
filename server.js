@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D_PUSH_ENABLE_RETURN_MAIN_GATE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D1_PUSH_RETURN_UNDEFINED_FUNCTION_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1444,11 +1444,13 @@ app.get('/rt7_return_doorbell', (req, res) => {
   if (!user) {
     return res.redirect('/rt7_login?next=' + encodeURIComponent('/rt7_cloud_original_ui_doorbell') + '&msg=' + encodeURIComponent('請先登入後進入主頁'));
   }
-  const access = rt7UserSystemAccess_(user);
-  if (!access.ok) {
+  // V5.8D1: fix 500 Internal Server Error.
+  // Previous V5.8D called undefined helpers rt7UserSystemAccess_ / rt7VerifyUserMasterUid_.
+  // Use the existing access and persistent UID verification helpers instead.
+  if (!rt7UserSystemEnabled_(user)) {
     return res.redirect('/rt7_login?msg=' + encodeURIComponent('帳號尚未開通或尚未綁定設備，請聯絡管理員。'));
   }
-  const verify = rt7VerifyUserMasterUid_(user);
+  const verify = rt7RealMasterVerifyForUser_(user);
   if (!verify.ok) {
     return res.redirect('/rt7_login?msg=' + encodeURIComponent('主門禁 UID 尚未驗證，請聯絡管理員。'));
   }
