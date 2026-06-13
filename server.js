@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D2_GPIO_RETURN_MAIN_GATE_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D3_MUSIC_RETURN_MAIN_GATE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -3179,7 +3179,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var vid='';
     try{ var mm=String(url||'').match(/[?&]v=([a-zA-Z0-9_-]{11})/); if(mm) vid=mm[1]; }catch(e){}
     if(vid){
-      var playerUrl='/rt7_music_player?video_id='+encodeURIComponent(vid)+'&q='+encodeURIComponent(query)+'&return='+encodeURIComponent('/rt7_cloud_original_ui_doorbell');
+      var playerUrl='/rt7_music_player?video_id='+encodeURIComponent(vid)+'&q='+encodeURIComponent(query)+'&return='+encodeURIComponent('/rt7_return_doorbell?from=music');
       setAnswer('已找到第一個 YouTube 影片，進入 RT7 音樂播放器。播放結束會自動返回門禁頁。');
       try{ location.href=playerUrl; }catch(e){ window.open(playerUrl,'_blank'); }
     }else{
@@ -4357,8 +4357,11 @@ app.get('/api/rt7/music/mobile', async (req, res) => {
 app.get('/rt7_music_player', (req, res) => {
   const videoId = safeString(req.query.video_id || req.query.v || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 11);
   const q = safeString(req.query.q || '').slice(0, 120);
-  const returnUrlRaw = safeString(req.query.return || '/rt7_cloud_original_ui_doorbell');
-  const returnUrl = returnUrlRaw.startsWith('/') ? returnUrlRaw : '/rt7_cloud_original_ui_doorbell';
+  const returnUrlRaw = safeString(req.query.return || '/rt7_return_doorbell?from=music');
+  let returnUrl = returnUrlRaw.startsWith('/') ? returnUrlRaw : '/rt7_return_doorbell?from=music';
+  // V5.8D3: music player must return through the authenticated one-time main gate.
+  // Directly returning to /rt7_cloud_original_ui_doorbell may show the login page.
+  if (returnUrl === '/rt7_cloud_original_ui_doorbell') returnUrl = '/rt7_return_doorbell?from=music';
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return res.status(400).send('missing video_id');
   const h = (v) => String(v || '').replace(/[&<>\"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]));
   appendEvent({ type:'mobile_music_player', video_id:videoId, query:q, message:'RT7 music player opened: '+(q||videoId) });
