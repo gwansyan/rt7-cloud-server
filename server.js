@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D6_PUSH_BORDER_LOCALSTORAGE_FORCE_GREEN';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D7_PUSH_BORDER_SERVER_STATE_GREEN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -870,7 +870,9 @@ function htmlShell(title, body, extraHead = '') {
       // getSubscription 或 server state 有時讀不到，但通知其實已成功。
       if(rt7GetPushLocal_()){ state('推播：已啟用'); }
       var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();});
-      if(Notification && Notification.permission==='granted' && st.subscriptions>0){ rt7SetPushLocal_(true); state('推播：已啟用'); }
+      // D7: 以 Railway 伺服器已有訂閱為最高優先，避免 Android/LINE WebView 回主頁時
+      // Notification.permission 或 getSubscription 讀取不穩，導致外框又變黃。
+      if(st && Number(st.subscriptions||0)>0){ rt7SetPushLocal_(true); state('推播：已啟用'); }
       else if(rt7GetPushLocal_()) state('推播：已啟用');
       else if(Notification && Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
       else state('推播：未啟用');
@@ -2937,7 +2939,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle pushWarn" type="button" title="通知設定" onclick="location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="${rt7ReadPushSubs_().length>0?'circle pushEnabled':'circle pushWarn'}" type="button" title="通知設定" onclick="location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
