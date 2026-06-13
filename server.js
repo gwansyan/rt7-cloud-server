@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D8_PUSH_BORDER_REAL_SUBSCRIPTION_CHECK';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D8A_PUSH_BORDER_REAL_SUBSCRIPTION_REGEX_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -800,8 +800,9 @@ function htmlShell(title, body, extraHead = '') {
 (function(){
   if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
   function log(msg){ try{ console.log('[RT7_PWA_N2]', msg); }catch(e){} }
-  // V5.8D8: 通知鍵外框不再依賴 localStorage，也不只看 Railway server count。
+  // V5.8D8A: 通知鍵外框不再依賴 localStorage，也不只看 Railway server count。
   // 主頁每次載入都直接讀取此手機瀏覽器目前真正存在的 Push Subscription。
+  // 修正 D8: state('推播：已訂閱') 但綠框判斷 regex 未包含「已訂閱」，導致仍黃框。
   function rt7SetPushLocal_(yes){ try{ localStorage.setItem('rt7_push_enabled', yes?'1':'0'); sessionStorage.setItem('rt7_push_enabled', yes?'1':'0'); }catch(_){} }
   async function rt7GetRealPushSubscription_(){
     if(!('serviceWorker' in navigator)) throw new Error('此瀏覽器不支援 Service Worker');
@@ -818,7 +819,7 @@ function htmlShell(title, body, extraHead = '') {
       var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent='通知';
       var btn=document.getElementById('btnPushNotify')||document.getElementById('btnPushNotifyFloat');
       if(btn && btn.id==='btnPushNotify'){
-        var ok = /已啟用|已允許/.test(String(msg||'')) && !err;
+        var ok = /已訂閱|已啟用|已允許/.test(String(msg||'')) && !err;
         btn.classList.remove('pushEnabled','pushWarn','pushErr');
         btn.classList.add(err?'pushErr':(ok?'pushEnabled':'pushWarn'));
         btn.title = msg || '通知';
@@ -875,7 +876,7 @@ function htmlShell(title, body, extraHead = '') {
   }
   async function refreshPushState(){
     try{
-      // V5.8D8：主頁通知鍵外框只以此手機瀏覽器的真實 Subscription 判斷。
+      // V5.8D8A：主頁通知鍵外框只以此手機瀏覽器的真實 Subscription 判斷。
       // subscription != null => 綠框；subscription == null => 黃框。
       if(!('Notification' in window)){ state('推播：此瀏覽器不支援通知', true); return false; }
       if(Notification.permission==='denied'){ state('推播：通知權限已封鎖', true); return false; }
@@ -924,10 +925,14 @@ function htmlShell(title, body, extraHead = '') {
     btn.onclick=onPushClick;
     btn.addEventListener('click', onPushClick, true);
     btn.addEventListener('touchend', onPushClick, {capture:true, passive:false});
-    if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){log('sw registered');}).catch(function(e){state('推播：SW註冊失敗 '+e.message,true);}); }
+    if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){log('sw registered'); refreshPushState();}).catch(function(e){state('推播：SW註冊失敗 '+e.message,true);}); }
     refreshPushState();
   }
+  function schedulePushRefresh(delay){ setTimeout(function(){ refreshPushState(); }, delay||0); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', installPushButton); else installPushButton();
+  window.addEventListener('pageshow', function(){ schedulePushRefresh(50); schedulePushRefresh(600); });
+  window.addEventListener('focus', function(){ schedulePushRefresh(50); });
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) schedulePushRefresh(80); });
 })();
 </script>
 </body></html>`;
