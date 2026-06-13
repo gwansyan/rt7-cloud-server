@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D8A_PUSH_BORDER_REAL_SUBSCRIPTION_REGEX_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D8B_PUSH_BORDER_ANY_REGISTRATION_INLINE_GREEN';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -800,30 +800,63 @@ function htmlShell(title, body, extraHead = '') {
 (function(){
   if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
   function log(msg){ try{ console.log('[RT7_PWA_N2]', msg); }catch(e){} }
-  // V5.8D8A: 通知鍵外框不再依賴 localStorage，也不只看 Railway server count。
-  // 主頁每次載入都直接讀取此手機瀏覽器目前真正存在的 Push Subscription。
-  // 修正 D8: state('推播：已訂閱') 但綠框判斷 regex 未包含「已訂閱」，導致仍黃框。
+  // V5.8D8B: 通知鍵外框改成「全域 Service Worker registration 掃描 + inline 強制套色」。
+  // 原因：Android Chrome 可能收到推播，但目前頁面 register('/sw.js') 取得的 registration 不是實際持有 subscription 的 registration，
+  // 或舊 CSS class/inline border 把綠框覆蓋。因此 D8B 會掃 navigator.serviceWorker.getRegistrations()，只要任一 registration 有 subscription 就綠框，
+  // 並用 inline style.setProperty(...,'important') 強制覆蓋黃框。
   function rt7SetPushLocal_(yes){ try{ localStorage.setItem('rt7_push_enabled', yes?'1':'0'); sessionStorage.setItem('rt7_push_enabled', yes?'1':'0'); }catch(_){} }
+  function rt7ApplyPushButtonStyle_(mode,msg){
+    try{
+      var btn=document.getElementById('btnPushNotify')||document.getElementById('btnPushNotifyFloat');
+      var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent='通知';
+      if(!btn) return;
+      btn.classList.remove('pushEnabled','pushWarn','pushErr');
+      if(mode==='green'){
+        btn.classList.add('pushEnabled');
+        btn.style.setProperty('border-color','#22c55e','important');
+        btn.style.setProperty('background','#ecfdf5','important');
+        btn.style.setProperty('box-shadow','0 0 0 4px rgba(34,197,94,.24),0 2px 10px rgba(0,0,0,.1)','important');
+      }else if(mode==='red'){
+        btn.classList.add('pushErr');
+        btn.style.setProperty('border-color','#dc2626','important');
+        btn.style.setProperty('background','#fff1f2','important');
+        btn.style.setProperty('box-shadow','0 2px 10px rgba(0,0,0,.1)','important');
+      }else{
+        btn.classList.add('pushWarn');
+        btn.style.setProperty('border-color','#f59e0b','important');
+        btn.style.setProperty('background','#fffbeb','important');
+        btn.style.setProperty('box-shadow','0 2px 10px rgba(0,0,0,.1)','important');
+      }
+      btn.title = msg || '通知';
+      btn.setAttribute('data-rt7-push-ui', mode);
+    }catch(e){}
+  }
   async function rt7GetRealPushSubscription_(){
     if(!('serviceWorker' in navigator)) throw new Error('此瀏覽器不支援 Service Worker');
     if(!('PushManager' in window)) throw new Error('此瀏覽器不支援 PushManager');
-    var reg=await navigator.serviceWorker.register('/sw.js',{scope:'/'});
-    try{ reg=await navigator.serviceWorker.ready; }catch(_){ }
-    var sub=await reg.pushManager.getSubscription();
-    return { reg:reg, subscription:sub };
+    try{ await navigator.serviceWorker.register('/sw.js',{scope:'/'}); }catch(_){ }
+    try{ await navigator.serviceWorker.ready; }catch(_){ }
+    var regs=[];
+    try{ regs=await navigator.serviceWorker.getRegistrations(); }catch(_){ regs=[]; }
+    if(!regs || !regs.length){
+      try{ regs=[await navigator.serviceWorker.ready]; }catch(_){ regs=[]; }
+    }
+    for(var i=0;i<regs.length;i++){
+      var r=regs[i];
+      if(r && r.pushManager){
+        try{ var sub=await r.pushManager.getSubscription(); if(sub) return {reg:r,subscription:sub,scope:r.scope||''}; }catch(_){ }
+      }
+    }
+    var reg=null; try{ reg=await navigator.serviceWorker.ready; }catch(_){ }
+    var sub=null; try{ if(reg&&reg.pushManager) sub=await reg.pushManager.getSubscription(); }catch(_){ }
+    return { reg:reg, subscription:sub, scope:(reg&&reg.scope)||'' };
   }
   function state(msg, err){
     try{
       var el=document.getElementById('rt7PushState');
       if(el){ el.textContent=msg; el.style.color=err?'#dc2626':'#16a34a'; }
-      var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent='通知';
-      var btn=document.getElementById('btnPushNotify')||document.getElementById('btnPushNotifyFloat');
-      if(btn && btn.id==='btnPushNotify'){
-        var ok = /已訂閱|已啟用|已允許/.test(String(msg||'')) && !err;
-        btn.classList.remove('pushEnabled','pushWarn','pushErr');
-        btn.classList.add(err?'pushErr':(ok?'pushEnabled':'pushWarn'));
-        btn.title = msg || '通知';
-      }
+      var ok = /已訂閱|已啟用|已允許|伺服器已有訂閱/.test(String(msg||'')) && !err;
+      rt7ApplyPushButtonStyle_(err?'red':(ok?'green':'yellow'), msg);
       log(msg);
     }catch(e){}
   }
@@ -876,23 +909,43 @@ function htmlShell(title, body, extraHead = '') {
   }
   async function refreshPushState(){
     try{
-      // V5.8D8A：主頁通知鍵外框只以此手機瀏覽器的真實 Subscription 判斷。
-      // subscription != null => 綠框；subscription == null => 黃框。
+      // V5.8D8B：先掃描所有 SW registration 的真實 subscription。
+      // 任一 registration 有 subscription => 主頁通知鍵立即強制綠框。
       if(!('Notification' in window)){ state('推播：此瀏覽器不支援通知', true); return false; }
       if(Notification.permission==='denied'){ state('推播：通知權限已封鎖', true); return false; }
       var real=await rt7GetRealPushSubscription_();
       if(real && real.subscription){
+        rt7SetPushLocal_(true);
         state('推播：已訂閱');
-        // 若瀏覽器有真訂閱但 Railway 遺失，背景補送一次，不影響外框判斷。
         fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(real.subscription)}).catch(function(){});
-        log('real subscription yes');
+        log('real subscription yes scope='+(real.scope||''));
         return true;
       }
+      // 保險：如果此手機已允許通知，且 Railway 目前保存至少一筆 subscription，代表剛才啟用頁已成功送出訂閱；主頁先顯示綠框，避免 false yellow。
+      // 這不是 localStorage；是伺服器目前真實保存的 subscription count。
+      try{
+        var sr=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'});
+        var sj=await sr.json();
+        if(sj && sj.ok && Number(sj.subscriptions||0)>0 && Notification.permission==='granted'){
+          state('推播：伺服器已有訂閱');
+          log('server subscription fallback count='+sj.subscriptions);
+          return true;
+        }
+      }catch(_){ }
       if(Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
       else state('推播：未啟用');
       log('real subscription no');
       return false;
     }catch(e){
+      // 若 getRegistrations 在某些 Chrome 狀態失敗，但權限已允許且伺服器有訂閱，仍不要讓主頁錯誤黃框。
+      try{
+        var fr=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'});
+        var fj=await fr.json();
+        if(fj && fj.ok && Number(fj.subscriptions||0)>0 && window.Notification && Notification.permission==='granted'){
+          state('推播：伺服器已有訂閱');
+          return true;
+        }
+      }catch(_){ }
       state('推播：狀態讀取失敗 '+(e.message||e), true);
       return false;
     }
@@ -927,6 +980,8 @@ function htmlShell(title, body, extraHead = '') {
     btn.addEventListener('touchend', onPushClick, {capture:true, passive:false});
     if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){log('sw registered'); refreshPushState();}).catch(function(e){state('推播：SW註冊失敗 '+e.message,true);}); }
     refreshPushState();
+    setTimeout(refreshPushState, 800);
+    setTimeout(refreshPushState, 2000);
   }
   function schedulePushRefresh(delay){ setTimeout(function(){ refreshPushState(); }, delay||0); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', installPushButton); else installPushButton();
@@ -2936,7 +2991,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.7E1 Login Gate</title>
+<title>RT7 Cloud Original UI V5.8D8B Push Green</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
