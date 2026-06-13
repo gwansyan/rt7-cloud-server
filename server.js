@@ -180,7 +180,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8C_PLATFORM_BACK_NAV_FIX';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8D_PUSH_ENABLE_RETURN_MAIN_GATE_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1436,6 +1436,26 @@ app.post('/api/auth/users/password', rt7RequireAdmin_, (req, res) => {
   res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('已重設密碼：' + target.username));
 });
 
+
+// V5.8D: Return from push-enable page to main page without forcing a new login.
+// The main page still requires the one-time gate cookie, so issue it only for a logged-in user.
+app.get('/rt7_return_doorbell', (req, res) => {
+  const user = rt7GetSessionUser_(req);
+  if (!user) {
+    return res.redirect('/rt7_login?next=' + encodeURIComponent('/rt7_cloud_original_ui_doorbell') + '&msg=' + encodeURIComponent('請先登入後進入主頁'));
+  }
+  const access = rt7UserSystemAccess_(user);
+  if (!access.ok) {
+    return res.redirect('/rt7_login?msg=' + encodeURIComponent('帳號尚未開通或尚未綁定設備，請聯絡管理員。'));
+  }
+  const verify = rt7VerifyUserMasterUid_(user);
+  if (!verify.ok) {
+    return res.redirect('/rt7_login?msg=' + encodeURIComponent('主門禁 UID 尚未驗證，請聯絡管理員。'));
+  }
+  rt7SetMainGateCookie_(res);
+  res.redirect('/rt7_cloud_original_ui_doorbell');
+});
+
 // Protect human-facing pages. ESP32 device APIs remain open for device compatibility.
 app.use((req, res, next) => {
   const p = req.path || '';
@@ -1651,7 +1671,7 @@ app.get('/rt7_push_enable', (req, res) => {
   <h2>啟用門鈴通知</h2>
   <p class="muted">此頁是獨立測試頁，避免主頁其它按鍵或影像區影響通知註冊。</p>
   <button id="rt7PushEnableNow" class="btn green" style="font-size:22px;min-height:64px;width:100%" onclick="return rt7StandalonePushClick(event)">🔔 立即啟用門鈴通知</button>
-  <a class="btn gray" href="/rt7_cloud_original_ui_doorbell">返回門禁主頁</a>
+  <a class="btn gray" href="/rt7_return_doorbell">返回門禁主頁</a>
   <button class="btn" onclick="location.href='/api/push/test'">測試通知 /api/push/test</button>
   <pre id="rt7PushState" class="status" style="text-align:left;margin-top:12px">推播：等待按下啟用</pre>
 </section>
