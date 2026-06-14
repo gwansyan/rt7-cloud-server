@@ -255,7 +255,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8E_MULTI_COMMUNITY_MASTER_UID_BIND';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8E1_COMMUNITY_REGISTER_BIND_SELECTOR';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -350,10 +350,50 @@ function rt7CreateSession_(req, res, user) {
 }
 function rt7AuthPage_(mode, message, nextUrl) {
   const isReg = mode === 'register';
-  const nextHidden = (!isReg && nextUrl) ? '<input type="hidden" name="next" value="' + String(nextUrl).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c] || c)) + '">' : '';
+  const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
+  const nextHidden = (!isReg && nextUrl) ? '<input type="hidden" name="next" value="' + escHtml(nextUrl) + '">' : '';
   const title = isReg ? 'RT7 註冊' : 'RT7 登入';
+  const masters = isReg ? rt7KnownMastersArray_().filter(m => m && m.uid) : [];
+  const usedMap = {};
+  if (isReg) {
+    rt7ReadUsers_().forEach(u => {
+      const uid = rt7NormalizeMasterUid_(u && u.master_uid || '');
+      if (uid) usedMap[uid] = rt7CommunityName_(u);
+    });
+  }
+  const masterOptions = masters.map(m => {
+    const uid = rt7NormalizeMasterUid_(m.uid || m.master_uid || '');
+    const used = usedMap[uid] || '';
+    const label = uid + ' / ' + (m.ip || '-') + (used ? ' / 已綁定：' + used : ' / 可綁定') + (m.online ? ' / ONLINE' : ' / OFFLINE');
+    return `<option value="${escHtml(uid)}" data-ip="${escHtml(m.ip || '')}" data-used="${escHtml(used)}">${escHtml(label)}</option>`;
+  }).join('');
+  const registerFields = isReg ? `
+<label>社區名稱</label><input name="community" required placeholder="例如 A社區 / B社區">
+<div class="hint">V5.8E1：第一次建立 admin 時，必須先輸入社區名稱，再選擇該社區的 #1 主門禁。</div>
+<label>選擇在線 #1 主門禁</label>
+<select id="master_select" name="master_select"><option value="">手動輸入 / 尚未看到模組</option>${masterOptions}</select>
+<div class="hint" id="master_select_hint">若 ESP32 已開機並完成 heartbeat，會出現在這裡。選取後會自動帶入 UID/IP。</div>
+<label>主門禁UID</label><input id="master_uid_input" name="master_uid" placeholder="例如 RT7-MASTER-68F2299FC114">
+<div class="hint">#1 RT7 主門禁唯一編號。不可與其他社區重複綁定。</div>
+<label>#1 主門禁 IP</label><input id="master_ip_input" name="master_ip" placeholder="例如 192.168.0.179">
+<div class="hint">選擇在線 Master 後會自動填入目前 heartbeat IP。</div>
+<label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1">
+<label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改">
+<div class="hint">第一個註冊者或目前沒有 admin 時，會成為該社區 admin 並綁定主門禁；後續帳號預設 user。</div>
+<script>
+(function(){
+  function q(id){return document.getElementById(id)}
+  function applySelection(){
+    var s=q('master_select'), uid=q('master_uid_input'), ip=q('master_ip_input'), hint=q('master_select_hint');
+    if(!s || !uid || !ip) return;
+    var opt=s.options[s.selectedIndex];
+    if(opt && opt.value){ uid.value=opt.value; ip.value=opt.getAttribute('data-ip')||''; var used=opt.getAttribute('data-used')||''; if(hint) hint.textContent = used ? ('注意：此 UID 已被社區「'+used+'」使用，不能再註冊其他社區。') : '已自動帶入在線主門禁 UID/IP。'; }
+  }
+  var s=q('master_select'); if(s){ s.addEventListener('change', applySelection); }
+})();
+</script>` : '';
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>#1 主門禁 IP</label><input name="master_ip" placeholder="例如 192.168.0.179"><div class="hint">手機註冊時輸入 #1 主門禁目前 IP。Railway 雲端管理平台會自動帶入 UID/IP，按「取得/比對 #1 UID」即可產生 heartbeat 比對資料。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊者預設為 user，可由 admin 在使用者管理頁改成 admin 或開通/解除。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input,select{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px;background:#fff}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${escHtml(message)}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${registerFields}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
 }
 function rt7RequireLogin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
@@ -1320,6 +1360,26 @@ app.get('/api/platform/master/manual_verify', rt7RequirePlatformAdmin_, (req, re
   res.json({ ok:true, version:SERVER_VERSION, master_uid:uid, real_master_uid:uid, verified:true, online:true, heartbeat_ip:ip, last_master_heartbeat:info && info.last_heartbeat || '', known_masters:rt7KnownMastersArray_() });
 });
 
+// V5.8E1 public selector for phone registration. Only sanitized UID/IP/status are exposed.
+app.get('/api/rt7/master/public_masters', (req, res) => {
+  const users = rt7ReadUsers_();
+  const used = {};
+  users.forEach(u => {
+    const uid = rt7NormalizeMasterUid_(u && u.master_uid || '');
+    if (uid && !used[uid]) used[uid] = rt7CommunityName_(u);
+  });
+  const masters = rt7KnownMastersArray_().map(m => ({
+    uid: rt7NormalizeMasterUid_(m.uid || m.master_uid || ''),
+    master_uid: rt7NormalizeMasterUid_(m.uid || m.master_uid || ''),
+    ip: safeString(m.ip || ''),
+    mac: safeString(m.mac || ''),
+    online: !!m.online,
+    last_heartbeat: safeString(m.last_heartbeat || ''),
+    used_by_community: used[rt7NormalizeMasterUid_(m.uid || m.master_uid || '')] || ''
+  })).filter(m => m.uid);
+  res.json({ ok:true, version:SERVER_VERSION, masters });
+});
+
 // ---------------- V5.7A Auth routes ----------------
 app.get('/rt7_login', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('login', req.query.msg || '', req.query.next || '')); });
 app.get('/rt7_register', (req, res) => { res.set('Cache-Control','no-store'); res.type('html').send(rt7AuthPage_('register', req.query.msg || '')); });
@@ -1358,6 +1418,7 @@ app.post('/api/auth/register', (req, res) => {
   const code = safeString(req.body.register_code).trim();
   const masterUidInput = rt7NormalizeMasterUid_(req.body.master_uid || '');
   const masterIpInput = safeString(req.body.master_ip || '').trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,'').slice(0,80);
+  const communityInput = safeString(req.body.community || '').trim().slice(0,80);
   const devicePair = safeString(req.body.device_pair || '#1').trim();
   if (!username || password.length < 4) return res.status(400).type('html').send(rt7AuthPage_('register', '帳號或密碼太短'));
   const users = rt7ReadUsers_();
@@ -1371,9 +1432,12 @@ app.post('/api/auth/register', (req, res) => {
   if (!makeAdmin && code !== needCode) return res.status(403).type('html').send(rt7AuthPage_('register', '註冊碼錯誤'));
   const masterReg = rt7ReadMasterRegistry_();
   const masterUid = masterUidInput || masterReg.master_uid || rt7DefaultMasterUid_();
+  const usedBy = rt7MasterUidUsedByOtherCommunity_(masterUid, communityInput || ('社區_' + username));
+  if (masterUid && usedBy) return res.status(409).type('html').send(rt7AuthPage_('register', '此主門禁 UID 已被其他社區綁定：' + usedBy));
+  const onlineInfo = rt7GetMasterInfo_(masterUid);
   const userDevices = makeAdmin ? ['#1','#2','#3','#4'] : rt7NormalizeDeviceIds_(devicePair || '#1');
   const salt = crypto.randomBytes(16).toString('hex');
-  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:makeAdmin?'admin':'user', enabled:true, system_enabled:true, master_uid:masterUid, master_ip:masterIpInput, devices:userDevices, created_at:nowIso(), ip:clientIp(req) };
+  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:makeAdmin?'admin':'user', enabled:true, system_enabled:!!masterUid && (!!onlineInfo || makeAdmin), community:(communityInput || ('社區_' + username)), master_uid:masterUid, master_ip:(masterIpInput || (onlineInfo && onlineInfo.ip || '')), devices:userDevices, created_at:nowIso(), ip:clientIp(req) };
   users.push(u); rt7SaveUsers_(users);
   if (makeAdmin) {
     masterReg.master_uid = masterUid;
@@ -1385,7 +1449,7 @@ app.post('/api/auth/register', (req, res) => {
   }
   const currentUser = rt7GetSessionUser_(req);
   const currentIsAdmin = currentUser && (currentUser.role || 'user') === 'admin' && rt7UserSystemEnabled_(currentUser);
-  appendEvent({ type:'auth_register', username:u.username, role:u.role, master_uid:u.master_uid, master_ip:u.master_ip, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin, created_by: currentUser && currentUser.username });
+  appendEvent({ type:'auth_register', username:u.username, role:u.role, community:u.community, master_uid:u.master_uid, master_ip:u.master_ip, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin, created_by: currentUser && currentUser.username });
   // V5.7D7: 若 admin 在 /rt7_register 新增第二個帳號，不切換登入者，避免建立 user01 後失去 /rt7_user_manager 權限。
   if (currentIsAdmin && !makeAdmin) {
     return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('已新增帳號：' + u.username + '（預設 user，請在本頁改角色或開通/解除）'));
@@ -1393,7 +1457,7 @@ app.post('/api/auth/register', (req, res) => {
   // V5.7E1: 註冊不再自動登入，也不直接進入主頁。
   // 註冊完成後必須回登入頁輸入帳密；登入時再檢查是否已開通、已綁定 UID 與設備。
   const msg = makeAdmin
-    ? '註冊成功，已建立第一個 admin 並綁定主門禁。請用 admin 帳密登入後進入主頁。'
+    ? '註冊成功，已建立社區 admin 並綁定主門禁。請用 admin 帳密登入後進入主頁。'
     : '註冊成功，請等待 Railway 雲端管理平台或社區 admin 開通後再登入。';
   res.redirect('/rt7_login?msg=' + encodeURIComponent(msg));
 });
