@@ -255,7 +255,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8E1_COMMUNITY_REGISTER_BIND_SELECTOR';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8E2_COMMUNITY_SCOPED_ADMIN_ACCOUNT';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -367,6 +367,9 @@ function rt7AuthPage_(mode, message, nextUrl) {
     const label = uid + ' / ' + (m.ip || '-') + (used ? ' / 已綁定：' + used : ' / 可綁定') + (m.online ? ' / ONLINE' : ' / OFFLINE');
     return `<option value="${escHtml(uid)}" data-ip="${escHtml(m.ip || '')}" data-used="${escHtml(used)}">${escHtml(label)}</option>`;
   }).join('');
+  const loginFields = !isReg ? `
+<label>社區名稱</label><input name="community" placeholder="A社區 / B社區（同帳號時必填）">
+<div class="hint">V5.8E2：A社區與 B社區可同時使用 admin 帳號；若帳號重複，登入時請輸入社區名稱。</div>` : '';
   const registerFields = isReg ? `
 <label>社區名稱</label><input name="community" required placeholder="例如 A社區 / B社區">
 <div class="hint">V5.8E1：第一次建立 admin 時，必須先輸入社區名稱，再選擇該社區的 #1 主門禁。</div>
@@ -379,7 +382,7 @@ function rt7AuthPage_(mode, message, nextUrl) {
 <div class="hint">選擇在線 Master 後會自動填入目前 heartbeat IP。</div>
 <label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1">
 <label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改">
-<div class="hint">第一個註冊者或目前沒有 admin 時，會成為該社區 admin 並綁定主門禁；後續帳號預設 user。</div>
+<div class="hint">每個社區第一個帳號會成為該社區 admin；同一帳號名稱可在不同社區重複使用，例如 A社區 admin、B社區 admin。</div>
 <script>
 (function(){
   function q(id){return document.getElementById(id)}
@@ -393,7 +396,7 @@ function rt7AuthPage_(mode, message, nextUrl) {
 })();
 </script>` : '';
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input,select{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px;background:#fff}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${escHtml(message)}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${registerFields}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input,select{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px;background:#fff}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${escHtml(message)}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${loginFields}${registerFields}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
 }
 function rt7RequireLogin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
@@ -1386,9 +1389,19 @@ app.get('/rt7_register', (req, res) => { res.set('Cache-Control','no-store'); re
 app.post('/api/auth/login', (req, res) => {
   const username = safeString(req.body.username).trim();
   const password = safeString(req.body.password);
+  const loginCommunity = safeString(req.body.community || req.body.community_name || '').trim().slice(0,80);
   const users = rt7ReadUsers_();
-  const u = users.find(x => String(x.username).toLowerCase() === username.toLowerCase() && x.enabled !== false);
-  if (!u || rt7HashPassword_(password, u.salt) !== u.password_hash) return res.status(401).type('html').send(rt7AuthPage_('login', '帳號或密碼錯誤'));
+  const matches = users.filter(x => String(x.username).toLowerCase() === username.toLowerCase() && x.enabled !== false);
+  let u = null;
+  if (loginCommunity) {
+    const ck = rt7CommunityKey_(loginCommunity);
+    u = matches.find(x => rt7CommunityKey_(rt7CommunityName_(x)) === ck) || null;
+  } else if (matches.length === 1) {
+    u = matches[0];
+  } else if (matches.length > 1) {
+    return res.status(409).type('html').send(rt7AuthPage_('login', '同一帳號存在多個社區，請輸入社區名稱後登入。'));
+  }
+  if (!u || rt7HashPassword_(password, u.salt) !== u.password_hash) return res.status(401).type('html').send(rt7AuthPage_('login', '帳號、密碼或社區名稱錯誤'));
   // V5.7E1: 主頁登入閘門必須每次登入都檢查系統開通、主門禁 UID、設備綁定。
   // 未開通帳號不可建立 session 進入主頁，避免未綁定者直接觀看/操作門禁。
   if (!rt7UserSystemEnabled_(u)) {
@@ -1421,13 +1434,15 @@ app.post('/api/auth/register', (req, res) => {
   const communityInput = safeString(req.body.community || '').trim().slice(0,80);
   const devicePair = safeString(req.body.device_pair || '#1').trim();
   if (!username || password.length < 4) return res.status(400).type('html').send(rt7AuthPage_('register', '帳號或密碼太短'));
+  if (!communityInput) return res.status(400).type('html').send(rt7AuthPage_('register', '請輸入社區名稱'));
   const users = rt7ReadUsers_();
-  if (users.some(u => String(u.username).toLowerCase() === username.toLowerCase())) return res.status(409).type('html').send(rt7AuthPage_('register', '帳號已存在'));
-  // If the previous user database exists but has no enabled admin, promote this registration to admin.
-  // This avoids getting locked out of /rt7_user_manager during early tests or after accidental admin deletion.
+  const communityKey = rt7CommunityKey_(communityInput);
+  if (users.some(u => String(u.username).toLowerCase() === username.toLowerCase() && rt7CommunityKey_(rt7CommunityName_(u)) === communityKey)) return res.status(409).type('html').send(rt7AuthPage_('register', '此社區帳號已存在'));
+  // V5.8E2: A社區/B社區可各自建立 admin；帳號名稱只在同一社區內不可重複。
   const first = users.length === 0;
   const noAdmin = rt7CountAdmins_(users) === 0;
-  const makeAdmin = first || noAdmin;
+  const noAdminInCommunity = !users.some(u => rt7CommunityKey_(rt7CommunityName_(u)) === communityKey && String(u.role || 'user') === 'admin' && u.enabled !== false);
+  const makeAdmin = first || noAdmin || noAdminInCommunity;
   const needCode = process.env.RT7_REGISTER_CODE || 'rt7';
   if (!makeAdmin && code !== needCode) return res.status(403).type('html').send(rt7AuthPage_('register', '註冊碼錯誤'));
   const masterReg = rt7ReadMasterRegistry_();
