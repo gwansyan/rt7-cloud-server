@@ -1,4 +1,4 @@
-// RT7_V6_2D_ICATCH_VIDEO_LOSS_FILTER_FIX
+// RT7_V6_2E_ICATCH_TRUE_STREAM_FFMPEG_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -22,7 +22,7 @@ const path = require('path');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2D_ICATCH_VIDEO_LOSS_FILTER_FIX';
+const VERSION = 'RT7_V6_2E_ICATCH_TRUE_STREAM_FFMPEG_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -34,7 +34,10 @@ const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
 // 若同時把同一 URL 當成 CH01~CH04 擷取，會造成 CH2/CH4 顯示 CH1 的畫面。
 // 因此預設只上傳 CH01。若未來抓到真正的 channel 參數，再設定 DVR_CHANNELS=1,2,3,4 與 ICATCH_NET_VIDEO_TEMPLATE。
 const CHANNELS = String(process.env.DVR_CHANNELS || '1').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
-const INTERVAL_MS = Math.max(800, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
+const INTERVAL_MS = Math.max(200, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
+const TRUE_STREAM_MODE = String(process.env.TRUE_STREAM_MODE || '1').trim() !== '0';
+const STREAM_FPS = Math.max(1, Math.min(10, parseInt(process.env.STREAM_FPS || '4', 10) || 4));
+const UPLOAD_MIN_INTERVAL_MS = Math.max(100, parseInt(process.env.UPLOAD_MIN_INTERVAL_MS || String(Math.floor(1000 / STREAM_FPS)), 10) || Math.floor(1000 / STREAM_FPS));
 const FFMPEG_TIMEOUT_MS = Math.max(2500, parseInt(process.env.FFMPEG_TIMEOUT_MS || '10000', 10) || 10000);
 const DEBUG = String(process.env.DEBUG || '').trim() === '1';
 const PROBE_ONLY = String(process.env.PROBE_ONLY || '').trim() === '1';
@@ -360,7 +363,113 @@ async function testOne() {
   }
 }
 
+
+function findNextJpegFrame(buffer) {
+  if (!buffer || buffer.length < 4) return { frame:null, rest:buffer || Buffer.alloc(0) };
+  const soi = buffer.indexOf(Buffer.from([0xff, 0xd8]));
+  if (soi < 0) return { frame:null, rest: buffer.length > 1024*1024 ? buffer.slice(-1024) : buffer };
+  const eoi = buffer.indexOf(Buffer.from([0xff, 0xd9]), soi + 2);
+  if (eoi < 0) return { frame:null, rest: soi > 0 ? buffer.slice(soi) : buffer };
+  const frame = buffer.slice(soi, eoi + 2);
+  const rest = buffer.slice(eoi + 2);
+  return { frame, rest };
+}
+
+function startContinuousFfmpegChannel(ch) {
+  const id = padCh(ch);
+  const urlText = fill(NET_VIDEO_TEMPLATE, ch);
+  let proc = null;
+  let stopping = false;
+  let buffer = Buffer.alloc(0);
+  let uploadBusy = false;
+  let pendingFrame = null;
+  let lastUploadAt = 0;
+  let frameCount = 0;
+  let restartCount = 0;
+
+  async function uploadFrame(frame) {
+    const vl = rt7DetectVideoLossJpeg_(frame);
+    if (vl.video_loss) {
+      console.log(`[${id}] stream SKIP VIDEO_LOSS blue=${vl.blue_ratio.toFixed(2)} avgB=${vl.avg_b.toFixed(1)} keep_last_good=1`);
+      return;
+    }
+    const now = Date.now();
+    if (now - lastUploadAt < UPLOAD_MIN_INTERVAL_MS) {
+      pendingFrame = frame;
+      return;
+    }
+    lastUploadAt = now;
+    uploadBusy = true;
+    try {
+      const up = await upload(ch, frame, 'icatch-net-video-true-stream-v62e');
+      frameCount++;
+      console.log(`[${id}] stream frame=${frame.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
+    } finally {
+      uploadBusy = false;
+      if (pendingFrame) {
+        const next = pendingFrame;
+        pendingFrame = null;
+        setImmediate(() => uploadFrame(next));
+      }
+    }
+  }
+
+  async function spawnLoop() {
+    if (stopping) return;
+    const videoHeaders = await getVideoHeaders();
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2E', 'Connection':'close' }));
+    const args = [
+      '-hide_banner', '-nostdin',
+      '-loglevel', DEBUG ? 'info' : 'error',
+      '-headers', headerText,
+      '-rw_timeout', String(Math.max(5000000, FFMPEG_TIMEOUT_MS * 1000)),
+      '-i', urlText,
+      '-an',
+      '-vf', `fps=${STREAM_FPS}`,
+      '-q:v', '4',
+      '-f', 'mjpeg',
+      'pipe:1'
+    ];
+    console.log(`[${id}] TRUE_STREAM start url=${mask(urlText)} fps=${STREAM_FPS}`);
+    proc = spawn('ffmpeg', args, { windowsHide:true });
+    let stderrTail = '';
+    proc.stdout.on('data', d => {
+      buffer = Buffer.concat([buffer, d]);
+      if (buffer.length > 4 * 1024 * 1024) buffer = buffer.slice(-1024 * 1024);
+      while (true) {
+        const r = findNextJpegFrame(buffer);
+        buffer = r.rest;
+        if (!r.frame) break;
+        if (!uploadBusy) uploadFrame(r.frame);
+        else pendingFrame = r.frame;
+      }
+    });
+    proc.stderr.on('data', d => { stderrTail = (stderrTail + d.toString('utf8')).slice(-1000); });
+    proc.on('close', code => {
+      if (stopping) return;
+      restartCount++;
+      console.log(`[${id}] TRUE_STREAM ffmpeg closed code=${code} restart=${restartCount} ${stderrTail.replace(/\r?\n/g,' | ')}`);
+      setTimeout(spawnLoop, Math.min(5000, 900 + restartCount * 300));
+    });
+    proc.on('error', e => {
+      restartCount++;
+      console.log(`[${id}] TRUE_STREAM ffmpeg error ${String(e.message || e)} restart=${restartCount}`);
+      setTimeout(spawnLoop, Math.min(5000, 900 + restartCount * 300));
+    });
+  }
+
+  spawnLoop();
+  return () => { stopping = true; try { if (proc) proc.kill('SIGKILL'); } catch (_) {} };
+}
+
+async function trueStreamLoop() {
+  if (!RAILWAY_URL) { console.log('[ERROR] RAILWAY_URL_EMPTY'); return; }
+  await initIcatchSessionOnce();
+  CHANNELS.forEach(ch => startContinuousFfmpegChannel(ch));
+}
+
 async function loop() {
+  if (TRUE_STREAM_MODE && !TEST_ONLY && !RAW_ONLY && !PROBE_ONLY) return trueStreamLoop();
   for (const ch of CHANNELS) await captureChannel(ch);
   setTimeout(loop, INTERVAL_MS);
 }
