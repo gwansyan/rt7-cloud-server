@@ -1,4 +1,4 @@
-// RT7_V6_2E_ICATCH_TRUE_STREAM_FFMPEG_FIX
+// RT7_V6_2F_ICATCH_TRUE_STREAM_FFMPEG_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -22,7 +22,7 @@ const path = require('path');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2E_ICATCH_TRUE_STREAM_FFMPEG_FIX';
+const VERSION = 'RT7_V6_2F_ICATCH_TRUE_STREAM_FFMPEG_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -36,7 +36,7 @@ const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
 const CHANNELS = String(process.env.DVR_CHANNELS || '1').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 const INTERVAL_MS = Math.max(200, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
 const TRUE_STREAM_MODE = String(process.env.TRUE_STREAM_MODE || '1').trim() !== '0';
-const STREAM_FPS = Math.max(1, Math.min(10, parseInt(process.env.STREAM_FPS || '4', 10) || 4));
+const STREAM_FPS = Math.max(1, Math.min(10, parseInt(process.env.STREAM_FPS || '6', 10) || 4));
 const UPLOAD_MIN_INTERVAL_MS = Math.max(100, parseInt(process.env.UPLOAD_MIN_INTERVAL_MS || String(Math.floor(1000 / STREAM_FPS)), 10) || Math.floor(1000 / STREAM_FPS));
 const FFMPEG_TIMEOUT_MS = Math.max(2500, parseInt(process.env.FFMPEG_TIMEOUT_MS || '10000', 10) || 10000);
 const DEBUG = String(process.env.DEBUG || '').trim() === '1';
@@ -417,16 +417,21 @@ function startContinuousFfmpegChannel(ch) {
   async function spawnLoop() {
     if (stopping) return;
     const videoHeaders = await getVideoHeaders();
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2E', 'Connection':'close' }));
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2E', 'Connection':'keep-alive' }));
     const args = [
       '-hide_banner', '-nostdin',
       '-loglevel', DEBUG ? 'info' : 'error',
+      '-fflags', 'nobuffer',
+      '-flags', 'low_delay',
+      '-analyzeduration', '0',
+      '-probesize', '32768',
       '-headers', headerText,
       '-rw_timeout', String(Math.max(5000000, FFMPEG_TIMEOUT_MS * 1000)),
       '-i', urlText,
       '-an',
       '-vf', `fps=${STREAM_FPS}`,
       '-q:v', '4',
+      '-flush_packets', '1',
       '-f', 'mjpeg',
       'pipe:1'
     ];

@@ -5259,7 +5259,7 @@ function rt7DvrBridgeLatest_(id) {
   try {
     const st = fs.statSync(file);
     const age_ms = Date.now() - st.mtimeMs;
-    return Object.assign({}, meta, { ok:true, id, file, bytes:st.size, updated_at:new Date(st.mtimeMs).toISOString(), age_ms, online:age_ms < 8000 });
+    return Object.assign({}, meta, { ok:true, id, file, bytes:st.size, updated_at:new Date(st.mtimeMs).toISOString(), age_ms, online:age_ms < 30000, stale: age_ms >= 30000 });
   } catch (_) {
     return Object.assign({}, meta, { ok:false, id, online:false, error:'NO_BRIDGE_FRAME' });
   }
@@ -5353,7 +5353,7 @@ function rt7DvrServeMjpeg_(req, res, id) {
     'Pragma':'no-cache',
     'Expires':'0',
     'X-Accel-Buffering':'no',
-    'X-RT7-DVR-MJPEG':'V6_2E_ICATCH_TRUE_STREAM_FFMPEG_FIX',
+    'X-RT7-DVR-MJPEG':'V6_2F_ICATCH_LOW_LATENCY_ONLINE_FIX',
     'X-RT7-DVR-Camera': id
   });
   let closed = false;
@@ -5403,18 +5403,18 @@ function rt7IcatchRealtimeMjpegPage_() {
   const cams = rt7DvrReadCameras_();
   const ch1 = cams.find(c => String(c.id).toUpperCase() === 'CH01') || { id:'CH01', name:'CH01 大門' };
   const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const card = `<div class="cam live"><div class="camTop"><b>${esc(ch1.id)} / ${esc(ch1.name||'CH01 大門')}</b><span id="s_CH01">讀取中</span></div><div class="view"><img id="img_CH01" src="/api/rt7/dvr/bridge/stream/CH01?fps=5&v=62e&first=${Date.now()}" onerror="document.getElementById('s_CH01').textContent='MJPEG_ERROR';"></div><div class="meta">True MJPEG: <code>/api/rt7/dvr/bridge/stream/CH01?fps=5</code><br><span id="m_CH01">MJPEG 串流中；每 3 秒檢查 Bridge 狀態，不重載畫面。</span></div><div class="btns"><button onclick="reloadMjpeg()">重連串流</button><button onclick="latestStill()">看單張</button><button onclick="ai('CH01')">AI 辨識</button></div></div>`;
+  const card = `<div class="cam live"><div class="camTop"><b>${esc(ch1.id)} / ${esc(ch1.name||'CH01 大門')}</b><span id="s_CH01">讀取中</span></div><div class="view"><img id="img_CH01" src="/api/rt7/dvr/bridge/stream/CH01?fps=6&v=62f&first=${Date.now()}" onerror="document.getElementById('s_CH01').textContent='MJPEG_ERROR';"></div><div class="meta">True MJPEG: <code>/api/rt7/dvr/bridge/stream/CH01?fps=6</code><br><span id="m_CH01">MJPEG 串流中；每 3 秒檢查 Bridge 狀態，不重載畫面。</span></div><div class="btns"><button onclick="reloadMjpeg()">重連串流</button><button onclick="latestStill()">看單張</button><button onclick="ai('CH01')">AI 辨識</button></div></div>`;
   const disabled = ['CH02','CH03','CH04'].map(id=>`<div class="cam disabled"><div class="camTop"><b>${id}</b><span>DISABLED</span></div><div class="disabledBox">目前 PCAPdroid 確認 <code>net_video.cgi</code> 沒有 channel 參數；本版只顯示 CH01，避免將 CH01 畫面或 VIDEO LOSS 誤標到 ${id}。</div></div>`).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 iCATCH 穩定影像</title><style>
 body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:#fff;padding:14px;display:flex;gap:10px;align-items:center}.top h1{font-size:20px;margin:0;flex:1}.top a{color:#fff;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:880px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:1fr;gap:10px}.cam{background:#fff;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px;font-size:20px}.camTop span{font-weight:900}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.meta{font-size:13px;color:#64748b;margin:7px 0;line-height:1.45}.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:11px 8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}.card{background:#fff;border-radius:16px;padding:12px;margin-top:12px}.disabled{opacity:.78}.disabledBox{background:#f1f5f9;border-radius:12px;padding:18px;line-height:1.55;color:#475569}.ok{color:#0a8f45}.bad{color:#c62828}@media(max-width:760px){.top h1{font-size:17px}.btns{grid-template-columns:1fr}.camTop{font-size:18px}}
-</style></head><body><div class="top"><a href="/rt7_dvr_ai_platform">← DVR平台</a><h1>RT7 V6.2E iCATCH 真串流</h1><a href="/api/rt7/dvr/bridge/status">JSON</a></div><div class="wrap"><div class="notice"><b>V6.2E：</b>Bridge 改為 FFmpeg 常駐真串流模式，不再每秒重新開 FFmpeg 擷取單張。手機頁預設使用 MJPEG 串流，並保留單張備援；同時保留 VIDEO LOSS 過濾。CH02~CH04 仍停用。</div><div class="grid">${card}${disabled}</div><div class="card"><h2>Bridge 狀態</h2><div id="log" class="log">讀取中...</div></div></div><script>
+</style></head><body><div class="top"><a href="/rt7_dvr_ai_platform">← DVR平台</a><h1>RT7 V6.2F iCATCH 低延遲真串流</h1><a href="/api/rt7/dvr/bridge/status">JSON</a></div><div class="wrap"><div class="notice"><b>V6.2F：</b>修正 ONLINE/OFFLINE 誤判，Bridge 影像 30 秒內都視為連線中；MJPEG 端點保留上一張有效影像，不因短暫延遲顯示 OFFLINE。Bridge 也加入 FFmpeg 低延遲參數，改善與 DVR 原畫面約 1~2 秒的延遲。CH02~CH04 仍停用。</div><div class="grid">${card}${disabled}</div><div class="card"><h2>Bridge 狀態</h2><div id="log" class="log">讀取中...</div></div></div><script>
 let lastGoodAt=Date.now();
 function setS(t, cls){const el=document.getElementById('s_CH01'); if(el){el.textContent=t; el.className=cls||'';}}
-function reloadMjpeg(){const img=document.getElementById('img_CH01'); if(img){img.src='/api/rt7/dvr/bridge/stream/CH01?fps=5&v=62e&reload='+Date.now(); setS('RECONNECT','ok');}}
+function reloadMjpeg(){const img=document.getElementById('img_CH01'); if(img){img.src='/api/rt7/dvr/bridge/stream/CH01?fps=6&v=62f&reload='+Date.now(); setS('RECONNECT','ok');}}
 function latestStill(){const img=document.getElementById('img_CH01'); if(img){img.src='/api/rt7/dvr/bridge/latest/CH01?still='+Date.now(); setS('STILL','ok');}}
 function single(id){location.href='/api/rt7/dvr/bridge/stream/'+encodeURIComponent(id)+'?fps=5&_='+Date.now();}
 async function ai(id){const r=await fetch('/api/rt7/dvr/ai/recognize/'+encodeURIComponent(id),{method:'POST'}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); alert(JSON.stringify(r,null,2));}
-async function status(){const r=await fetch('/api/rt7/dvr/bridge/status?ts='+Date.now()).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); document.getElementById('log').textContent=JSON.stringify(r,null,2); const ch=(r.cameras||[]).find(c=>c.id==='CH01'); const m=document.getElementById('m_CH01'); if(ch && ch.online){lastGoodAt=Date.now(); setS('ONLINE','ok'); if(m) m.textContent='串流狀態：ONLINE / bytes='+(ch.bytes||0)+' / age_ms='+(ch.age_ms||0);} else if(Date.now()-lastGoodAt>8000){setS('OFFLINE','bad'); if(m) m.textContent='等待 Bridge 上傳，不清空目前畫面：'+new Date().toLocaleTimeString();}}
+async function status(){const r=await fetch('/api/rt7/dvr/bridge/status?ts='+Date.now()).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); document.getElementById('log').textContent=JSON.stringify(r,null,2); const ch=(r.cameras||[]).find(c=>c.id==='CH01'); const m=document.getElementById('m_CH01'); if(ch && (ch.online || (ch.age_ms!=null && ch.age_ms<30000))){lastGoodAt=Date.now(); setS('ONLINE','ok'); if(m) m.textContent='串流狀態：ONLINE / bytes='+(ch.bytes||0)+' / age_ms='+(ch.age_ms||0)+' / low-latency';} else if(Date.now()-lastGoodAt>30000){setS('OFFLINE','bad'); if(m) m.textContent='30秒內沒有收到 Bridge 新影像，仍保留目前畫面：'+new Date().toLocaleTimeString();}}
 status(); setInterval(status,3000);
 </script></body></html>`;
 }
