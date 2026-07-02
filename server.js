@@ -181,7 +181,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_V6_0A_ICATCH_PROTOCOL_BRIDGE';
+const SERVER_VERSION = 'RT7_V6_0B_ICATCH_HTTP_PROTOCOL_SCANNER';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });

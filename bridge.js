@@ -1,111 +1,108 @@
-// RT7_V6_0A_ICATCH_PROTOCOL_BRIDGE
-// iCATCH / SoCatch DVR LAN Bridge for RT7 Multi-Camera AI Gate
+// RT7_V6_0B_ICATCH_HTTP_PROTOCOL_SCANNER
+// iCATCH / SoCatch DVR HTTP CGI Scanner + LAN Bridge
 //
-// 目的：在 DVR 同一內網的 Windows 電腦執行，取得 iCATCH DVR CH01~CH04 影像，主動上傳 Railway。
-// 已知 DVR：iCATCH RMH-0428EU-K A3，SoCatch App 可連線，瀏覽器開 192.168.0.123:80 會 ERR_EMPTY_RESPONSE。
-//
-// 支援模式：
-// 1) ICATCH_RTSP_TEMPLATE / DVR_RTSP_TEMPLATE：使用你填入的正確 RTSP URL。
-// 2) 自動探測：嘗試 iCATCH/SoCatch/ONVIF/常見 RTSP/HTTP Snapshot。
-// 3) 手動資料夾模式：若 DVR 只能由原廠程式匯出 JPG，可設定 RT7_BRIDGE_SOURCE_DIR，Bridge 會讀取 CH01.jpg~CH04.jpg 上傳。
-//
-// 必填：RAILWAY_URL=https://你的-railway.up.railway.app
-// 常用：DVR_HOST=192.168.0.123 DVR_USER=admin DVR_PASS= DVR_CHANNELS=1,2,3,4
+// 目的：你的 iCATCH RMH-0428EU-K A3 回應 HTTP/1.0 401 Unauthorized / mini_httpd，
+// 代表 80 port 有服務但需要認證。V6_0B 先掃 HTTP CGI / Snapshot / MJPEG URL，
+// 找到 JPEG 後主動上傳 Railway，避免一直猜 RTSP。
 
-const { spawn, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const http = require('http');
 const https = require('https');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
+const VERSION = 'RT7_V6_0B_ICATCH_HTTP_PROTOCOL_SCANNER';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_USER = process.env.DVR_USER || 'admin';
 const DVR_PASS = process.env.DVR_PASS || '';
-const DVR_RTSP_PORT = process.env.DVR_RTSP_PORT || '554';
 const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
+const DVR_RTSP_PORT = process.env.DVR_RTSP_PORT || '554';
 const CHANNELS = String(process.env.DVR_CHANNELS || '1,2,3,4').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 const INTERVAL_MS = Math.max(1000, parseInt(process.env.INTERVAL_MS || '3000', 10) || 3000);
-const RTSP_TIMEOUT_MS = Math.max(3000, parseInt(process.env.RTSP_TIMEOUT_MS || '12000', 10) || 12000);
+const HTTP_TIMEOUT_MS = Math.max(1200, parseInt(process.env.HTTP_TIMEOUT_MS || '4500', 10) || 4500);
 const SOURCE_DIR = (process.env.RT7_BRIDGE_SOURCE_DIR || '').trim();
-const DEBUG = String(process.env.DEBUG || '').trim() === '1';
+const SCAN_ONLY = String(process.env.SCAN_ONLY || '').trim() === '1';
 const PROBE_ONLY = String(process.env.PROBE_ONLY || '').trim() === '1';
+const DEBUG = String(process.env.DEBUG || '').trim() === '1';
+const SCAN_LIMIT = Math.max(1, parseInt(process.env.SCAN_LIMIT || '260', 10) || 260);
+const RESULT_FILE = process.env.SCAN_RESULT_FILE || path.join(__dirname, 'icatch_scan_result.json');
+const WORKING_FILE = process.env.WORKING_URL_FILE || path.join(__dirname, 'icatch_working_urls.json');
 
-function enc(v) { return encodeURIComponent(String(v || '')); }
-function mask(url) { return String(url).replace(/:([^:@/]*?)@/, ':****@').replace(/password=[^&]*/gi, 'password=****').replace(/pwd=[^&]*/gi, 'pwd=****'); }
-function isJpeg(buf) { return buf && buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8; }
-function isProbablyImage(buf) { return isJpeg(buf) || (buf && buf.length > 8 && buf.slice(1,4).toString() === 'PNG'); }
+function enc(v) { return encodeURIComponent(String(v == null ? '' : v)); }
 function padCh(ch) { return 'CH' + String(ch).padStart(2, '0'); }
-
+function mask(url) { return String(url).replace(/:([^:@/]*?)@/, ':****@').replace(/(password|pwd|pass|p)=([^&]*)/gi, '$1=****'); }
+function isJpeg(buf) { return buf && buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8; }
+function isPng(buf) { return buf && buf.length > 8 && buf[0] === 0x89 && buf.slice(1,4).toString() === 'PNG'; }
+function extractJpeg(buf) {
+  if (!buf || !buf.length) return null;
+  if (isJpeg(buf)) return buf;
+  const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
+  if (start < 0) return null;
+  const end = buf.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
+  if (end < 0) return null;
+  return buf.slice(start, end + 2);
+}
 function fill(tpl, ch) {
   const ch0 = String(Math.max(0, Number(ch) - 1));
+  const ch2 = String(ch).padStart(2, '0');
   return tpl
     .replace(/\{host\}/g, DVR_HOST)
-    .replace(/\{rtsp_port\}/g, DVR_RTSP_PORT)
     .replace(/\{http_port\}/g, DVR_HTTP_PORT)
-    .replace(/\{port\}/g, DVR_RTSP_PORT)
+    .replace(/\{rtsp_port\}/g, DVR_RTSP_PORT)
+    .replace(/\{port\}/g, DVR_HTTP_PORT)
     .replace(/\{user\}/g, enc(DVR_USER))
     .replace(/\{pass\}/g, enc(DVR_PASS))
     .replace(/\{password\}/g, enc(DVR_PASS))
     .replace(/\{ch\}/g, String(ch))
     .replace(/\{ch0\}/g, ch0)
+    .replace(/\{ch2\}/g, ch2)
     .replace(/\{channel\}/g, String(ch));
 }
 
-// iCATCH/SoCatch candidates. 這些是探測用；若全部失敗，代表此機型需從 SoCatch/ONVIF 抓真實 URL，或使用手動資料夾模式。
-const ICATCH_RTSP_TEMPLATES = [
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/user={user}&password={pass}&channel={ch}&stream=0.sdp',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/user={user}&password={pass}&channel={ch}&stream=1.sdp',
-  'rtsp://{host}:{rtsp_port}/user={user}&password={pass}&channel={ch}&stream=0.sdp',
-  'rtsp://{host}:{rtsp_port}/user={user}&password={pass}&channel={ch}&stream=1.sdp',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/live/ch{ch}',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/live/ch{ch0}',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/ch{ch}/main',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/ch{ch}/sub',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/video{ch}',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/av{ch}_0',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/av{ch}_1',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/{ch}',
-  'rtsp://{host}:{rtsp_port}/chID={ch}&streamType=main',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/chID={ch}&streamType=main',
-  // Generic compatibility
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/cam/realmonitor?channel={ch}&subtype=0',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/Streaming/Channels/{ch}01',
-  'rtsp://{user}:{pass}@{host}:{rtsp_port}/ISAPI/Streaming/channels/{ch}01'
-];
-const ICATCH_HTTP_TEMPLATES = [
-  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?channel={ch}',
-  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?chn={ch0}',
-  'http://{host}:{http_port}/snapshot.cgi?channel={ch}',
-  'http://{host}:{http_port}/snapshot.cgi?chn={ch0}',
-  'http://{user}:{pass}@{host}:{http_port}/cgi-bin/snapshot.cgi?channel={ch}',
-  'http://{user}:{pass}@{host}:{http_port}/cgi-bin/snapshot.cgi?chn={ch0}',
-  'http://{host}:{http_port}/cgi-bin/hi3510/snap.cgi?chn={ch0}&u={user}&p={pass}',
-  'http://{host}:{http_port}/webcapture.jpg?command=snap&channel={ch}',
-  'http://{host}:{http_port}/image.jpg?channel={ch}',
-  'http://{host}:{http_port}/jpg/image.jpg?channel={ch}'
-];
+function md5(s) { return crypto.createHash('md5').update(s).digest('hex'); }
+function parseDigestHeader(h) {
+  const out = {};
+  String(h || '').replace(/^Digest\s+/i, '').replace(/(\w+)=((?:"[^"]+")|[^,]+)/g, (_, k, v) => {
+    out[k] = String(v || '').replace(/^"|"$/g, '');
+    return '';
+  });
+  return out;
+}
+function digestAuthHeader(method, urlObj, wwwAuth) {
+  const d = parseDigestHeader(wwwAuth);
+  if (!d.realm || !d.nonce) return '';
+  const uri = urlObj.pathname + (urlObj.search || '');
+  const qop = (d.qop || '').split(',').map(x => x.trim()).find(x => x === 'auth') || '';
+  const nc = '00000001';
+  const cnonce = crypto.randomBytes(8).toString('hex');
+  const ha1 = md5(`${DVR_USER}:${d.realm}:${DVR_PASS}`);
+  const ha2 = md5(`${method}:${uri}`);
+  const response = qop ? md5(`${ha1}:${d.nonce}:${nc}:${cnonce}:${qop}:${ha2}`) : md5(`${ha1}:${d.nonce}:${ha2}`);
+  let s = `Digest username="${DVR_USER}", realm="${d.realm}", nonce="${d.nonce}", uri="${uri}", response="${response}"`;
+  if (d.opaque) s += `, opaque="${d.opaque}"`;
+  if (d.algorithm) s += `, algorithm=${d.algorithm}`;
+  if (qop) s += `, qop=${qop}, nc=${nc}, cnonce="${cnonce}"`;
+  return s;
+}
 
-const customRtsp = process.env.ICATCH_RTSP_TEMPLATE || process.env.DVR_RTSP_TEMPLATE || '';
-const customHttp = process.env.ICATCH_SNAPSHOT_TEMPLATE || process.env.DVR_SNAPSHOT_TEMPLATE || '';
-const RTSP_TEMPLATES = customRtsp ? [customRtsp] : ICATCH_RTSP_TEMPLATES;
-const HTTP_TEMPLATES = customHttp ? [customHttp] : ICATCH_HTTP_TEMPLATES;
-
-function requestBuffer(urlText, timeoutMs=5000) {
+function httpGet(urlText, authMode='basic', timeoutMs=HTTP_TIMEOUT_MS, cookie='') {
   return new Promise(resolve => {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message, url:urlText }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = { 'User-Agent':'RT7-iCATCH-Bridge/6.0A', 'Accept':'image/jpeg,image/*,*/*' };
-    if (DVR_USER && !urlText.includes('@')) headers.Authorization = 'Basic ' + Buffer.from(DVR_USER + ':' + DVR_PASS).toString('base64');
+    const headers = { 'User-Agent':'Mozilla/5.0 RT7-iCATCH-Scanner/6.0B', 'Accept':'image/jpeg,image/*,multipart/x-mixed-replace,*/*', 'Connection':'close' };
+    if (cookie) headers.Cookie = cookie;
+    if (authMode === 'basic' && DVR_USER && !urlText.includes('@')) headers.Authorization = 'Basic ' + Buffer.from(DVR_USER + ':' + DVR_PASS).toString('base64');
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       const chunks = [];
-      res.on('data', d => chunks.push(d));
+      res.on('data', d => { chunks.push(d); if (Buffer.concat(chunks).length > 2_500_000) req.destroy(); });
       res.on('end', () => {
         const buffer = Buffer.concat(chunks);
-        resolve({ ok:res.statusCode >= 200 && res.statusCode < 300 && isProbablyImage(buffer), status:res.statusCode, buffer, contentType:res.headers['content-type'] || '', url:urlText });
+        resolve({ status:res.statusCode, headers:res.headers, buffer, text:buffer.slice(0,500).toString('latin1').replace(/[^\x20-\x7e\r\n]/g,'.'), url:urlText });
       });
     });
     req.on('timeout', () => { try { req.destroy(new Error('HTTP timeout')); } catch (_) {} });
@@ -113,50 +110,109 @@ function requestBuffer(urlText, timeoutMs=5000) {
     req.end();
   });
 }
-
-function tcpProbe(port, payload) {
-  return new Promise(resolve => {
-    const sock = new net.Socket();
-    const chunks = [];
-    const timer = setTimeout(() => { try { sock.destroy(); } catch (_) {} resolve({ ok:false, port, error:'timeout' }); }, 2500);
-    sock.connect(Number(port), DVR_HOST, () => {
-      if (payload) sock.write(payload);
-      else setTimeout(() => { try { sock.end(); } catch (_) {} }, 500);
-    });
-    sock.on('data', d => chunks.push(d));
-    sock.on('close', () => { clearTimeout(timer); const b = Buffer.concat(chunks); resolve({ ok:true, port, bytes:b.length, hex:b.slice(0,32).toString('hex'), text:b.slice(0,80).toString('latin1').replace(/[^\x20-\x7E]/g,'.') }); });
-    sock.on('error', e => { clearTimeout(timer); resolve({ ok:false, port, error:String(e.message || e) }); });
-  });
+async function requestImage(urlText) {
+  let r = await httpGet(urlText, 'basic');
+  if (r.status === 401 && r.headers && /Digest/i.test(String(r.headers['www-authenticate'] || ''))) {
+    const u = new URL(urlText);
+    const auth = digestAuthHeader('GET', u, r.headers['www-authenticate']);
+    if (auth) {
+      r = await new Promise(resolve => {
+        const lib = u.protocol === 'https:' ? https : http;
+        const headers = { 'User-Agent':'Mozilla/5.0 RT7-iCATCH-Scanner/6.0B', 'Accept':'image/jpeg,image/*,multipart/x-mixed-replace,*/*', 'Connection':'close', 'Authorization':auth };
+        const req = lib.request(u, { method:'GET', headers, timeout:HTTP_TIMEOUT_MS }, res => {
+          const chunks=[]; res.on('data', d=>{chunks.push(d); if (Buffer.concat(chunks).length > 2_500_000) req.destroy();});
+          res.on('end',()=>resolve({ status:res.statusCode, headers:res.headers, buffer:Buffer.concat(chunks), url:urlText }));
+        });
+        req.on('timeout',()=>{try{req.destroy(new Error('HTTP timeout'));}catch(_){}});
+        req.on('error', e=>resolve({ ok:false, error:String(e.message||e), url:urlText }));
+        req.end();
+      });
+    }
+  }
+  const jpg = extractJpeg(r.buffer);
+  const ct = String((r.headers && r.headers['content-type']) || '');
+  return { ok:!!jpg, jpeg:jpg, status:r.status || 0, contentType:ct, bytes:(r.buffer && r.buffer.length) || 0, error:r.error || '', text:r.text || '', url:urlText };
 }
 
-function checkFfmpeg() {
-  return new Promise(resolve => {
-    execFile('ffmpeg', ['-version'], { windowsHide:true, timeout:3000 }, (err, stdout) => {
-      if (err) return resolve({ ok:false, error:String(err.message || err) });
-      resolve({ ok:true, version:String(stdout || '').split('\n')[0] });
-    });
-  });
-}
-function ffmpegSnapshot(rtspUrl) {
-  return new Promise(resolve => {
-    const args = ['-hide_banner','-loglevel',DEBUG?'info':'error','-rtsp_transport','tcp','-i',rtspUrl,'-frames:v','1','-q:v','3','-f','image2pipe','-vcodec','mjpeg','-'];
-    const p = spawn('ffmpeg', args, { windowsHide:true });
-    const chunks = [];
-    let err = '';
-    const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch (_) {} }, RTSP_TIMEOUT_MS);
-    p.stdout.on('data', d => chunks.push(d));
-    p.stderr.on('data', d => { err += d.toString(); });
-    p.on('close', code => { clearTimeout(timer); const buf=Buffer.concat(chunks); resolve({ ok:isJpeg(buf), code, buffer:buf, error:err.trim().slice(0,900), rtspUrl }); });
-    p.on('error', e => { clearTimeout(timer); resolve({ ok:false, error:String(e.message || e), rtspUrl }); });
-  });
-}
-function upload(ch, jpeg, source='icatch') {
+// iCATCH / mini_httpd / old DVR HTTP candidate list.
+const HTTP_TEMPLATES = [
+  'http://{host}:{http_port}/',
+  'http://{host}:{http_port}/image.jpg',
+  'http://{host}:{http_port}/snapshot.jpg',
+  'http://{host}:{http_port}/snap.jpg',
+  'http://{host}:{http_port}/video.jpg',
+  'http://{host}:{http_port}/current.jpg',
+  'http://{host}:{http_port}/tmpfs/auto.jpg',
+  'http://{host}:{http_port}/tmpfs/snap.jpg',
+  'http://{host}:{http_port}/tmpfs/auto_{ch}.jpg',
+  'http://{host}:{http_port}/tmpfs/auto{ch}.jpg',
+  'http://{host}:{http_port}/jpg/image.jpg',
+  'http://{host}:{http_port}/jpg/{ch}.jpg',
+  'http://{host}:{http_port}/ch{ch}.jpg',
+  'http://{host}:{http_port}/CH{ch}.jpg',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?channel={ch0}',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?chn={ch}',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?chn={ch0}',
+  'http://{host}:{http_port}/snapshot.cgi',
+  'http://{host}:{http_port}/snapshot.cgi?channel={ch}',
+  'http://{host}:{http_port}/snapshot.cgi?chn={ch0}',
+  'http://{host}:{http_port}/cgi-bin/currentpic.cgi',
+  'http://{host}:{http_port}/cgi-bin/currentpic.cgi?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/currentpic.cgi?chn={ch0}',
+  'http://{host}:{http_port}/cgi-bin/viewer/video.jpg',
+  'http://{host}:{http_port}/cgi-bin/viewer/video.jpg?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/video.jpg',
+  'http://{host}:{http_port}/cgi-bin/video.jpg?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/view.cgi?chn={ch}',
+  'http://{host}:{http_port}/cgi-bin/view.cgi?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/hi3510/snap.cgi?chn={ch0}&u={user}&p={pass}',
+  'http://{host}:{http_port}/cgi-bin/hi3510/snap.cgi?chn={ch}&u={user}&p={pass}',
+  'http://{host}:{http_port}/cgi-bin/hi3510/param.cgi?cmd=snap&chn={ch0}&u={user}&p={pass}',
+  'http://{host}:{http_port}/webcapture.jpg?command=snap&channel={ch}',
+  'http://{host}:{http_port}/webcapture.jpg?command=snap&channel={ch0}',
+  'http://{host}:{http_port}/cgi-bin/CGIProxy.fcgi?cmd=snapPicture2&usr={user}&pwd={pass}',
+  'http://{host}:{http_port}/cgi-bin/CGIProxy.fcgi?cmd=snapPicture&usr={user}&pwd={pass}',
+  'http://{host}:{http_port}/cgi-bin/CGIProxy.fcgi?cmd=snapPicture2&usr={user}&pwd={pass}&channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/CGIProxy.fcgi?cmd=snapPicture&usr={user}&pwd={pass}&channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/net_jpeg.cgi?ch={ch}',
+  'http://{host}:{http_port}/cgi-bin/net_jpeg.cgi?ch={ch0}',
+  'http://{host}:{http_port}/cgi-bin/net_jpeg.cgi?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/mjpg/video.cgi?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/mjpg/video.cgi?chn={ch0}',
+  'http://{host}:{http_port}/cgi-bin/mjpeg?channel={ch}',
+  'http://{host}:{http_port}/mjpeg.cgi?channel={ch}',
+  'http://{host}:{http_port}/videostream.cgi?user={user}&pwd={pass}',
+  'http://{host}:{http_port}/videostream.cgi?user={user}&pwd={pass}&resolution=32&rate=0',
+  'http://{host}:{http_port}/videostream.cgi?loginuse={user}&loginpas={pass}',
+  'http://{host}:{http_port}/livestream.cgi?user={user}&pwd={pass}&channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/guest/Video.cgi?media=JPEG&channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/jpg/image.cgi?channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/jpg/image.cgi?ch={ch}',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?loginuse={user}&loginpas={pass}&channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/snapshot.cgi?user={user}&pwd={pass}&channel={ch}',
+  'http://{host}:{http_port}/snapshot.cgi?user={user}&pwd={pass}&channel={ch}',
+  'http://{host}:{http_port}/cgi-bin/encoder?USER={user}&PWD={pass}&SNAPSHOT&CHANNEL={ch}',
+  'http://{host}:{http_port}/cgi-bin/encoder?USER={user}&PWD={pass}&SNAPSHOT&CHANNEL={ch0}',
+  'http://{user}:{pass}@{host}:{http_port}/image.jpg',
+  'http://{user}:{pass}@{host}:{http_port}/snapshot.jpg',
+  'http://{user}:{pass}@{host}:{http_port}/cgi-bin/snapshot.cgi?channel={ch}',
+  'http://{user}:{pass}@{host}:{http_port}/tmpfs/auto.jpg'
+];
+const customHttp = process.env.ICATCH_HTTP_TEMPLATE || process.env.ICATCH_SNAPSHOT_TEMPLATE || process.env.DVR_SNAPSHOT_TEMPLATE || '';
+const TEMPLATES = customHttp ? [customHttp] : HTTP_TEMPLATES;
+
+function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; } }
+function writeJson(file, obj) { try { fs.writeFileSync(file, JSON.stringify(obj, null, 2), 'utf8'); } catch (e) { console.log('[WARN] write json failed', e.message); } }
+
+function upload(ch, jpeg, source='icatch-http-scanner') {
   return new Promise(resolve => {
     if (!RAILWAY_URL) return resolve({ ok:false, error:'RAILWAY_URL_EMPTY' });
     const id = padCh(ch);
     const url = new URL(RAILWAY_URL + '/api/rt7/dvr/bridge/upload/' + encodeURIComponent(id) + '?source=' + encodeURIComponent(source));
     const lib = url.protocol === 'https:' ? https : http;
-    const req = lib.request(url, { method:'POST', headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-Bridge/6.0A' }, timeout:10000 }, res => {
+    const req = lib.request(url, { method:'POST', headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-HTTP-Scanner/6.0B' }, timeout:10000 }, res => {
       const chunks=[]; res.on('data',d=>chunks.push(d)); res.on('end',()=>resolve({ ok:res.statusCode>=200&&res.statusCode<300, status:res.statusCode, body:Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('timeout',()=>{ try{req.destroy(new Error('upload timeout'));}catch(_){} resolve({ok:false,error:'upload timeout'}); });
@@ -170,32 +226,45 @@ function readManualFrame(ch) {
   const names = [`CH${String(ch).padStart(2,'0')}.jpg`, `CH${String(ch).padStart(2,'0')}.jpeg`, `ch${ch}.jpg`, `${ch}.jpg`];
   for (const n of names) {
     const f = path.join(SOURCE_DIR, n);
-    try { if (fs.existsSync(f)) { const b=fs.readFileSync(f); if (isJpeg(b)) return { ok:true, buffer:b, file:f }; } } catch (_) {}
+    try { if (fs.existsSync(f)) { const b=fs.readFileSync(f); const jpg=extractJpeg(b); if (jpg) return { ok:true, buffer:jpg, file:f }; } } catch (_) {}
   }
   return null;
 }
-
-const working = new Map();
-async function tryHttp(ch) {
-  for (const tpl of HTTP_TEMPLATES) {
+async function scanChannel(ch, verbose=true) {
+  const results = [];
+  const max = Math.min(TEMPLATES.length, SCAN_LIMIT);
+  for (let i = 0; i < max; i++) {
+    const tpl = TEMPLATES[i];
     const url = fill(tpl, ch);
-    const r = await requestBuffer(url, 4500);
-    if (r.ok) return { ok:true, buffer:r.buffer, url, kind:'http' };
-    if (DEBUG) console.log(`[${padCh(ch)}] HTTP fail`, r.status || r.error, mask(url));
+    const r = await requestImage(url);
+    results.push({ i, ok:r.ok, status:r.status, contentType:r.contentType, bytes:r.bytes, url:mask(url), sample:r.text || r.error || '' });
+    if (r.ok) {
+      if (verbose) console.log(`[${padCh(ch)}] HTTP JPEG FOUND bytes=${r.jpeg.length} ${mask(url)}`);
+      return { ok:true, ch, url, tpl, jpeg:r.jpeg, results };
+    }
+    if (verbose && (DEBUG || i < 12 || r.status === 200 || r.status === 401)) {
+      console.log(`[${padCh(ch)}] scan fail #${i} status=${r.status || '-'} bytes=${r.bytes || 0} ${mask(url)}`);
+    }
   }
-  return { ok:false };
+  return { ok:false, ch, results };
 }
-async function tryRtsp(ch) {
-  const templates = working.has(ch) ? [working.get(ch), ...RTSP_TEMPLATES.filter(t => t !== working.get(ch))] : RTSP_TEMPLATES;
-  let last='';
-  for (const tpl of templates) {
-    const url = fill(tpl, ch);
-    const r = await ffmpegSnapshot(url);
-    if (r.ok) { working.set(ch, tpl); return { ok:true, buffer:r.buffer, url, kind:'rtsp' }; }
-    last = r.error || ('ffmpeg code ' + r.code);
-    console.log(`[${padCh(ch)}] RTSP fail ${last.slice(0,120)} ${mask(url)}`);
+async function scanAll() {
+  const out = { version:VERSION, time:new Date().toISOString(), dvr:{host:DVR_HOST,http_port:DVR_HTTP_PORT,user:DVR_USER, pass_set:!!DVR_PASS}, channels:{} };
+  const working = readJson(WORKING_FILE, {});
+  for (const ch of CHANNELS) {
+    const r = await scanChannel(ch, true);
+    out.channels[padCh(ch)] = { ok:r.ok, url:r.url ? mask(r.url) : '', template:r.tpl || '', tried:r.results.length, results:r.results };
+    if (r.ok) {
+      working[padCh(ch)] = { template:r.tpl, found_at:new Date().toISOString(), url:mask(r.url) };
+      const up = await upload(ch, r.jpeg, 'icatch-http-scan');
+      console.log(`[${padCh(ch)}] scan upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${up.error||''}`);
+    }
   }
-  return { ok:false, error:last };
+  writeJson(RESULT_FILE, out);
+  writeJson(WORKING_FILE, working);
+  console.log('Scan result saved:', RESULT_FILE);
+  console.log('Working URL saved:', WORKING_FILE);
+  return out;
 }
 async function oneChannel(ch) {
   const manual = readManualFrame(ch);
@@ -204,44 +273,68 @@ async function oneChannel(ch) {
     console.log(`[${padCh(ch)}] manual=${manual.file} jpeg=${manual.buffer.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${up.error||''}`);
     return;
   }
-  const h = await tryHttp(ch);
-  if (h.ok) {
-    const up = await upload(ch, h.buffer, 'icatch-http');
-    console.log(`[${padCh(ch)}] HTTP jpeg=${h.buffer.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${mask(h.url)}`);
-    return;
+  const working = readJson(WORKING_FILE, {});
+  const w = working[padCh(ch)] && working[padCh(ch)].template;
+  if (w) {
+    const url = fill(w, ch);
+    const r = await requestImage(url);
+    if (r.ok) {
+      const up = await upload(ch, r.jpeg, 'icatch-http-working');
+      console.log(`[${padCh(ch)}] working HTTP jpeg=${r.jpeg.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${mask(url)}`);
+      return;
+    }
+    console.log(`[${padCh(ch)}] working URL failed, rescan this channel... ${r.status||r.error||''} ${mask(url)}`);
   }
-  const r = await tryRtsp(ch);
-  if (r.ok) {
-    const up = await upload(ch, r.buffer, 'icatch-rtsp');
-    console.log(`[${padCh(ch)}] RTSP jpeg=${r.buffer.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${mask(r.url)}`);
-    return;
+  const s = await scanChannel(ch, false);
+  if (s.ok) {
+    working[padCh(ch)] = { template:s.tpl, found_at:new Date().toISOString(), url:mask(s.url) };
+    writeJson(WORKING_FILE, working);
+    const up = await upload(ch, s.jpeg, 'icatch-http-autoscan');
+    console.log(`[${padCh(ch)}] autoscan HTTP jpeg=${s.jpeg.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${mask(s.url)}`);
+  } else {
+    console.log(`[${padCh(ch)}] HTTP CGI scanner found no JPEG. 請開啟 DVR 網頁登入後，或用 ONVIF/Wireshark 找真實 JPEG/RTSP URL，填到 ICATCH_HTTP_TEMPLATE。`);
   }
-  console.log(`[${padCh(ch)}] iCATCH auto templates failed. 建議：1) 用 ONVIF Device Manager 查 Media URL，2) 設定 ICATCH_RTSP_TEMPLATE，3) 若 SoCatch 只能專用協定，先用 RT7_BRIDGE_SOURCE_DIR 手動資料夾模式。`);
+}
+function tcpProbe(port, payload) {
+  return new Promise(resolve => {
+    const sock = new net.Socket();
+    const chunks = [];
+    const timer = setTimeout(() => { try { sock.destroy(); } catch (_) {} resolve({ ok:false, port, error:'timeout' }); }, 2500);
+    sock.connect(Number(port), DVR_HOST, () => { if (payload) sock.write(payload); else setTimeout(() => { try { sock.end(); } catch (_) {} }, 500); });
+    sock.on('data', d => chunks.push(d));
+    sock.on('close', () => { clearTimeout(timer); const b = Buffer.concat(chunks); resolve({ ok:true, port, bytes:b.length, text:b.slice(0,180).toString('latin1').replace(/[^\x20-\x7E]/g,'.') }); });
+    sock.on('error', e => { clearTimeout(timer); resolve({ ok:false, port, error:String(e.message || e) }); });
+  });
 }
 async function diagnostic() {
-  console.log('--- iCATCH diagnostic ---');
-  for (const p of [80, 554, 5000, 5001, 6000, 34567, 37777, 8899, 8080, 8000]) {
-    const r = await tcpProbe(p, p === 80 ? Buffer.from('GET / HTTP/1.0\r\n\r\n') : null);
-    console.log(`[TCP ${p}]`, r.ok ? `open bytes=${r.bytes} ${r.text || r.hex || ''}` : r.error);
-  }
+  console.log('--- iCATCH HTTP diagnostic ---');
+  const r = await tcpProbe(DVR_HTTP_PORT, Buffer.from('GET / HTTP/1.0\r\n\r\n'));
+  console.log(`[TCP ${DVR_HTTP_PORT}]`, r.ok ? `open bytes=${r.bytes} ${r.text || ''}` : r.error);
+  const rr = await httpGet(`http://${DVR_HOST}:${DVR_HTTP_PORT}/`, 'none', 3500);
+  console.log('[HTTP / no-auth]', 'status=' + (rr.status || '-'), 'www-auth=' + String((rr.headers && rr.headers['www-authenticate']) || '').slice(0,120), 'server=' + String((rr.headers && rr.headers.server) || ''));
   console.log('--- end diagnostic ---');
 }
 async function loop() {
   for (const ch of CHANNELS) await oneChannel(ch);
   setTimeout(loop, INTERVAL_MS);
 }
+function checkFfmpeg() {
+  return new Promise(resolve => execFile('ffmpeg', ['-version'], { windowsHide:true, timeout:3000 }, (err, stdout) => resolve(err ? {ok:false,error:String(err.message||err)} : {ok:true,version:String(stdout||'').split('\n')[0]})));
+}
 
 (async () => {
-  console.log('RT7_V6_0A_ICATCH_PROTOCOL_BRIDGE starting...');
+  console.log(VERSION + ' starting...');
   console.log('Railway:', RAILWAY_URL || '(missing RAILWAY_URL)');
-  console.log('DVR:', `iCATCH ${DVR_USER}@${DVR_HOST} http=${DVR_HTTP_PORT} rtsp=${DVR_RTSP_PORT} channels=${CHANNELS.join(',')}`);
+  console.log('DVR:', `iCATCH ${DVR_USER}@${DVR_HOST} http=${DVR_HTTP_PORT} channels=${CHANNELS.join(',')}`);
   console.log('Token:', TOKEN ? '(set)' : '(empty)');
+  console.log('Mode:', SCAN_ONLY ? 'SCAN_ONLY' : (PROBE_ONLY ? 'PROBE_ONLY' : 'BRIDGE_LOOP'));
   if (SOURCE_DIR) console.log('Manual source dir:', SOURCE_DIR);
   const ff = await checkFfmpeg();
-  console.log('FFmpeg:', ff.ok ? ff.version : ('not found: ' + ff.error));
+  console.log('FFmpeg:', ff.ok ? ff.version : ('not required / not found: ' + ff.error));
   await diagnostic();
-  if (!RAILWAY_URL) console.log('[ERROR] RAILWAY_URL_EMPTY，請設定 Railway 網址。');
-  if (PROBE_ONLY) { console.log('PROBE_ONLY=1 finished.'); return; }
-  console.log('Press Ctrl+C to stop.');
+  if (!RAILWAY_URL) console.log('[WARN] RAILWAY_URL_EMPTY: 仍可掃描 DVR，但無法上傳 Railway。請在 BAT 設定 RAILWAY_URL。');
+  if (PROBE_ONLY) return;
+  if (SCAN_ONLY) { await scanAll(); return; }
+  console.log('Press Ctrl+C to stop. First run will scan HTTP CGI.');
   loop();
 })();
