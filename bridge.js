@@ -1,9 +1,9 @@
-// RT7_V6_1B_ICATCH_NET_VIDEO_HTTP_BRIDGE
+// RT7_V6_1C_ICATCH_NET_VIDEO_AUTH_HEADER_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
 //   GET /cgi-bin/net_video.cgi?hq=0&iframe=15&pframe=15&audio=0
-//   Authorization: Basic admin:<blank>
+//   Authorization: Basic admin:vbnmmnbv
 //   Magic: 39e739de-8d69-aadb-78b9-946a2905858d
 //   Response: multipart/x-mixed-replace + application/octet-stream
 //
@@ -20,12 +20,12 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'RT7_V6_1B_ICATCH_NET_VIDEO_HTTP_BRIDGE';
+const VERSION = 'RT7_V6_1C_ICATCH_NET_VIDEO_AUTH_HEADER_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_USER = process.env.DVR_USER || 'admin';
-const DVR_PASS = process.env.DVR_PASS || '';
+const DVR_PASS = process.env.DVR_PASS || 'vbnmmnbv';
 const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
 const CHANNELS = String(process.env.DVR_CHANNELS || '1,2,3,4').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 const INTERVAL_MS = Math.max(1000, parseInt(process.env.INTERVAL_MS || '3000', 10) || 3000);
@@ -75,18 +75,89 @@ function extractJpeg(buf) {
 
 function authHeader() { return 'Basic ' + Buffer.from(DVR_USER + ':' + DVR_PASS).toString('base64'); }
 
-function httpProbe(urlText, timeoutMs=5000) {
+function buildCommandMultipart(xmlText) {
+  // PCAPdroid: POST /dvr/cmd, Content-Type multipart/form-data; boundary=----maya,
+  // form-data name="datafile"; filename="command.xml"; Content-Type: text/xml
+  const boundary = '----maya';
+  const body = Buffer.from(
+    '--' + boundary + '\r\n' +
+    'Content-Disposition: form-data; name="datafile"; filename="command.xml"\r\n' +
+    'Content-Type: text/xml\r\n\r\n' +
+    xmlText + '\r\n' +
+    '--' + boundary + '--\r\n',
+    'utf8'
+  );
+  return { boundary, body };
+}
+
+function icatchLoginCookie(timeoutMs=5000) {
+  return new Promise(resolve => {
+    const xml = '<?xml version="1.0" encoding="UTF-8" ?><DVR Platform="Hi3520"><GetConfiguration File="system.xml" /></DVR>';
+    const mp = buildCommandMultipart(xml);
+    const options = {
+      host: DVR_HOST,
+      port: Number(DVR_HTTP_PORT) || 80,
+      path: '/dvr/cmd',
+      method: 'POST',
+      timeout: timeoutMs,
+      headers: {
+        'Authorization': authHeader(),
+        'Content-Type': 'multipart/form-data; boundary=' + mp.boundary,
+        'Content-Length': mp.body.length,
+        'User-Agent': 'SoCatch/RT7-V6.1C',
+        'Connection': 'close'
+      }
+    };
+    const req = http.request(options, res => {
+      const chunks=[];
+      res.on('data', d => { chunks.push(d); });
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        const setCookie = res.headers['set-cookie'];
+        let cookie = '';
+        if (Array.isArray(setCookie) && setCookie.length) cookie = String(setCookie[0]).split(';')[0];
+        else if (setCookie) cookie = String(setCookie).split(';')[0];
+        resolve({ ok:res.statusCode>=200 && res.statusCode<300, status:res.statusCode, cookie, headers:res.headers, bodySample:text.slice(0,500) });
+      });
+    });
+    req.on('timeout', () => { try { req.destroy(new Error('login timeout')); } catch (_) {} });
+    req.on('error', e => resolve({ ok:false, error:String(e.message || e) }));
+    req.end(mp.body);
+  });
+}
+
+async function getVideoHeaders() {
+  const login = await icatchLoginCookie();
+  if (login.ok && login.cookie) {
+    if (DEBUG) console.log('[AUTH] login OK cookie=' + login.cookie);
+  } else {
+    console.log('[AUTH] login no cookie/status=' + (login.status || '') + ' error=' + (login.error || '') + ' body=' + (login.bodySample || '').replace(/\r?\n/g,' ').slice(0,160));
+  }
+  return {
+    'Authorization': authHeader(),
+    'Magic': MAGIC,
+    'Cookie': login.cookie || '',
+    'User-Agent': 'SoCatch/RT7-V6.1C',
+    'Accept': '*/*',
+    'Connection': 'close'
+  };
+}
+
+function headersToFfmpegText(headers) {
+  let lines = '';
+  for (const [k,v] of Object.entries(headers || {})) {
+    if (v !== undefined && v !== null && String(v) !== '') lines += k + ': ' + String(v) + '\r\n';
+  }
+  return lines;
+}
+
+async function httpProbe(urlText, timeoutMs=5000) {
+  const videoHeaders = await getVideoHeaders();
   return new Promise(resolve => {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = {
-      'Authorization': authHeader(),
-      'Magic': MAGIC,
-      'User-Agent': 'RT7-iCATCH-NetVideo/6.1B',
-      'Accept': '*/*',
-      'Connection': 'close'
-    };
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-NetVideo/6.1C' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       const chunks = [];
       res.on('data', d => {
@@ -106,18 +177,13 @@ function httpProbe(urlText, timeoutMs=5000) {
 }
 
 
-function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000) {
+async function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000) {
+  const videoHeaders = await getVideoHeaders();
   return new Promise(resolve => {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = {
-      'Authorization': authHeader(),
-      'Magic': MAGIC,
-      'User-Agent': 'SoCatch/RT7-V6.1B',
-      'Accept': '*/*',
-      'Connection': 'close'
-    };
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'SoCatch/RT7-V6.1C' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       let bytes = 0;
       const ws = fs.createWriteStream(outFile);
@@ -135,9 +201,10 @@ function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000) {
   });
 }
 
-function ffmpegOneJpeg(urlText, ch) {
+async function ffmpegOneJpeg(urlText, ch) {
+  const videoHeaders = await getVideoHeaders();
   return new Promise(resolve => {
-    const headerText = `Authorization: ${authHeader()}\r\nMagic: ${MAGIC}\r\nUser-Agent: SoCatch/RT7\r\n`;
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.1C' }));
     // 嘗試讓 ffmpeg 自動判斷 iCATCH multipart/octet-stream。輸出單張 MJPEG 到 stdout。
     const args = [
       '-hide_banner', '-nostdin',
@@ -176,7 +243,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1B' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1C' },
       timeout:10000
     }, res => {
       const chunks=[];
