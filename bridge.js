@@ -1,4 +1,4 @@
-// RT7_V6_2A_ICATCH_REALTIME_MJPEG_BRIDGE
+// RT7_V6_2B_ICATCH_SINGLE_SOURCE_STREAM_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -20,15 +20,19 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'RT7_V6_2A_ICATCH_REALTIME_MJPEG_BRIDGE';
+const VERSION = 'RT7_V6_2B_ICATCH_SINGLE_SOURCE_STREAM_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_USER = process.env.DVR_USER || 'admin';
 const DVR_PASS = process.env.DVR_PASS || 'vbnmmnbv';
 const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
-const CHANNELS = String(process.env.DVR_CHANNELS || '1,2,3,4').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
-const INTERVAL_MS = Math.max(1000, parseInt(process.env.INTERVAL_MS || '3000', 10) || 3000);
+// V6.2B: PCAPdroid 確認 iCATCH net_video.cgi 沒有 channel 參數。
+// 同一個 net_video.cgi 其實是目前 SoCatch/主畫面的單一影像來源；
+// 若同時把同一 URL 當成 CH01~CH04 擷取，會造成 CH2/CH4 顯示 CH1 的畫面。
+// 因此預設只上傳 CH01。若未來抓到真正的 channel 參數，再設定 DVR_CHANNELS=1,2,3,4 與 ICATCH_NET_VIDEO_TEMPLATE。
+const CHANNELS = String(process.env.DVR_CHANNELS || '1').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
+const INTERVAL_MS = Math.max(800, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
 const FFMPEG_TIMEOUT_MS = Math.max(2500, parseInt(process.env.FFMPEG_TIMEOUT_MS || '10000', 10) || 10000);
 const DEBUG = String(process.env.DEBUG || '').trim() === '1';
 const PROBE_ONLY = String(process.env.PROBE_ONLY || '').trim() === '1';
@@ -40,6 +44,7 @@ const RAW_OUT = process.env.RAW_OUT || path.join(__dirname, 'icatch_ch1_raw.bin'
 const RAW_BYTES = Math.max(65536, parseInt(process.env.RAW_BYTES || '524288', 10) || 524288);
 const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
 
+// V6.2B: 單一 net_video.cgi 來源鎖定 CH01，避免把同一畫面誤標成 CH02/CH03/CH04。
 // V6.1D: iCATCH/SoCatch net_video.cgi 可在 Authorization + Magic 下直接串流。
 // /dvr/cmd 登入可能 status=200 但沒有 Set-Cookie；這是可接受狀態。
 // 因此 Cookie 不再是必要條件，也不在每張 frame 前重複登入。
@@ -330,6 +335,7 @@ function checkFfmpeg() {
   console.log(VERSION + ' starting...');
   console.log('Railway:', RAILWAY_URL || '(missing RAILWAY_URL)');
   console.log('DVR:', `iCATCH ${DVR_USER}@${DVR_HOST}:${DVR_HTTP_PORT} channels=${CHANNELS.join(',')}`);
+  if (!process.env.ICATCH_NET_VIDEO_TEMPLATE && CHANNELS.length > 1) console.log('[WARN] net_video.cgi 未帶 channel 參數；多路可能全部是同一畫面。建議只用 DVR_CHANNELS=1。');
   console.log('Magic:', MAGIC);
   console.log('Template:', NET_VIDEO_TEMPLATE);
   console.log('Mode:', RAW_ONLY ? 'RAW_ONLY' : (TEST_ONLY ? 'TEST_ONLY' : 'BRIDGE_LOOP'));
