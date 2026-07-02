@@ -181,7 +181,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_V6_0B_ICATCH_HTTP_PROTOCOL_SCANNER';
+const SERVER_VERSION = 'RT7_V6_2A_ICATCH_REALTIME_MJPEG_BRIDGE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -4139,6 +4139,8 @@ app.get('/api/rt7/camera/viewer/ping', (req,res)=>{
   res.json({ok:true, version:SERVER_VERSION, stream:liveStreamState, viewers:n});
 });
 app.get('/api/rt7/camera/stream.mjpg', (req,res)=>{
+  const rt7DvrId = safeString(req.query.dvr || req.query.camera || req.query.camera_id || req.query.channel || '').toUpperCase();
+  if (/^CH\d{1,2}$/.test(rt7DvrId)) return rt7DvrServeMjpeg_(req, res, rt7DvrId);
   res.writeHead(200, {
     'Content-Type':'multipart/x-mixed-replace; boundary=rt7frame',
     'Cache-Control':'no-cache, no-store, must-revalidate, private',
@@ -5248,13 +5250,13 @@ function rt7DvrPage_() {
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const cards = cams.map(c => `<div class="cam" data-id="${esc(c.id)}">
     <div class="camTop"><b>${esc(c.id)} / ${esc(c.name || '')}</b><span class="${c.enabled!==false?'ok':'bad'}">${c.enabled!==false?'啟用':'停用'}</span></div>
-    <div class="view"><img id="img_${esc(c.id)}" src="/api/rt7/dvr/bridge/latest/${encodeURIComponent(c.id)}?ts=${Date.now()}" onerror="this.classList.add('err')" alt="${esc(c.id)}"></div>
+    <div class="view"><img id="img_${esc(c.id)}" src="/api/rt7/dvr/bridge/stream/${encodeURIComponent(c.id)}?fps=5&ts=${Date.now()}" onerror="this.classList.add('err')" alt="${esc(c.id)}"></div>
     <div class="meta">DVR ${esc(c.dvr_host)}:${esc(c.dvr_port || '80')} / Channel ${esc(c.channel || '')}</div>
     <div class="btns"><button onclick="rt7RefreshCam('${esc(c.id)}')">刷新</button><button onclick="rt7ProbeCam('${esc(c.id)}')">偵測 Snapshot</button><button onclick="rt7AiCam('${esc(c.id)}')">AI 辨識</button><button onclick="rt7BridgeInfo('${esc(c.id)}')">Bridge</button></div>
   </div>`).join('');
   const rows = cams.map(c => `<tr data-id="${esc(c.id)}"><td>${esc(c.id)}</td><td><input name="name" value="${esc(c.name||'')}"></td><td><input name="dvr_host" value="${esc(c.dvr_host||'')}"></td><td><input name="dvr_port" value="${esc(c.dvr_port||'80')}"></td><td><input name="username" value="${esc(c.username||'admin')}"></td><td><input name="password" value="${esc(c.password||'')}" placeholder="密碼"></td><td><input name="channel" value="${esc(c.channel||'1')}"></td><td><input name="snapshot_url" value="${esc(c.snapshot_url||'')}" placeholder="可空白，按偵測自動帶入"></td><td><button onclick="rt7SaveRow('${esc(c.id)}')">儲存</button></td></tr>`).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 DVR 多攝影機 AI 門禁平台</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:white;padding:14px;display:flex;align-items:center;gap:10px}.top h1{font-size:20px;margin:0;flex:1}.top a{color:white;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:1180px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.cam{background:white;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.view img.err{display:none}.meta{font-size:12px;color:#64748b;margin:7px 0}.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:9px 8px}button:nth-child(3){background:#16a34a}button:nth-child(4){background:#475569}.card{background:white;border-radius:16px;padding:12px;margin-top:12px;overflow:auto}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{border-bottom:1px solid #e5edf2;padding:8px;text-align:left}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}.btns{grid-template-columns:repeat(2,1fr)}} </style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 多攝影機 AI 門禁平台（iCATCH / SoCatch / Bridge）</h1><a href="/rt7_dvr_bridge_setup">iCATCH Bridge教學</a><a href="/api/rt7/dvr/bridge/status">Bridge JSON</a><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap">
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:white;padding:14px;display:flex;align-items:center;gap:10px}.top h1{font-size:20px;margin:0;flex:1}.top a{color:white;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:1180px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.cam{background:white;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.view img.err{display:none}.meta{font-size:12px;color:#64748b;margin:7px 0}.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:9px 8px}button:nth-child(3){background:#16a34a}button:nth-child(4){background:#475569}.card{background:white;border-radius:16px;padding:12px;margin-top:12px;overflow:auto}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{border-bottom:1px solid #e5edf2;padding:8px;text-align:left}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}.btns{grid-template-columns:repeat(2,1fr)}} </style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 多攝影機 AI 門禁平台（iCATCH / SoCatch / Bridge）</h1><a href="/rt7_icatch_mjpeg_bridge">即時MJPEG</a><a href="/rt7_dvr_bridge_setup">iCATCH Bridge教學</a><a href="/api/rt7/dvr/bridge/status">Bridge JSON</a><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap">
 <div class="notice"><b>連線修正重點：</b>SoCatch 手機 App 能連到 DVR（圖中 admin@192.168.0.123:80），代表手機在同一個內網可看影像；但 Railway 雲端通常不能直接連到 192.168.0.123。此頁提供「DVR HTTP Snapshot 偵測」與「RT7 LAN Bridge」。你目前手機瀏覽器直接開 192.168.0.123 顯示 ERR_EMPTY_RESPONSE，表示 DVR 的 80 port 不是一般網頁/圖片服務；你的 DVR 已確認是 iCATCH / RMH-0428EU-K A3。本版新增 iCATCH Bridge：先做 iCATCH/ONVIF/RTSP/HTTP Snapshot 探測；若 DVR 不開放標準串流，會產生清楚診斷，方便改用 iCATCH 專用 URL 或手動影像資料夾模式。正式流程仍是：同一內網電腦執行 bridge.js，將 CH01~CH04 JPEG 主動上傳到 Railway，再由 Railway 做 AI 辨識。</div>
 <div class="grid">${cards}</div>
 <div class="card"><h2>DVR 攝影機設定</h2><table><thead><tr><th>ID</th><th>名稱</th><th>DVR IP</th><th>Port</th><th>User</th><th>Password</th><th>CH</th><th>Snapshot URL / Template</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -5262,7 +5264,7 @@ body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-syst
 </div><script>
 const CAMS = ${JSON.stringify(cams.map(c => ({id:c.id, direct:rt7DvrDirectSnapshotUrl_(c)})))};
 function log(x){ document.getElementById('log').textContent = typeof x === 'string' ? x : JSON.stringify(x,null,2); }
-function rt7RefreshCam(id){ const img=document.getElementById('img_'+id); img.classList.remove('err'); img.src='/api/rt7/dvr/bridge/latest/'+encodeURIComponent(id)+'?ts='+Date.now(); }
+function rt7RefreshCam(id){ const img=document.getElementById('img_'+id); img.classList.remove('err'); img.src='/api/rt7/dvr/bridge/stream/'+encodeURIComponent(id)+'?fps=5&ts='+Date.now(); }
 async function rt7ProbeCam(id){
   log('偵測 '+id+' 中...');
   const r=await fetch('/api/rt7/dvr/probe/'+encodeURIComponent(id),{method:'POST'}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
@@ -5305,6 +5307,81 @@ setInterval(()=>{ CAMS.forEach(c=>rt7RefreshCam(c.id)); }, 5000);
 }
 
 
+function rt7DvrServeMjpeg_(req, res, id) {
+  id = safeString(id || 'CH01').toUpperCase().replace(/[^A-Z0-9_-]/g, '') || 'CH01';
+  const latest0 = rt7DvrBridgeLatest_(id);
+  if (!latest0.ok || !latest0.file) {
+    return res.status(404).type('text/plain').send('NO_BRIDGE_FRAME ' + id + '\n請先在同內網 Windows 電腦執行 RUN_ICATCH_REALTIME_MJPEG_BRIDGE_WINDOWS.bat，確認 Bridge 顯示 upload=OK 200。');
+  }
+  res.writeHead(200, {
+    'Content-Type':'multipart/x-mixed-replace; boundary=rt7dvrframe',
+    'Cache-Control':'no-cache, no-store, must-revalidate, private',
+    'Connection':'keep-alive',
+    'Pragma':'no-cache',
+    'Expires':'0',
+    'X-Accel-Buffering':'no',
+    'X-RT7-DVR-MJPEG':'V6_2A_ICATCH_REALTIME_MJPEG_BRIDGE',
+    'X-RT7-DVR-Camera': id
+  });
+  let closed = false;
+  let busy = false;
+  let sent = 0;
+  let lastMtime = 0;
+  let lastFrame = null;
+  const fps = Math.max(1, Math.min(10, parseInt(req.query.fps || '5', 10) || 5));
+  const intervalMs = Math.max(100, Math.floor(1000 / fps));
+  function readFrame() {
+    try {
+      const latest = rt7DvrBridgeLatest_(id);
+      if (latest.ok && latest.file) {
+        const st = fs.statSync(latest.file);
+        if (!lastFrame || st.mtimeMs !== lastMtime) {
+          const b = fs.readFileSync(latest.file);
+          if (b && b.length > 16 && b[0] === 0xff && b[1] === 0xd8) {
+            lastFrame = b;
+            lastMtime = st.mtimeMs;
+          }
+        }
+      }
+    } catch (_) {}
+    return lastFrame;
+  }
+  function writeOne() {
+    if (closed || busy || res.destroyed || res.writableEnded) return;
+    const frame = readFrame();
+    if (!frame || frame.length < 16) return;
+    try {
+      sent++;
+      const head = `--rt7dvrframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nX-RT7-DVR-Camera: ${id}\r\nX-RT7-DVR-Seq: ${sent}\r\nX-RT7-DVR-Updated: ${new Date(lastMtime || Date.now()).toISOString()}\r\n\r\n`;
+      busy = true;
+      const ok = res.write(head) && res.write(frame) && res.write('\r\n');
+      if (!ok) res.once('drain', () => { busy = false; }); else busy = false;
+    } catch (_) {
+      closed = true;
+      try { clearInterval(timer); res.end(); } catch (__) {}
+    }
+  }
+  writeOne();
+  const timer = setInterval(writeOne, intervalMs);
+  req.on('close', () => { closed = true; clearInterval(timer); });
+}
+
+function rt7IcatchRealtimeMjpegPage_() {
+  const cams = rt7DvrReadCameras_();
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const cards = cams.map(c => `<div class="cam"><div class="camTop"><b>${esc(c.id)} / ${esc(c.name||'')}</b><span id="s_${esc(c.id)}">讀取中</span></div><div class="view"><img id="img_${esc(c.id)}" src="/api/rt7/dvr/bridge/stream/${encodeURIComponent(c.id)}?fps=5&_=${Date.now()}" onerror="document.getElementById('s_${esc(c.id)}').textContent='NO_FRAME';"></div><div class="meta">MJPEG: <code>/api/rt7/dvr/bridge/stream/${esc(c.id)}</code></div><div class="btns"><button onclick="reloadCam('${esc(c.id)}')">重連</button><button onclick="single('${esc(c.id)}')">單路</button><button onclick="ai('${esc(c.id)}')">AI 辨識</button></div></div>`).join('');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 iCATCH 即時 MJPEG</title><style>
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:#fff;padding:14px;display:flex;gap:10px;align-items:center}.top h1{font-size:20px;margin:0;flex:1}.top a{color:#fff;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:1180px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.cam{background:#fff;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.meta{font-size:12px;color:#64748b;margin:7px 0}.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:9px 8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}.card{background:#fff;border-radius:16px;padding:12px;margin-top:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}.btns{grid-template-columns:1fr}}
+</style></head><body><div class="top"><a href="/rt7_dvr_ai_platform">← DVR平台</a><h1>RT7 V6.2A iCATCH 即時 MJPEG Bridge</h1><a href="/api/rt7/dvr/bridge/status">JSON</a></div><div class="wrap"><div class="notice"><b>V6.2A：</b>Bridge 已成功把 iCATCH CH01~CH04 JPEG 上傳 Railway。本頁將每一路最新 JPEG 轉成 Railway MJPEG 串流，手機可直接即時觀看；若黑畫面，請確認 Windows Bridge 視窗仍有 <code>upload=OK 200</code>。</div><div class="grid">${cards}</div><div class="card"><h2>Bridge 狀態</h2><div id="log" class="log">讀取中...</div></div></div><script>
+function reloadCam(id){var img=document.getElementById('img_'+id); img.src='/api/rt7/dvr/bridge/stream/'+encodeURIComponent(id)+'?fps=5&_='+Date.now();}
+function single(id){location.href='/api/rt7/dvr/bridge/stream/'+encodeURIComponent(id)+'?fps=5&_='+Date.now();}
+async function ai(id){const r=await fetch('/api/rt7/dvr/ai/recognize/'+encodeURIComponent(id),{method:'POST'}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); alert(JSON.stringify(r,null,2));}
+async function status(){const r=await fetch('/api/rt7/dvr/bridge/status').then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); document.getElementById('log').textContent=JSON.stringify(r,null,2); (r.cameras||[]).forEach(c=>{var el=document.getElementById('s_'+c.id); if(el) el.textContent=c.online?'ONLINE':'OFFLINE';});}
+status(); setInterval(status,3000);
+</script></body></html>`;
+}
+
+
 function rt7DvrBridgeSetupPage_() {
   const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const railway = process.env.RAILWAY_PUBLIC_URL || process.env.RAILWAY_URL || '';
@@ -5325,6 +5402,7 @@ node bridge.js</pre></div>
 app.get('/rt7_dvr_bridge_setup', rt7RequireLogin_, (req,res) => res.type('html').send(rt7DvrBridgeSetupPage_()));
 
 app.get('/rt7_dvr_ai_platform', rt7RequireLogin_, (req,res) => res.type('html').send(rt7DvrPage_()));
+app.get('/rt7_icatch_mjpeg_bridge', rt7RequireLogin_, (req,res) => res.type('html').send(rt7IcatchRealtimeMjpegPage_()));
 
 app.get('/api/rt7/dvr/cameras', rt7RequireLogin_, (req,res) => {
   res.json({ ok:true, version:SERVER_VERSION, cameras:rt7DvrReadCameras_().map(c => Object.assign({}, c, { password: c.password ? '********' : '' })) });
@@ -5388,6 +5466,8 @@ app.get('/api/rt7/dvr/bridge/latest/:id', rt7RequireLogin_, (req,res) => {
   res.setHeader('Content-Type','image/jpeg');
   res.sendFile(latest.file);
 });
+app.get('/api/rt7/dvr/bridge/stream/:id', rt7RequireLogin_, (req,res) => rt7DvrServeMjpeg_(req,res,req.params.id));
+app.get('/api/rt7/dvr/bridge/stream.mjpg', rt7RequireLogin_, (req,res) => rt7DvrServeMjpeg_(req,res,req.query.camera || req.query.id || 'CH01'));
 app.post('/api/rt7/dvr/bridge/upload/:id', express.raw({ type:['image/jpeg','image/jpg','application/octet-stream'], limit:'3mb' }), (req,res) => {
   const token = safeString(req.headers['x-rt7-bridge-token'] || req.query.token || '').trim();
   if (token !== RT7_DVR_BRIDGE_TOKEN) return res.status(403).json({ ok:false, error:'BAD_BRIDGE_TOKEN' });

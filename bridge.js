@@ -1,4 +1,4 @@
-// RT7_V6_1D_ICATCH_SESSIONLESS_STREAM_FIX
+// RT7_V6_2A_ICATCH_REALTIME_MJPEG_BRIDGE
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -20,7 +20,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'RT7_V6_1D_ICATCH_SESSIONLESS_STREAM_FIX';
+const VERSION = 'RT7_V6_2A_ICATCH_REALTIME_MJPEG_BRIDGE';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -111,7 +111,7 @@ function icatchLoginCookie(timeoutMs=5000) {
         'Authorization': authHeader(),
         'Content-Type': 'multipart/form-data; boundary=' + mp.boundary,
         'Content-Length': mp.body.length,
-        'User-Agent': 'SoCatch/RT7-V6.1D',
+        'User-Agent': 'SoCatch/RT7-V6.2A',
         'Connection': 'close'
       }
     };
@@ -155,7 +155,7 @@ async function getVideoHeaders() {
   const h = {
     'Authorization': authHeader(),
     'Magic': MAGIC,
-    'User-Agent': 'SoCatch/RT7-V6.1D',
+    'User-Agent': 'SoCatch/RT7-V6.2A',
     'Accept': '*/*',
     'Connection': 'close'
   };
@@ -177,7 +177,7 @@ async function httpProbe(urlText, timeoutMs=5000) {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-NetVideo/6.1D' });
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-RealtimeMJPEG/6.2A' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       const chunks = [];
       res.on('data', d => {
@@ -203,7 +203,7 @@ async function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000)
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'SoCatch/RT7-V6.1D' });
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'SoCatch/RT7-V6.2A' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       let bytes = 0;
       const ws = fs.createWriteStream(outFile);
@@ -224,7 +224,7 @@ async function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000)
 async function ffmpegOneJpeg(urlText, ch) {
   const videoHeaders = await getVideoHeaders();
   return new Promise(resolve => {
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.1D' }));
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2A' }));
     // 嘗試讓 ffmpeg 自動判斷 iCATCH multipart/octet-stream。輸出單張 MJPEG 到 stdout。
     const args = [
       '-hide_banner', '-nostdin',
@@ -263,7 +263,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1D' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-RealtimeMJPEG/6.2A' },
       timeout:10000
     }, res => {
       const chunks=[];
