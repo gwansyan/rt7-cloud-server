@@ -1,4 +1,4 @@
-// RT7_V6_1A_ICATCH_NET_VIDEO_BRIDGE
+// RT7_V6_1B_ICATCH_NET_VIDEO_HTTP_BRIDGE
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -20,7 +20,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'RT7_V6_1A_ICATCH_NET_VIDEO_BRIDGE';
+const VERSION = 'RT7_V6_1B_ICATCH_NET_VIDEO_HTTP_BRIDGE';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -34,6 +34,10 @@ const DEBUG = String(process.env.DEBUG || '').trim() === '1';
 const PROBE_ONLY = String(process.env.PROBE_ONLY || '').trim() === '1';
 const TEST_ONLY = String(process.env.TEST_ONLY || '').trim() === '1';
 const TEST_OUT = process.env.TEST_OUT || path.join(__dirname, 'icatch_ch1_test.jpg');
+
+const RAW_ONLY = String(process.env.RAW_ONLY || '').trim() === '1';
+const RAW_OUT = process.env.RAW_OUT || path.join(__dirname, 'icatch_ch1_raw.bin');
+const RAW_BYTES = Math.max(65536, parseInt(process.env.RAW_BYTES || '524288', 10) || 524288);
 const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
 
 // SoCatch 目前抓到的 URL 沒有 channel 參數。部分 iCATCH DVR 會以 hq/chn/ch 參數選通道；
@@ -79,7 +83,7 @@ function httpProbe(urlText, timeoutMs=5000) {
     const headers = {
       'Authorization': authHeader(),
       'Magic': MAGIC,
-      'User-Agent': 'RT7-iCATCH-NetVideo/6.1A',
+      'User-Agent': 'RT7-iCATCH-NetVideo/6.1B',
       'Accept': '*/*',
       'Connection': 'close'
     };
@@ -97,6 +101,36 @@ function httpProbe(urlText, timeoutMs=5000) {
     });
     req.on('timeout', () => { try { req.destroy(new Error('probe timeout')); } catch (_) {} });
     req.on('error', e => resolve({ ok:false, error:String(e.message || e) }));
+    req.end();
+  });
+}
+
+
+function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000) {
+  return new Promise(resolve => {
+    let u;
+    try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
+    const lib = u.protocol === 'https:' ? https : http;
+    const headers = {
+      'Authorization': authHeader(),
+      'Magic': MAGIC,
+      'User-Agent': 'SoCatch/RT7-V6.1B',
+      'Accept': '*/*',
+      'Connection': 'close'
+    };
+    const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
+      let bytes = 0;
+      const ws = fs.createWriteStream(outFile);
+      res.on('data', d => {
+        bytes += d.length;
+        ws.write(d);
+        if (bytes >= maxBytes) { try { req.destroy(); } catch (_) {} }
+      });
+      res.on('end', () => { ws.end(); resolve({ ok:res.statusCode>=200 && res.statusCode<300, status:res.statusCode, headers:res.headers, bytes, outFile }); });
+      res.on('close', () => { ws.end(); resolve({ ok:res.statusCode>=200 && res.statusCode<300 && bytes>0, status:res.statusCode, headers:res.headers, bytes, outFile, closed:true }); });
+    });
+    req.on('timeout', () => { try { req.destroy(new Error('raw timeout')); } catch (_) {} });
+    req.on('error', e => resolve({ ok:false, error:String(e.message || e), outFile }));
     req.end();
   });
 }
@@ -142,7 +176,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1A' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1B' },
       timeout:10000
     }, res => {
       const chunks=[];
@@ -157,6 +191,12 @@ function upload(ch, jpeg, source='icatch-net-video') {
 
 async function captureChannel(ch) {
   const url = fill(NET_VIDEO_TEMPLATE, ch);
+  if (RAW_ONLY) {
+    const rr = await httpRawDump(url, RAW_OUT);
+    console.log('[RAW] ' + JSON.stringify({ ok:rr.ok, status:rr.status, bytes:rr.bytes, contentType:rr.headers && rr.headers['content-type'], outFile:rr.outFile, error:rr.error }, null, 2));
+    console.log('[RAW] 如果 bytes > 0，代表 DVR net_video.cgi 已可讀；若 ffmpeg 不能轉 JPEG，表示需要下一版 depacketizer。');
+    return;
+  }
   const r = await ffmpegOneJpeg(url, ch);
   if (!r.ok) {
     console.log(`[${padCh(ch)}] ffmpeg FAIL code=${r.code} bytes=${r.bytes} url=${mask(url)}`);
@@ -174,6 +214,12 @@ async function testOne() {
   console.log('Test URL:', mask(url));
   const p = await httpProbe(url, 5000);
   console.log('HTTP probe:', JSON.stringify({ ok:p.ok, status:p.status, bytes:p.bytes, contentType:p.headers && p.headers['content-type'], sample:p.sample || p.error }, null, 2));
+  if (RAW_ONLY) {
+    const rr = await httpRawDump(url, RAW_OUT);
+    console.log('[RAW] ' + JSON.stringify({ ok:rr.ok, status:rr.status, bytes:rr.bytes, contentType:rr.headers && rr.headers['content-type'], outFile:rr.outFile, error:rr.error }, null, 2));
+    console.log('[RAW] 如果 bytes > 0，代表 DVR net_video.cgi 已可讀；若 ffmpeg 不能轉 JPEG，表示需要下一版 depacketizer。');
+    return;
+  }
   const r = await ffmpegOneJpeg(url, ch);
   if (r.ok) {
     fs.writeFileSync(TEST_OUT, r.jpeg);
@@ -199,6 +245,7 @@ function checkFfmpeg() {
   console.log('DVR:', `iCATCH ${DVR_USER}@${DVR_HOST}:${DVR_HTTP_PORT} channels=${CHANNELS.join(',')}`);
   console.log('Magic:', MAGIC);
   console.log('Template:', NET_VIDEO_TEMPLATE);
+  console.log('Mode:', RAW_ONLY ? 'RAW_ONLY' : (TEST_ONLY ? 'TEST_ONLY' : 'BRIDGE_LOOP'));
   console.log('Token:', TOKEN ? '(set)' : '(empty)');
   const ff = await checkFfmpeg();
   console.log('FFmpeg:', ff.ok ? ff.version : ('NOT FOUND: ' + ff.error));
