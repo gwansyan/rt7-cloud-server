@@ -1,4 +1,4 @@
-// RT7_V6_1C_ICATCH_NET_VIDEO_AUTH_HEADER_FIX
+// RT7_V6_1D_ICATCH_SESSIONLESS_STREAM_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -20,7 +20,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'RT7_V6_1C_ICATCH_NET_VIDEO_AUTH_HEADER_FIX';
+const VERSION = 'RT7_V6_1D_ICATCH_SESSIONLESS_STREAM_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -39,6 +39,13 @@ const RAW_ONLY = String(process.env.RAW_ONLY || '').trim() === '1';
 const RAW_OUT = process.env.RAW_OUT || path.join(__dirname, 'icatch_ch1_raw.bin');
 const RAW_BYTES = Math.max(65536, parseInt(process.env.RAW_BYTES || '524288', 10) || 524288);
 const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
+
+// V6.1D: iCATCH/SoCatch net_video.cgi 可在 Authorization + Magic 下直接串流。
+// /dvr/cmd 登入可能 status=200 但沒有 Set-Cookie；這是可接受狀態。
+// 因此 Cookie 不再是必要條件，也不在每張 frame 前重複登入。
+let RT7_SESSION_COOKIE = '';
+let RT7_LOGIN_OK = false;
+let RT7_LOGIN_TRIED = false;
 
 // SoCatch 目前抓到的 URL 沒有 channel 參數。部分 iCATCH DVR 會以 hq/chn/ch 參數選通道；
 // 因此保留 template 可測。若封包抓到更完整 URL，可直接在 BAT 設 ICATCH_NET_VIDEO_TEMPLATE。
@@ -104,7 +111,7 @@ function icatchLoginCookie(timeoutMs=5000) {
         'Authorization': authHeader(),
         'Content-Type': 'multipart/form-data; boundary=' + mp.boundary,
         'Content-Length': mp.body.length,
-        'User-Agent': 'SoCatch/RT7-V6.1C',
+        'User-Agent': 'SoCatch/RT7-V6.1D',
         'Connection': 'close'
       }
     };
@@ -126,21 +133,34 @@ function icatchLoginCookie(timeoutMs=5000) {
   });
 }
 
-async function getVideoHeaders() {
+async function initIcatchSessionOnce() {
+  if (RT7_LOGIN_TRIED) return { ok: RT7_LOGIN_OK, cookie: RT7_SESSION_COOKIE, cached: true };
+  RT7_LOGIN_TRIED = true;
   const login = await icatchLoginCookie();
-  if (login.ok && login.cookie) {
-    if (DEBUG) console.log('[AUTH] login OK cookie=' + login.cookie);
+  const body = String(login.bodySample || '');
+  RT7_LOGIN_OK = !!(login.ok || login.status === 200 || body.includes('GetConfigurationResponse') || body.includes('Return="0"'));
+  RT7_SESSION_COOKIE = login.cookie || '';
+  if (RT7_SESSION_COOKIE) {
+    console.log('[AUTH] login OK cookie=' + RT7_SESSION_COOKIE);
+  } else if (RT7_LOGIN_OK) {
+    console.log('[AUTH] login OK without cookie; sessionless mode enabled. status=' + (login.status || ''));
   } else {
-    console.log('[AUTH] login no cookie/status=' + (login.status || '') + ' error=' + (login.error || '') + ' body=' + (login.bodySample || '').replace(/\r?\n/g,' ').slice(0,160));
+    console.log('[AUTH] login warn status=' + (login.status || '') + ' error=' + (login.error || '') + ' body=' + body.replace(/\r?\n/g, ' ').slice(0, 160));
   }
-  return {
+  return { ok: RT7_LOGIN_OK, cookie: RT7_SESSION_COOKIE };
+}
+
+async function getVideoHeaders() {
+  if (!RT7_LOGIN_TRIED) await initIcatchSessionOnce();
+  const h = {
     'Authorization': authHeader(),
     'Magic': MAGIC,
-    'Cookie': login.cookie || '',
-    'User-Agent': 'SoCatch/RT7-V6.1C',
+    'User-Agent': 'SoCatch/RT7-V6.1D',
     'Accept': '*/*',
     'Connection': 'close'
   };
+  if (RT7_SESSION_COOKIE) h['Cookie'] = RT7_SESSION_COOKIE;
+  return h;
 }
 
 function headersToFfmpegText(headers) {
@@ -157,7 +177,7 @@ async function httpProbe(urlText, timeoutMs=5000) {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-NetVideo/6.1C' });
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-NetVideo/6.1D' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       const chunks = [];
       res.on('data', d => {
@@ -183,7 +203,7 @@ async function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000)
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'SoCatch/RT7-V6.1C' });
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'SoCatch/RT7-V6.1D' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       let bytes = 0;
       const ws = fs.createWriteStream(outFile);
@@ -204,7 +224,7 @@ async function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000)
 async function ffmpegOneJpeg(urlText, ch) {
   const videoHeaders = await getVideoHeaders();
   return new Promise(resolve => {
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.1C' }));
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.1D' }));
     // 嘗試讓 ffmpeg 自動判斷 iCATCH multipart/octet-stream。輸出單張 MJPEG 到 stdout。
     const args = [
       '-hide_banner', '-nostdin',
@@ -243,7 +263,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1C' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-NetVideo/6.1D' },
       timeout:10000
     }, res => {
       const chunks=[];
@@ -318,6 +338,7 @@ function checkFfmpeg() {
   console.log('FFmpeg:', ff.ok ? ff.version : ('NOT FOUND: ' + ff.error));
   if (!ff.ok) console.log('[ERROR] 請先安裝 FFmpeg，並確認 ffmpeg.exe 可在命令列執行。');
   if (!RAILWAY_URL) console.log('[WARN] RAILWAY_URL_EMPTY: 可測 DVR/FFmpeg，但無法上傳 Railway。');
+  await initIcatchSessionOnce();
   if (PROBE_ONLY || TEST_ONLY) { await testOne(); return; }
   console.log('Press Ctrl+C to stop.');
   loop();
