@@ -1,4 +1,4 @@
-// RT7 DVR LAN Bridge V2 - SoCatch / DVR Bridge RUN FIX
+// RT7 DVR LAN Bridge V3 - Windows CMD + FFmpeg option fix
 // 在「DVR 同一個內網」的 Windows / Mac / Linux 電腦執行。
 // 功能：用 FFmpeg 從 DVR RTSP 擷取 CH01~CH04 JPEG，主動上傳到 Railway。
 //
@@ -32,6 +32,11 @@ const RTSP_TIMEOUT_MS = Math.max(3000, parseInt(process.env.RTSP_TIMEOUT_MS || '
 const DEBUG = String(process.env.DEBUG || '').trim() === '1';
 
 const DEFAULT_TEMPLATES = [
+  // SoCatch / AVTech / older DVR candidates
+  'rtsp://{host}:{port}/user={user}&password={pass}&channel={ch}&stream=0.sdp',
+  'rtsp://{host}:{port}/user={user}&password={pass}&channel={ch}&stream=1.sdp',
+  'rtsp://{user}:{pass}@{host}:{port}/user={user}&password={pass}&channel={ch}&stream=0.sdp',
+  'rtsp://{user}:{pass}@{host}:{port}/user={user}&password={pass}&channel={ch}&stream=1.sdp',
   // Dahua-like
   'rtsp://{user}:{pass}@{host}:{port}/cam/realmonitor?channel={ch}&subtype=0',
   'rtsp://{user}:{pass}@{host}:{port}/cam/realmonitor?channel={ch}&subtype=1',
@@ -85,7 +90,6 @@ function ffmpegSnapshot(rtspUrl) {
     const args = [
       '-hide_banner', '-loglevel', DEBUG ? 'info' : 'error',
       '-rtsp_transport', 'tcp',
-      '-stimeout', String(Math.max(1000000, RTSP_TIMEOUT_MS * 1000)),
       '-i', rtspUrl,
       '-frames:v', '1',
       '-q:v', '3',
