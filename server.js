@@ -255,7 +255,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_8E2_COMMUNITY_SCOPED_ADMIN_ACCOUNT';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_9A_DVR_MULTI_CAMERA_AI_GATE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -5269,6 +5269,193 @@ app.get('/rt7_gpio_control', (req,res)=>{
 })();
 </script></body></html>`);
 });
+
+
+// ============================================================================
+// V5.9A DVR Multi-Camera AI Access Platform
+// - HTTP Snapshot first: works with many DVR/NVR devices and avoids RTSP/FFmpeg on Railway.
+// - RTSP fields are stored for future VPS/FFmpeg bridge, but direct RTSP decoding is not done here.
+// ============================================================================
+const DVR_CAMERAS_FILE = path.join(DATA_DIR, 'rt7_dvr_cameras.json');
+const DVR_LAST_SNAPSHOT_FILE = path.join(DATA_DIR, 'rt7_dvr_last_snapshot.jpg');
+
+function rt7DvrDefaultCameras_() {
+  return [1,2,3,4].map(n => ({
+    id: 'CH' + String(n).padStart(2, '0'),
+    name: n === 1 ? '大門' : (n === 2 ? '停車場' : (n === 3 ? '側門' : '電梯')),
+    enabled: n === 1,
+    ai_enabled: n === 1,
+    dvr_host: '192.168.0.123:80',
+    channel: n,
+    username: 'admin',
+    password: '',
+    snapshot_url: '',
+    stream_url: '',
+    door_device_id: '#1',
+    note: '請在管理頁填入此通道的 HTTP Snapshot URL；RTSP 可先保留供 VPS/FFmpeg 版本使用。'
+  }));
+}
+function rt7DvrReadCameras_() {
+  ensureDataDir();
+  if (!fs.existsSync(DVR_CAMERAS_FILE)) rt7DvrSaveCameras_(rt7DvrDefaultCameras_());
+  try {
+    const raw = fs.readFileSync(DVR_CAMERAS_FILE, 'utf8');
+    const arr = JSON.parse(raw || '[]');
+    return rt7DvrNormalizeCameras_(Array.isArray(arr) ? arr : (arr.cameras || []));
+  } catch (_) { return rt7DvrDefaultCameras_(); }
+}
+function rt7DvrSaveCameras_(cameras) {
+  ensureDataDir();
+  const arr = rt7DvrNormalizeCameras_(cameras);
+  fs.writeFileSync(DVR_CAMERAS_FILE, JSON.stringify(arr, null, 2), 'utf8');
+  return arr;
+}
+function rt7DvrNormalizeCameras_(arr) {
+  arr = Array.isArray(arr) ? arr : [];
+  if (!arr.length) arr = rt7DvrDefaultCameras_();
+  const out = [];
+  arr.forEach((c, idx) => {
+    c = c && typeof c === 'object' ? c : {};
+    let id = safeString(c.id || c.camera_id || ('CH' + String(idx + 1).padStart(2, '0'))).trim().toUpperCase();
+    if (/^[0-9]+$/.test(id)) id = 'CH' + id.padStart(2, '0');
+    id = id.replace(/[^A-Z0-9_\-]/g, '').slice(0, 24) || ('CH' + String(idx + 1).padStart(2, '0'));
+    out.push({
+      id,
+      name: safeString(c.name || c.label || id).trim() || id,
+      enabled: c.enabled !== false,
+      ai_enabled: c.ai_enabled !== false && c.face_enabled !== false,
+      dvr_host: safeString(c.dvr_host || c.host || '').trim().replace(/^https?:\/\//i,'').replace(/\/$/,''),
+      channel: Number(c.channel || c.ch || idx + 1) || (idx + 1),
+      username: safeString(c.username || c.user || '').trim(),
+      password: safeString(c.password || c.pass || '').trim(),
+      snapshot_url: safeString(c.snapshot_url || c.snapshot || '').trim(),
+      stream_url: safeString(c.stream_url || c.rtsp_url || c.rtsp || '').trim(),
+      door_device_id: safeString(c.door_device_id || c.device_id || '#1').trim() || '#1',
+      note: safeString(c.note || '').trim(),
+      last_snapshot: c.last_snapshot || null,
+      last_ai: c.last_ai || null
+    });
+  });
+  return out;
+}
+function rt7DvrBuildSnapshotUrl_(cam) {
+  const raw = safeString(cam && cam.snapshot_url || '').trim();
+  if (raw) return raw;
+  const host = safeString(cam && cam.dvr_host || '').trim();
+  if (!host) return '';
+  // Generic fallback only; most DVRs need their own snapshot path.
+  return 'http://' + host.replace(/^https?:\/\//i,'').replace(/\/$/,'') + '/snapshot.jpg?channel=' + encodeURIComponent(cam.channel || 1);
+}
+function rt7HttpGetBuffer_(urlText, opt) {
+  opt = opt || {};
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(urlText); } catch (e) { return reject(new Error('BAD_URL')); }
+    const mod = u.protocol === 'https:' ? require('https') : require('http');
+    const headers = Object.assign({}, opt.headers || {});
+    if (opt.username) {
+      headers.Authorization = 'Basic ' + Buffer.from(String(opt.username) + ':' + String(opt.password || '')).toString('base64');
+    }
+    const req = mod.request(u, { method:'GET', headers, timeout: opt.timeout || 6000 }, (r) => {
+      const chunks = [];
+      let size = 0;
+      r.on('data', (d) => {
+        size += d.length;
+        if (size > (opt.maxBytes || 6*1024*1024)) { req.destroy(new Error('IMAGE_TOO_LARGE')); return; }
+        chunks.push(d);
+      });
+      r.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        if (r.statusCode < 200 || r.statusCode >= 300) return reject(new Error('HTTP_' + r.statusCode));
+        resolve({ statusCode:r.statusCode, headers:r.headers || {}, buffer:buf });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('TIMEOUT')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+function rt7DvrGetCamera_(id) {
+  id = safeString(id || '').trim().toUpperCase();
+  const cams = rt7DvrReadCameras_();
+  return cams.find(c => c.id === id) || cams[0] || null;
+}
+async function rt7DvrFetchSnapshot_(cam) {
+  if (!cam) throw new Error('CAMERA_NOT_FOUND');
+  if (cam.enabled === false) throw new Error('CAMERA_DISABLED');
+  const url = rt7DvrBuildSnapshotUrl_(cam);
+  if (!url) throw new Error('SNAPSHOT_URL_EMPTY');
+  if (/^rtsp:/i.test(url)) throw new Error('RTSP_NEEDS_VPS_FFMPEG_BRIDGE');
+  const r = await rt7HttpGetBuffer_(url, { username:cam.username, password:cam.password, timeout:7000, maxBytes:6*1024*1024 });
+  const buf = r.buffer;
+  if (!buf || buf.length < 200) throw new Error('SNAPSHOT_TOO_SMALL');
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8;
+  if (!isJpeg && !/image\//i.test(String(r.headers['content-type'] || ''))) throw new Error('NOT_IMAGE_RESPONSE');
+  ensureDataDir();
+  fs.writeFileSync(DVR_LAST_SNAPSHOT_FILE, buf);
+  fs.writeFileSync(SNAPSHOT_FILE, buf); // reuse existing RT7 Face Match engine
+  const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'dvr_camera_snapshot', camera_id:cam.id, camera_name:cam.name, device_id:cam.door_device_id || '#1', url:'/api/rt7/dvr/camera/' + encodeURIComponent(cam.id) + '/snapshot.jpg' };
+  cloudState.last_snapshot = Object.assign({}, meta, { url:'/api/rt7/camera/latest.jpg' });
+  const cams = rt7DvrReadCameras_();
+  const idx = cams.findIndex(x => x.id === cam.id);
+  if (idx >= 0) { cams[idx].last_snapshot = meta; rt7DvrSaveCameras_(cams); }
+  appendEvent({ type:'dvr_snapshot', camera_id:cam.id, camera_name:cam.name, bytes:buf.length, message:'DVR snapshot captured' });
+  broadcast('snapshot', meta);
+  return { meta, buffer:buf };
+}
+async function rt7DvrRecognizeCamera_(id) {
+  const cam = rt7DvrGetCamera_(id);
+  if (!cam) throw new Error('CAMERA_NOT_FOUND');
+  const snap = await rt7DvrFetchSnapshot_(cam);
+  const match = await rt7FaceMatchLatest_();
+  const result = Object.assign({}, match, { dvr:true, camera_id:cam.id, camera_name:cam.name, snapshot:snap.meta });
+  const cams = rt7DvrReadCameras_();
+  const idx = cams.findIndex(x => x.id === cam.id);
+  if (idx >= 0) { cams[idx].last_ai = { time:nowIso(), known_face:!!result.known_face, name:result.matched_name || '', confidence:result.confidence || 0, summary:result.summary || result.answer || '' }; rt7DvrSaveCameras_(cams); }
+  appendEvent({ type:'dvr_face_recognize', camera_id:cam.id, camera_name:cam.name, known_face:!!result.known_face, name:result.matched_name || '', confidence:result.confidence || 0, message:result.summary || result.answer || '' });
+  broadcast('dvr_face_recognize', result);
+  return result;
+}
+function rt7DvrPlatformPage_() {
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
+  const cams = rt7DvrReadCameras_();
+  const cards = cams.map(c => `<div class="cam" data-id="${esc(c.id)}"><div class="camHead"><b>${esc(c.id)} · ${esc(c.name)}</b><span class="pill ${c.enabled?'ok':'bad'}">${c.enabled?'ONLINE':'OFF'}</span></div><div class="video"><img id="img_${esc(c.id)}" src="/api/rt7/dvr/camera/${encodeURIComponent(c.id)}/snapshot.jpg?_=${Date.now()}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="empty">尚無影像<br><small>請設定 Snapshot URL</small></div></div><div class="ops"><button onclick="snap('${esc(c.id)}')">截圖</button><button class="green" onclick="ai('${esc(c.id)}')">AI辨識</button></div><div class="small" id="st_${esc(c.id)}">${esc(c.snapshot_url || c.stream_url || c.dvr_host || '未設定')}</div></div>`).join('');
+  const rows = cams.map(c => `<tr><td><input name="id" value="${esc(c.id)}"></td><td><input name="name" value="${esc(c.name)}"></td><td><input name="enabled" value="${c.enabled?'1':'0'}"></td><td><input name="ai_enabled" value="${c.ai_enabled?'1':'0'}"></td><td><input name="dvr_host" value="${esc(c.dvr_host)}"></td><td><input name="channel" value="${esc(c.channel)}"></td><td><input name="username" value="${esc(c.username)}"></td><td><input name="password" value="${esc(c.password)}"></td><td><input name="snapshot_url" value="${esc(c.snapshot_url)}" placeholder="http://DVR/.../snapshot..."></td><td><input name="stream_url" value="${esc(c.stream_url)}" placeholder="rtsp://..."></td><td><input name="door_device_id" value="${esc(c.door_device_id)}"></td></tr>`).join('');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 DVR 多攝影機 AI 門禁平台</title><style>
+body{margin:0;background:#07131c;color:#eaf2f8;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#0b2030;padding:14px;display:flex;gap:10px;align-items:center}.top h1{font-size:21px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#334155;padding:8px 11px;border-radius:10px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.cam,.card{background:#101d2a;border:1px solid #243448;border-radius:14px;padding:12px;box-shadow:0 8px 24px #0005}.camHead{display:flex;align-items:center;gap:8px;margin-bottom:8px}.camHead b{flex:1}.pill{font-size:12px;border-radius:999px;padding:3px 8px;font-weight:900}.ok{background:#113b1f;color:#7cff9c}.bad{background:#4a1b1b;color:#ff9b9b}.video{background:#000;aspect-ratio:4/3;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center}.video img{width:100%;height:100%;object-fit:cover}.empty{display:none;text-align:center;color:#93a4b5;font-weight:900}.ops{display:flex;gap:8px;margin-top:9px}.ops button,.btn{border:0;border-radius:9px;background:#0ea5e9;color:#fff;font-weight:900;padding:9px 12px}.ops button.green,.green{background:#16a34a}.small{font-size:12px;color:#a6b7c8;margin-top:8px;word-break:break-all}table{width:100%;border-collapse:collapse;min-width:1250px}th,td{border-bottom:1px solid #26384d;padding:7px;text-align:left}th{background:#162638}input{box-sizing:border-box;width:100%;background:#0b1520;color:#eaf2f8;border:1px solid #334155;border-radius:7px;padding:7px}.log{white-space:pre-wrap;background:#061018;border-radius:10px;padding:10px;color:#d8e8f3;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}table{min-width:1100px}}</style></head><body><div class="top"><h1>RT7 多攝影機 AI 門禁平台（DVR整合）</h1><a href="/rt7_cloud_original_ui_doorbell">主頁</a><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap"><div class="grid">${cards}</div><div class="card" style="margin-top:14px"><h2>攝影機設定</h2><div class="small">先填每個通道的 HTTP Snapshot URL。RTSP URL 可先記錄，之後 VPS/FFmpeg Bridge 版本再使用。</div><form id="form"><div style="overflow:auto"><table><thead><tr><th>ID</th><th>名稱</th><th>啟用</th><th>AI</th><th>DVR Host</th><th>CH</th><th>User</th><th>Password</th><th>HTTP Snapshot URL</th><th>RTSP URL</th><th>開門設備</th></tr></thead><tbody>${rows}</tbody></table></div><button class="btn green" type="button" onclick="save()">儲存攝影機設定</button></form></div><div class="card" style="margin-top:14px"><h2>測試紀錄</h2><div id="log" class="log">READY</div></div></div><script>
+function $(id){return document.getElementById(id)}
+async function j(url,opt){const r=await fetch(url,opt||{});return await r.json()}
+function log(x){$('log').textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}
+async function snap(id){log('抓取 '+id+' snapshot...');const r=await j('/api/rt7/dvr/camera/'+encodeURIComponent(id)+'/snapshot');log(r);const img=$('img_'+id);if(img){img.style.display='block';img.src='/api/rt7/dvr/camera/'+encodeURIComponent(id)+'/snapshot.jpg?_='+Date.now()}}
+async function ai(id){log('AI 辨識 '+id+'...');const r=await j('/api/rt7/dvr/recognize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({camera_id:id})});log(r)}
+async function save(){const trs=[...document.querySelectorAll('tbody tr')];const cameras=trs.map(tr=>{const o={};tr.querySelectorAll('input').forEach(i=>o[i.name]=i.value);o.enabled=o.enabled!=='0';o.ai_enabled=o.ai_enabled!=='0';return o});const r=await j('/api/rt7/dvr/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cameras})});log(r);setTimeout(()=>location.reload(),600)}
+</script></body></html>`;
+}
+
+app.get('/rt7_dvr_ai_platform', rt7RequireLogin_, (req,res)=>res.type('html').send(rt7DvrPlatformPage_()));
+app.get('/api/rt7/dvr/cameras', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, file:'data/rt7_dvr_cameras.json', cameras:rt7DvrReadCameras_() }));
+app.post('/api/rt7/dvr/cameras', rt7RequireAdmin_, (req,res)=>{
+  const cameras = rt7DvrSaveCameras_(req.body && req.body.cameras || []);
+  appendEvent({ type:'dvr_cameras_save', count:cameras.length, ip:clientIp(req) });
+  res.json({ ok:true, version:SERVER_VERSION, count:cameras.length, cameras });
+});
+app.get('/api/rt7/dvr/camera/:id/snapshot.jpg', async (req,res)=>{
+  try { const out = await rt7DvrFetchSnapshot_(rt7DvrGetCamera_(req.params.id)); res.type('image/jpeg').send(out.buffer); }
+  catch(e) { res.status(404).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e) }); }
+});
+app.get('/api/rt7/dvr/camera/:id/snapshot', async (req,res)=>{
+  try { const out = await rt7DvrFetchSnapshot_(rt7DvrGetCamera_(req.params.id)); res.json({ ok:true, version:SERVER_VERSION, snapshot:out.meta }); }
+  catch(e) { res.status(200).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e) }); }
+});
+app.post('/api/rt7/dvr/recognize', async (req,res)=>{
+  try { res.json(await rt7DvrRecognizeCamera_(req.body && (req.body.camera_id || req.body.id) || req.query.camera_id || req.query.id)); }
+  catch(e) { res.status(200).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e), answer:'DVR 攝影機辨識失敗，請先確認 HTTP Snapshot URL 可由 Railway/VPS 存取。' }); }
+});
+app.get('/api/rt7/dvr/recognize', async (req,res)=>{
+  try { res.json(await rt7DvrRecognizeCamera_(req.query.camera_id || req.query.id)); }
+  catch(e) { res.status(200).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e), answer:'DVR 攝影機辨識失敗，請先確認 HTTP Snapshot URL 可由 Railway/VPS 存取。' }); }
+});
+app.get('/api/rt7/dvr/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, cameras:rt7DvrReadCameras_(), last_snapshot:cloudState.last_snapshot || null, last_face_match:cloudState.last_face_match || null }));
 
 ensureDataDir();
 const port = process.env.PORT || 3000;
