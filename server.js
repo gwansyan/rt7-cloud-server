@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 const jpeg = require('jpeg-js');
@@ -68,88 +69,6 @@ function rt7SaveMasterRegistry_(obj) {
   rt7WriteJsonFile_(MASTER_REGISTRY_FILE, obj);
   return obj;
 }
-
-// V5.8E: multi-community master UID registry.
-// masters 是多筆在線主門禁清單，不再讓 B 社區新模組覆蓋 A 社區 UID。
-function rt7MasterMap_(master) {
-  master = master && typeof master === 'object' ? master : rt7ReadMasterRegistry_();
-  if (!master.masters || typeof master.masters !== 'object' || Array.isArray(master.masters)) master.masters = {};
-  // migrate legacy single heartbeat into masters map for backward compatibility
-  const legacyUid = rt7NormalizeMasterUid_(master.real_master_uid || master.heartbeat_master_uid || '');
-  if (legacyUid && !master.masters[legacyUid]) {
-    master.masters[legacyUid] = {
-      uid: legacyUid,
-      master_uid: legacyUid,
-      ip: master.heartbeat_ip || master.registered_ip || '',
-      device_id: master.heartbeat_device_id || '#1',
-      mac: master.heartbeat_mac || '',
-      first_seen: master.last_master_heartbeat || master.updated_at || nowIso(),
-      last_heartbeat: master.last_master_heartbeat || master.updated_at || nowIso(),
-      source: 'legacy_migrate'
-    };
-  }
-  return master.masters;
-}
-function rt7MasterOnline_(m) {
-  const t = Date.parse((m && (m.last_heartbeat || m.last_master_heartbeat)) || '');
-  return !!(t && (Date.now() - t) < 120000);
-}
-function rt7GetMasterInfo_(uid) {
-  uid = rt7NormalizeMasterUid_(uid || '');
-  if (!uid) return null;
-  const master = rt7ReadMasterRegistry_();
-  const map = rt7MasterMap_(master);
-  const m = map[uid] || null;
-  return m ? Object.assign({}, m, { online: rt7MasterOnline_(m) }) : null;
-}
-function rt7UpdateMasterHeartbeat_(uid, data) {
-  uid = rt7NormalizeMasterUid_(uid || '');
-  if (!uid) return null;
-  const master = rt7ReadMasterRegistry_();
-  const map = rt7MasterMap_(master);
-  const now = nowIso();
-  const old = map[uid] || {};
-  map[uid] = Object.assign({}, old, {
-    uid,
-    master_uid: uid,
-    ip: safeString(data && data.ip || old.ip || '').trim(),
-    device_id: safeString(data && data.device_id || old.device_id || '#1').trim() || '#1',
-    mac: safeString(data && data.mac || old.mac || '').trim(),
-    first_seen: old.first_seen || now,
-    last_heartbeat: now,
-    last_seen: now,
-    source: data && data.source || old.source || 'heartbeat'
-  });
-  master.masters = map;
-  // Keep legacy fields as the latest heartbeat only for old pages/API compatibility.
-  // Login verification in V5.8E uses masters[community_uid], not this single global value.
-  master.real_master_uid = uid;
-  master.heartbeat_master_uid = uid;
-  master.heartbeat_device_id = map[uid].device_id;
-  master.heartbeat_ip = map[uid].ip || safeString(data && data.request_ip || '');
-  master.last_master_heartbeat = now;
-  master.master_online = true;
-  const users = rt7ReadUsers_();
-  const boundBySameUid = users.some(u => rt7NormalizeMasterUid_(u.master_uid || '') === uid);
-  master.master_uid_verified = !!boundBySameUid;
-  rt7SaveMasterRegistry_(master);
-  return map[uid];
-}
-function rt7MasterUidUsedByOtherCommunity_(uid, community) {
-  uid = rt7NormalizeMasterUid_(uid || '');
-  const thisKey = rt7CommunityKey_(community || '');
-  if (!uid) return '';
-  const users = rt7ReadUsers_();
-  for (const u of users) {
-    if (rt7NormalizeMasterUid_(u.master_uid || '') === uid && rt7CommunityKey_(rt7CommunityName_(u)) !== thisKey) return rt7CommunityName_(u);
-  }
-  return '';
-}
-function rt7KnownMastersArray_() {
-  const master = rt7ReadMasterRegistry_();
-  const map = rt7MasterMap_(master);
-  return Object.keys(map).sort().map(uid => Object.assign({}, map[uid], { online: rt7MasterOnline_(map[uid]) }));
-}
 function rt7NormalizeDeviceIds_(v) {
   const arr = Array.isArray(v) ? v : String(v || '').split(/[,\s]+/);
   const out = [];
@@ -165,16 +84,23 @@ function rt7UserSystemEnabled_(u) {
 }
 function rt7RealMasterVerifyForUser_(u) {
   const userUid = rt7NormalizeMasterUid_(u && u.master_uid || '');
-  const info = rt7GetMasterInfo_(userUid);
-  const online = !!(info && info.online);
-  // V5.8E: 每個社區用自己帳號綁定的 master_uid 去查 masters map。
-  // 不再拿全域 real_master_uid 比對，避免 B 社區新模組覆蓋 A 社區。
-  const verified = !!(userUid && info);
+  const master = rt7ReadMasterRegistry_();
+  const realUid = rt7NormalizeMasterUid_(master.real_master_uid || master.heartbeat_master_uid || '');
+  const boundUid = rt7NormalizeMasterUid_(master.master_uid || '');
+  const heartbeatMs = master.last_master_heartbeat ? Date.parse(master.last_master_heartbeat) : 0;
+  const online = !!(heartbeatMs && (Date.now() - heartbeatMs) < 120000);
+  // V5.8B: UID/IP 不變時，只要平台曾經按「取得/比對 #1 UID」成功，
+  // 就保留 master_uid_verified=true 作為持久授權依據；登入不再因 heartbeat 超過 120 秒而被擋。
+  // heartbeat 仍保留用來顯示 ONLINE/OFFLINE 與最後回報時間。
+  const verified = !!(master.master_uid_verified && userUid && realUid && userUid === realUid && (!boundUid || boundUid === realUid));
   const ok = verified;
   let reason = '';
   if (!userUid) reason = 'USER_MASTER_UID_EMPTY';
-  else if (!info) reason = 'COMMUNITY_MASTER_UID_NOT_SEEN_BY_HEARTBEAT';
-  return { ok, reason, user_master_uid:userUid, bound_master_uid:userUid, real_master_uid:info && info.uid || '', online, verified, persistent_verified:verified, last_master_heartbeat:info && info.last_heartbeat || '', heartbeat_ip:info && info.ip || '', community:rt7CommunityName_(u) };
+  else if (!realUid) reason = 'REAL_MASTER_UID_EMPTY';
+  else if (userUid !== realUid) reason = 'USER_UID_NOT_MATCH_REAL_MASTER_UID';
+  else if (boundUid && boundUid !== realUid) reason = 'BOUND_UID_NOT_MATCH_REAL_MASTER_UID';
+  else if (!master.master_uid_verified) reason = 'MASTER_UID_NOT_VERIFIED_ON_PLATFORM';
+  return { ok, reason, user_master_uid:userUid, bound_master_uid:boundUid, real_master_uid:realUid, online, verified, persistent_verified:verified, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '' };
 }
 function rt7UserAllowedDeviceIds_(u) {
   if (!u) return ['#1','#2','#3','#4'];
@@ -255,7 +181,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_9A_DVR_MULTI_CAMERA_AI_GATE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_9B_DVR_SOCATCH_MULTI_CAMERA_AI_GATE';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -350,53 +276,10 @@ function rt7CreateSession_(req, res, user) {
 }
 function rt7AuthPage_(mode, message, nextUrl) {
   const isReg = mode === 'register';
-  const escHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
-  const nextHidden = (!isReg && nextUrl) ? '<input type="hidden" name="next" value="' + escHtml(nextUrl) + '">' : '';
+  const nextHidden = (!isReg && nextUrl) ? '<input type="hidden" name="next" value="' + String(nextUrl).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c] || c)) + '">' : '';
   const title = isReg ? 'RT7 註冊' : 'RT7 登入';
-  const masters = isReg ? rt7KnownMastersArray_().filter(m => m && m.uid) : [];
-  const usedMap = {};
-  if (isReg) {
-    rt7ReadUsers_().forEach(u => {
-      const uid = rt7NormalizeMasterUid_(u && u.master_uid || '');
-      if (uid) usedMap[uid] = rt7CommunityName_(u);
-    });
-  }
-  const masterOptions = masters.map(m => {
-    const uid = rt7NormalizeMasterUid_(m.uid || m.master_uid || '');
-    const used = usedMap[uid] || '';
-    const label = uid + ' / ' + (m.ip || '-') + (used ? ' / 已綁定：' + used : ' / 可綁定') + (m.online ? ' / ONLINE' : ' / OFFLINE');
-    return `<option value="${escHtml(uid)}" data-ip="${escHtml(m.ip || '')}" data-used="${escHtml(used)}">${escHtml(label)}</option>`;
-  }).join('');
-  const loginFields = !isReg ? `
-<label>社區名稱</label><input name="community" placeholder="A社區 / B社區（同帳號時必填）">
-<div class="hint">V5.8E2：A社區與 B社區可同時使用 admin 帳號；若帳號重複，登入時請輸入社區名稱。</div>` : '';
-  const registerFields = isReg ? `
-<label>社區名稱</label><input name="community" required placeholder="例如 A社區 / B社區">
-<div class="hint">V5.8E1：第一次建立 admin 時，必須先輸入社區名稱，再選擇該社區的 #1 主門禁。</div>
-<label>選擇在線 #1 主門禁</label>
-<select id="master_select" name="master_select"><option value="">手動輸入 / 尚未看到模組</option>${masterOptions}</select>
-<div class="hint" id="master_select_hint">若 ESP32 已開機並完成 heartbeat，會出現在這裡。選取後會自動帶入 UID/IP。</div>
-<label>主門禁UID</label><input id="master_uid_input" name="master_uid" placeholder="例如 RT7-MASTER-68F2299FC114">
-<div class="hint">#1 RT7 主門禁唯一編號。不可與其他社區重複綁定。</div>
-<label>#1 主門禁 IP</label><input id="master_ip_input" name="master_ip" placeholder="例如 192.168.0.179">
-<div class="hint">選擇在線 Master 後會自動填入目前 heartbeat IP。</div>
-<label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1">
-<label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改">
-<div class="hint">每個社區第一個帳號會成為該社區 admin；同一帳號名稱可在不同社區重複使用，例如 A社區 admin、B社區 admin。</div>
-<script>
-(function(){
-  function q(id){return document.getElementById(id)}
-  function applySelection(){
-    var s=q('master_select'), uid=q('master_uid_input'), ip=q('master_ip_input'), hint=q('master_select_hint');
-    if(!s || !uid || !ip) return;
-    var opt=s.options[s.selectedIndex];
-    if(opt && opt.value){ uid.value=opt.value; ip.value=opt.getAttribute('data-ip')||''; var used=opt.getAttribute('data-used')||''; if(hint) hint.textContent = used ? ('注意：此 UID 已被社區「'+used+'」使用，不能再註冊其他社區。') : '已自動帶入在線主門禁 UID/IP。'; }
-  }
-  var s=q('master_select'); if(s){ s.addEventListener('change', applySelection); }
-})();
-</script>` : '';
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>${title}</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input,select{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px;background:#fff}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${escHtml(message)}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${loginFields}${registerFields}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.wrap{max-width:430px;margin:0 auto;padding:28px 18px}.card{background:#fff;border-radius:22px;padding:22px;box-shadow:0 12px 40px #0005}.logo{color:white;text-align:center;font-weight:900;font-size:26px;margin:20px 0 26px}.sub{color:#cde6ee;text-align:center;margin-top:-18px;margin-bottom:20px}h1{margin:0 0 16px;font-size:28px}label{font-weight:800;margin-top:12px;display:block}input{box-sizing:border-box;width:100%;font-size:18px;padding:14px;border-radius:13px;border:1px solid #cbd6df;margin-top:7px}button,.btn{display:block;width:100%;box-sizing:border-box;text-align:center;border:0;border-radius:14px;background:#1197d5;color:#fff;font-size:18px;font-weight:900;padding:14px;margin-top:18px;text-decoration:none}.btn.gray{background:#41506a}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.hint{font-size:13px;color:#6b7c88;margin-top:10px;line-height:1.5}.row{display:flex;gap:10px}.row .btn{margin-top:12px}</style></head><body><div class="wrap"><div class="logo">RT7 CLOUD AI DOORBELL</div><div class="sub">使用者登入 / 註冊 / 權限保護</div><div class="card"><h1>${title}</h1>${message?`<div class="msg">${message}</div>`:''}<form method="post" action="${isReg?'/api/auth/register':'/api/auth/login'}">${nextHidden}<label>帳號</label><input name="username" autocomplete="username" required placeholder="例如 gwansyan"><label>密碼</label><input name="password" type="password" autocomplete="${isReg?'new-password':'current-password'}" required placeholder="至少 4 碼">${isReg?'<label>主門禁UID</label><input name="master_uid" placeholder="例如 RT7-MASTER-0001"><div class="hint">#1 RT7 主門禁唯一編號。可由 ESP32 Wi-Fi 成功頁或序列埠顯示。</div><label>#1 主門禁 IP</label><input name="master_ip" placeholder="例如 192.168.0.179"><div class="hint">手機註冊時輸入 #1 主門禁目前 IP。Railway 雲端管理平台會自動帶入 UID/IP，按「取得/比對 #1 UID」即可產生 heartbeat 比對資料。</div><label>設備配對碼</label><input name="device_pair" placeholder="#1 / #2 / #3 / #4，預設 #1"><label>註冊碼</label><input name="register_code" placeholder="預設 rt7，可由環境變數修改"><div class="hint">第一個註冊者，或目前沒有 admin 時，會自動成為 admin 並綁定主門禁。之後註冊者預設為 user，可由 admin 在使用者管理頁改成 admin 或開通/解除。</div>':''}<button type="submit">${isReg?'建立帳號':'登入'}</button></form><div class="row"><a class="btn gray" href="${isReg?'/rt7_login':'/rt7_register'}">${isReg?'已有帳號，去登入':'註冊新帳號'}</a></div><div class="hint">登入後才能進入主頁、GPIO、人臉資料庫、通知設定與管理頁。</div></div></div></body></html>`;
 }
 function rt7RequireLogin_(req, res, next) {
   const u = rt7GetSessionUser_(req);
@@ -468,7 +351,6 @@ function rt7BuildCommunities_() {
     master_uid:Array.from(g.master_uids)[0] || '',
     master_ips:Array.from(g.ips),
     master_ip:Array.from(g.ips)[0] || '',
-    master_online: !!rt7GetMasterInfo_(Array.from(g.master_uids)[0] || ''),
     devices:Array.from(g.devices).sort(),
     user_count:g.users.length,
     admin_count:g.admins.length
@@ -505,13 +387,11 @@ function rt7PlatformAdminPage_(req, message) {
   const devices = Array.isArray(readDevices()) ? readDevices() : [];
   const master = rt7ReadMasterRegistry_();
   const candidate = rt7MasterCandidateFromUsers_();
-  const knownMasters = rt7KnownMastersArray_();
   const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const enabledUsers = users.filter(u => u.enabled !== false && u.system_enabled !== false).length;
   const communities = Array.from(new Set(users.map(rt7CommunityName_)));
   const masterOnline = !!(master.last_master_heartbeat && (Date.now() - Date.parse(master.last_master_heartbeat)) < 120000);
   const masterVerified = !!(master.real_master_uid && master.real_master_uid === master.master_uid && masterOnline);
-  const masterRows = knownMasters.map(m => `<tr><td><code>${esc(m.uid)}</code></td><td>${esc(m.ip || '-')}</td><td>${esc(m.mac || '-')}</td><td>${m.online?'<span class="ok">ONLINE</span>':'<span class="bad">OFFLINE</span>'}</td><td>${esc(m.last_heartbeat || '-')}</td></tr>`).join('') || '<tr><td colspan="5">尚未收到任何 ESP32 #1 heartbeat</td></tr>';
   const rows = users.map(u => {
     const sys = u.enabled !== false && u.system_enabled !== false && rt7NormalizeMasterUid_(u.master_uid||'');
     const devs = (u.devices || []).join(', ');
@@ -521,9 +401,8 @@ function rt7PlatformAdminPage_(req, message) {
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Railway 雲端管理平台</title><style>
 body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px;display:flex;align-items:center;gap:12px}.top h1{margin:0;font-size:22px;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:16px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;margin-bottom:14px;overflow:auto}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#f6fafc;border-radius:14px;padding:12px}.label{font-size:13px;color:#64748b;font-weight:900}.value{font-size:22px;font-weight:900}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}table{width:100%;border-collapse:collapse;min-width:1050px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.small{font-size:12px;color:#64748b}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.ops{display:flex;gap:8px;flex-wrap:wrap}.ops form{display:inline}.ops button,button{border:0;border-radius:9px;background:#0ea5e9;color:white;font-weight:900;padding:9px 10px}.ops button.red{background:#d12f2f}.ops button.green{background:#0eaa5b}.hint{font-size:13px;color:#5d6b76;line-height:1.6}@media(max-width:760px){.stats{grid-template-columns:1fr 1fr}.top h1{font-size:18px}table{min-width:950px}}</style><script>
 function rt7CopyRowInputs_(form){ const tr=form.closest('tr'); ['community','master_uid','master_ip','devices'].forEach(n=>{ form.querySelector('input[name="'+n+'"]').value = tr.querySelector('input[name="'+n+'"]').value; }); }
-</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_community_manager">社區管理</a><a href="/rt7_user_manager">使用者管理</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。<br>最新 heartbeat UID：${esc(master.real_master_uid || '尚未回報')} / 在線模組數：${knownMasters.filter(m=>m.online).length}/${knownMasters.length} / 最後 heartbeat：${esc(master.last_master_heartbeat || '-')} / IP：${esc(master.heartbeat_ip || '-')}</div></div>
-<div class="card"><h2>#1 主門禁 UID/IP 手動取得與比對</h2><div class="hint">正常正式版應由 #1 ESP32 開機後自動 heartbeat。本區是平台管理測試/維護用：會自動帶入手機註冊/社區帳號填寫的主門禁 UID 與 #1 IP；按下後寫入 heartbeat 並立即比對綁定 UID，減少手動輸入錯誤。</div><form method="post" action="/api/platform/master/manual_verify" style="display:grid;grid-template-columns:1.3fr 1fr auto;gap:10px;align-items:end"><label><div class="label">#1 真實 Master UID</div><input name="master_uid" value="${esc(master.real_master_uid || candidate.master_uid || master.master_uid || '')}" placeholder="RT7-MASTER-68F2299FC114" required></label><label><div class="label">#1 IP</div><input name="ip" value="${esc(master.heartbeat_ip || candidate.ip || '192.168.0.179')}" placeholder="192.168.0.179"></label><button class="green" style="background:#0eaa5b">取得/比對 #1 UID</button><input type="hidden" name="device_id" value="#1"></form><div class="hint">V5.8E：比對規則改為『各社區綁定 UID 必須存在於多筆 Master Registry』，不再用單一 real_master_uid 覆蓋全部社區。</div></div>
-<div class="card"><h2>多社區 Master Registry（ESP32 heartbeat 多筆清單）</h2><table><thead><tr><th>Master UID</th><th>IP</th><th>MAC</th><th>狀態</th><th>最後 heartbeat</th></tr></thead><tbody>${masterRows}</tbody></table></div>
+</script></head><body><div class="top"><h1>RT7 Railway 雲端管理平台</h1><a href="/rt7_community_manager">社區管理</a><a href="/rt7_user_manager">使用者管理</a><a href="/rt7_platform_logout">登出平台</a></div><div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="card"><div class="stats"><div class="stat"><div class="label">管理平台</div><div class="value">ONLINE</div></div><div class="stat"><div class="label">社區數</div><div class="value">${communities.length}</div></div><div class="stat"><div class="label">帳號數</div><div class="value">${users.length}</div></div><div class="stat"><div class="label">已開通帳號</div><div class="value">${enabledUsers}</div></div></div><div class="hint">本頁是 Railway 雲端服務唯一管理平台，可查詢 A社區/B社區帳號、主門禁 UID、設備綁定，並可決定開通/解除。社區 admin 仍只能管理自己系統。<br>主門禁即時 UID：${esc(master.real_master_uid || '尚未回報')} / 驗證：${masterVerified?'<span class="ok">已驗證</span>':'<span class="bad">未驗證</span>'} / 在線：${masterOnline?'<span class="ok">ONLINE</span>':'<span class="bad">OFFLINE</span>'} / 最後 heartbeat：${esc(master.last_master_heartbeat || '-')} / IP：${esc(master.heartbeat_ip || '-')}</div></div>
+<div class="card"><h2>#1 主門禁 UID/IP 手動取得與比對</h2><div class="hint">正常正式版應由 #1 ESP32 開機後自動 heartbeat。本區是平台管理測試/維護用：會自動帶入手機註冊/社區帳號填寫的主門禁 UID 與 #1 IP；按下後寫入 heartbeat 並立即比對綁定 UID，減少手動輸入錯誤。</div><form method="post" action="/api/platform/master/manual_verify" style="display:grid;grid-template-columns:1.3fr 1fr auto;gap:10px;align-items:end"><label><div class="label">#1 真實 Master UID</div><input name="master_uid" value="${esc(master.real_master_uid || candidate.master_uid || master.master_uid || '')}" placeholder="RT7-MASTER-68F2299FC114" required></label><label><div class="label">#1 IP</div><input name="ip" value="${esc(master.heartbeat_ip || candidate.ip || '192.168.0.179')}" placeholder="192.168.0.179"></label><button class="green" style="background:#0eaa5b">取得/比對 #1 UID</button><input type="hidden" name="device_id" value="#1"></form><div class="hint">比對規則：註冊/綁定 UID = #1 heartbeat real_master_uid，且 heartbeat 未逾時，登入才會放行。</div></div>
 <div class="card"><h2>社區帳號與設備綁定</h2><table><thead><tr><th>帳號</th><th>社區</th><th>角色</th><th>狀態</th><th>主門禁 UID</th><th>#1 IP</th><th>設備</th><th>平台操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8">尚無帳號</td></tr>'}</tbody></table></div><div class="card"><h2>全域設備清單</h2><table><thead><tr><th>代號</th><th>名稱</th><th>IP</th><th>狀態</th></tr></thead><tbody>${devRows}</tbody></table></div><div class="card"><h2>目前預設 Master Registry</h2><pre>${esc(JSON.stringify(master,null,2))}</pre></div></div></body></html>`;
 }
 
@@ -579,7 +458,7 @@ function rt7DeviceBindStatusPage_(req, message) {
   const userRows = users.map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.role||'user')}</td><td>${u.system_enabled!==false && rt7NormalizeMasterUid_(u.master_uid||'')?'<span class="ok">開通</span>':'<span class="bad">解除</span>'}</td><td><code>${esc(u.master_uid||'')}</code></td><td>${esc((u.devices||[]).join(', '))}</td></tr>`).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 設備綁定狀態</title><style>
 body{margin:0;background:#eef4f7;color:#10212b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif}.top{background:#071f25;color:white;padding:16px 14px;display:flex;align-items:center;gap:12px}.top h1{font-size:22px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#41546b;border-radius:10px;padding:9px 12px;font-weight:900}.wrap{max-width:1100px;margin:0 auto;padding:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{background:white;border-radius:18px;padding:16px;box-shadow:0 4px 18px #0001;overflow:auto;margin-bottom:14px}.msg{background:#fff1c2;color:#5b3a00;padding:10px;border-radius:12px;margin-bottom:12px;font-weight:800}.label{font-size:13px;color:#64748b;font-weight:800}.value{font-size:18px;font-weight:900;margin:4px 0 10px}.uid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f1f5f9;border:1px solid #d9e2ec;border-radius:10px;padding:8px;display:inline-block}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.pill{display:inline-block;border-radius:999px;padding:4px 9px;font-weight:900}.okp{background:#e8ffe8;color:#097b35}.badp{background:#ffe8e8;color:#b42318}.small{font-size:12px;color:#64748b;margin-top:4px}table{width:100%;border-collapse:collapse;min-width:780px}th,td{border-bottom:1px solid #e5edf2;padding:10px;text-align:left;vertical-align:top}th{background:#f6fafc}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.btn{display:inline-block;text-decoration:none;border:0;border-radius:10px;background:#159bd7;color:#fff;font-weight:900;padding:10px 12px}.btn.gray{background:#475569}.btn.green{background:#0eaa5b}input{padding:10px;border:1px solid #cbd5e1;border-radius:10px;min-width:260px}form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:18px}table{min-width:700px}}</style></head><body>
-<div class="top">${rt7IsPlatformAdmin_(req) ? '<a href="/rt7_platform_admin">← 平台首頁</a>' : '<a href="/rt7_cloud_original_ui_doorbell">← 主頁</a>'}<h1>RT7 設備綁定狀態</h1>${rt7IsPlatformAdmin_(req) ? '<a href="/rt7_community_manager">社區管理</a>' : ''}<a href="/rt7_user_manager">使用者管理</a><a href="/api/auth/logout">登出</a></div>
+<div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 設備綁定狀態</h1><a href="/rt7_user_manager">使用者管理</a><a href="/api/auth/logout">登出</a></div>
 <div class="wrap">${message?`<div class="msg">${esc(message)}</div>`:''}
 <div class="grid"><div class="card"><div class="label">主門禁 UID</div><div class="value"><span class="uid">${esc(master.master_uid)}</span></div><div class="label">Owner</div><div class="value">${esc(master.owner || '尚未綁定')}</div><div class="label">目前登入</div><div class="value">${esc(current && current.username || '')} <span class="small">${esc(current && current.role || '')}</span></div></div>
 <div class="card"><div class="label">你的設備</div><div class="value">${esc(userDevices.join(', '))}</div><div class="label">綁定說明</div><div class="small">#1 是 RT7 主門禁；#2~#4 是附屬影像門禁。admin 可查看全部設備，一般使用者只可查看綁定設備。</div>${isAdmin?`<div class="actions"><form method="post" action="/api/rt7/master/bind"><input name="master_uid" value="${esc(master.master_uid)}" placeholder="RT7-MASTER-XXXXXXXXXXXX"><button class="btn green">重新綁定主門禁</button></form></div>`:''}</div></div>
@@ -647,7 +526,7 @@ function rt7SubmitSystemCheckbox_(cb){
   form.submit();
   return true;
 }
-</script></head><body><div class="top">${rt7IsPlatformAdmin_(req) ? '<a href="/rt7_platform_admin">← 平台首頁</a>' : '<a href="/rt7_cloud_original_ui_doorbell">← 主頁</a>'}<h1>RT7 使用者管理</h1>${rt7IsPlatformAdmin_(req) ? '<a href="/rt7_community_manager">社區管理</a>' : ''}<a href="/rt7_device_bind_status">設備綁定</a><a href="/rt7_register">新增帳號</a><a href="/rt7_device_transfer_owner">轉移Owner</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可按右上「新增帳號」建立第二個帳號；第一個帳號自動 admin，後續帳號預設 user。可刪除帳號、停用帳號、修改角色、重設密碼，也可用「系統開通」勾選框控制帳號是否可使用本系統。解除後該帳號無法進入主頁、GPIO、人臉資料庫與通知設定；ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><div class="hint"><b>帳號數：</b>${users.length}　<b>已開通 admin：</b>${activeAdminCount}　<b>目前登入：</b>${esc(current && current.username || '-')}</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
+</script></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 使用者管理</h1><a href="/rt7_device_bind_status">設備綁定</a><a href="/rt7_register">新增帳號</a><a href="/rt7_device_transfer_owner">轉移Owner</a><a href="/api/auth/logout">登出</a></div><div class="wrap"><div class="card">${message?`<div class="msg">${esc(message)}</div>`:''}<div class="hint">只有 admin 可進入本頁。可按右上「新增帳號」建立第二個帳號；第一個帳號自動 admin，後續帳號預設 user。可刪除帳號、停用帳號、修改角色、重設密碼，也可用「系統開通」勾選框控制帳號是否可使用本系統。解除後該帳號無法進入主頁、GPIO、人臉資料庫與通知設定；ESP32 裝置 API 不受登入保護，避免影響設備連線。</div><div class="hint"><b>帳號數：</b>${users.length}　<b>已開通 admin：</b>${activeAdminCount}　<b>目前登入：</b>${esc(current && current.username || '-')}</div><table><thead><tr><th>帳號</th><th>角色</th><th>狀態</th><th>建立時間</th><th>管理</th></tr></thead><tbody>${rows || '<tr><td colspan="5">尚無使用者</td></tr>'}</tbody></table></div></div></body></html>`;
 }
 
 function readDevices() {
@@ -922,63 +801,11 @@ function htmlShell(title, body, extraHead = '') {
 (function(){
   if(window.__rt7PwaPushInstalled) return; window.__rt7PwaPushInstalled=true;
   function log(msg){ try{ console.log('[RT7_PWA_N2]', msg); }catch(e){} }
-  // V5.8D8B: 通知鍵外框改成「全域 Service Worker registration 掃描 + inline 強制套色」。
-  // 原因：Android Chrome 可能收到推播，但目前頁面 register('/sw.js') 取得的 registration 不是實際持有 subscription 的 registration，
-  // 或舊 CSS class/inline border 把綠框覆蓋。因此 D8B 會掃 navigator.serviceWorker.getRegistrations()，只要任一 registration 有 subscription 就綠框，
-  // 並用 inline style.setProperty(...,'important') 強制覆蓋黃框。
-  function rt7SetPushLocal_(yes){ try{ localStorage.setItem('rt7_push_enabled', yes?'1':'0'); sessionStorage.setItem('rt7_push_enabled', yes?'1':'0'); }catch(_){} }
-  function rt7ApplyPushButtonStyle_(mode,msg){
-    try{
-      var btn=document.getElementById('btnPushNotify')||document.getElementById('btnPushNotifyFloat');
-      var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent='通知';
-      if(!btn) return;
-      btn.classList.remove('pushEnabled','pushWarn','pushErr');
-      if(mode==='green'){
-        btn.classList.add('pushEnabled');
-        btn.style.setProperty('border-color','#22c55e','important');
-        btn.style.setProperty('background','#ecfdf5','important');
-        btn.style.setProperty('box-shadow','0 0 0 4px rgba(34,197,94,.24),0 2px 10px rgba(0,0,0,.1)','important');
-      }else if(mode==='red'){
-        btn.classList.add('pushErr');
-        btn.style.setProperty('border-color','#dc2626','important');
-        btn.style.setProperty('background','#fff1f2','important');
-        btn.style.setProperty('box-shadow','0 2px 10px rgba(0,0,0,.1)','important');
-      }else{
-        btn.classList.add('pushWarn');
-        btn.style.setProperty('border-color','#f59e0b','important');
-        btn.style.setProperty('background','#fffbeb','important');
-        btn.style.setProperty('box-shadow','0 2px 10px rgba(0,0,0,.1)','important');
-      }
-      btn.title = msg || '通知';
-      btn.setAttribute('data-rt7-push-ui', mode);
-    }catch(e){}
-  }
-  async function rt7GetRealPushSubscription_(){
-    if(!('serviceWorker' in navigator)) throw new Error('此瀏覽器不支援 Service Worker');
-    if(!('PushManager' in window)) throw new Error('此瀏覽器不支援 PushManager');
-    try{ await navigator.serviceWorker.register('/sw.js',{scope:'/'}); }catch(_){ }
-    try{ await navigator.serviceWorker.ready; }catch(_){ }
-    var regs=[];
-    try{ regs=await navigator.serviceWorker.getRegistrations(); }catch(_){ regs=[]; }
-    if(!regs || !regs.length){
-      try{ regs=[await navigator.serviceWorker.ready]; }catch(_){ regs=[]; }
-    }
-    for(var i=0;i<regs.length;i++){
-      var r=regs[i];
-      if(r && r.pushManager){
-        try{ var sub=await r.pushManager.getSubscription(); if(sub) return {reg:r,subscription:sub,scope:r.scope||''}; }catch(_){ }
-      }
-    }
-    var reg=null; try{ reg=await navigator.serviceWorker.ready; }catch(_){ }
-    var sub=null; try{ if(reg&&reg.pushManager) sub=await reg.pushManager.getSubscription(); }catch(_){ }
-    return { reg:reg, subscription:sub, scope:(reg&&reg.scope)||'' };
-  }
   function state(msg, err){
     try{
-      var el=document.getElementById('rt7PushState');
+      var el=document.getElementById('rt7PushState')||document.getElementById('lblPushNotify');
       if(el){ el.textContent=msg; el.style.color=err?'#dc2626':'#16a34a'; }
-      var ok = /已訂閱|已啟用|已允許|伺服器已有訂閱/.test(String(msg||'')) && !err;
-      rt7ApplyPushButtonStyle_(err?'red':(ok?'green':'yellow'), msg);
+      var lab=document.getElementById('lblPushNotify'); if(lab) lab.textContent=(msg||'通知').replace(/^推播：/,'');
       log(msg);
     }catch(e){}
   }
@@ -1024,53 +851,18 @@ function htmlShell(title, body, extraHead = '') {
     var save=await fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(sub)});
     var sj=await save.json().catch(function(){return {ok:false,error:'bad json'};});
     if(!save.ok || !sj.ok) throw new Error('訂閱儲存失敗：'+(sj.error||save.status));
-    rt7SetPushLocal_(true);
-    state('推播：已訂閱');
+    state('推播：已啟用');
     alert('RT7 門鈴背景通知已啟用');
     return true;
   }
   async function refreshPushState(){
     try{
-      // V5.8D8B：先掃描所有 SW registration 的真實 subscription。
-      // 任一 registration 有 subscription => 主頁通知鍵立即強制綠框。
-      if(!('Notification' in window)){ state('推播：此瀏覽器不支援通知', true); return false; }
-      if(Notification.permission==='denied'){ state('推播：通知權限已封鎖', true); return false; }
-      var real=await rt7GetRealPushSubscription_();
-      if(real && real.subscription){
-        rt7SetPushLocal_(true);
-        state('推播：已訂閱');
-        fetch('/api/push/subscribe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(real.subscription)}).catch(function(){});
-        log('real subscription yes scope='+(real.scope||''));
-        return true;
-      }
-      // 保險：如果此手機已允許通知，且 Railway 目前保存至少一筆 subscription，代表剛才啟用頁已成功送出訂閱；主頁先顯示綠框，避免 false yellow。
-      // 這不是 localStorage；是伺服器目前真實保存的 subscription count。
-      try{
-        var sr=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'});
-        var sj=await sr.json();
-        if(sj && sj.ok && Number(sj.subscriptions||0)>0 && Notification.permission==='granted'){
-          state('推播：伺服器已有訂閱');
-          log('server subscription fallback count='+sj.subscriptions);
-          return true;
-        }
-      }catch(_){ }
-      if(Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
+      var st=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();});
+      if(Notification && Notification.permission==='granted' && st.subscriptions>0) state('推播：已啟用');
+      else if(Notification && Notification.permission==='granted') state('推播：權限已允許，尚未訂閱');
       else state('推播：未啟用');
-      log('real subscription no');
-      return false;
-    }catch(e){
-      // 若 getRegistrations 在某些 Chrome 狀態失敗，但權限已允許且伺服器有訂閱，仍不要讓主頁錯誤黃框。
-      try{
-        var fr=await fetch('/api/push/state?_='+Date.now(),{cache:'no-store'});
-        var fj=await fr.json();
-        if(fj && fj.ok && Number(fj.subscriptions||0)>0 && window.Notification && Notification.permission==='granted'){
-          state('推播：伺服器已有訂閱');
-          return true;
-        }
-      }catch(_){ }
-      state('推播：狀態讀取失敗 '+(e.message||e), true);
-      return false;
-    }
+      log('push state '+JSON.stringify(st));
+    }catch(e){ state('推播：狀態讀取失敗 '+(e.message||e), true); }
   }
   function onPushClick(ev){
     if(ev){ ev.preventDefault(); ev.stopPropagation(); }
@@ -1100,16 +892,10 @@ function htmlShell(title, body, extraHead = '') {
     btn.onclick=onPushClick;
     btn.addEventListener('click', onPushClick, true);
     btn.addEventListener('touchend', onPushClick, {capture:true, passive:false});
-    if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){log('sw registered'); refreshPushState();}).catch(function(e){state('推播：SW註冊失敗 '+e.message,true);}); }
+    if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){log('sw registered');}).catch(function(e){state('推播：SW註冊失敗 '+e.message,true);}); }
     refreshPushState();
-    setTimeout(refreshPushState, 800);
-    setTimeout(refreshPushState, 2000);
   }
-  function schedulePushRefresh(delay){ setTimeout(function(){ refreshPushState(); }, delay||0); }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', installPushButton); else installPushButton();
-  window.addEventListener('pageshow', function(){ schedulePushRefresh(50); schedulePushRefresh(600); });
-  window.addEventListener('focus', function(){ schedulePushRefresh(50); });
-  document.addEventListener('visibilitychange', function(){ if(!document.hidden) schedulePushRefresh(80); });
 })();
 </script>
 </body></html>`;
@@ -1297,14 +1083,11 @@ app.post('/api/platform/community/create_admin', rt7RequirePlatformAdmin_, (req,
   if (!username || password.length < 4) return res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('帳號或密碼太短'));
   const users = rt7ReadUsers_();
   if (users.some(u=>String(u.username).toLowerCase() === username.toLowerCase())) return res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('帳號已存在：' + username));
-  const usedBy = rt7MasterUidUsedByOtherCommunity_(masterUid, community);
-  if (usedBy) return res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('此 Master UID 已被其他社區綁定：' + usedBy));
-  const onlineInfo = rt7GetMasterInfo_(masterUid);
   const salt = crypto.randomBytes(16).toString('hex');
-  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:'admin', enabled:true, system_enabled:!!masterUid && !!onlineInfo, community, master_uid:masterUid, master_ip:(onlineInfo && onlineInfo.ip || ''), devices:['#1','#2','#3','#4'], created_at:nowIso(), ip:clientIp(req) };
+  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:'admin', enabled:true, system_enabled:!!masterUid, community, master_uid:masterUid, master_ip:'', devices:['#1','#2','#3','#4'], created_at:nowIso(), ip:clientIp(req) };
   users.push(u); rt7SaveUsers_(users);
   appendEvent({ type:'platform_community_create_admin', community, username, master_uid:masterUid, ip:clientIp(req) });
-  res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('已建立社區 admin：' + community + ' / ' + username + (masterUid ? (onlineInfo ? '，UID 已在線並開通' : '，UID 尚未 heartbeat，暫不開通') : '，尚未綁定 UID')));
+  res.redirect('/rt7_community_manager?msg=' + encodeURIComponent('已建立社區 admin：' + community + ' / ' + username));
 });
 app.post('/api/platform/user/system_enabled', rt7RequirePlatformAdmin_, (req, res) => {
   const id = safeString(req.body.id).trim();
@@ -1348,39 +1131,36 @@ app.post('/api/platform/master/manual_verify', rt7RequirePlatformAdmin_, (req, r
   const ip = safeString(req.body.ip || '').trim() || clientIp(req);
   const deviceId = safeString(req.body.device_id || '#1').trim() || '#1';
   if (!uid) return res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent('請輸入 #1 主門禁 UID'));
-  const info = rt7UpdateMasterHeartbeat_(uid, { ip, request_ip:clientIp(req), device_id:deviceId, source:'manual_verify' });
+  const master = rt7ReadMasterRegistry_();
+  master.real_master_uid = uid;
+  master.heartbeat_master_uid = uid;
+  master.heartbeat_device_id = deviceId;
+  master.heartbeat_ip = ip;
+  master.registered_ip = ip;
+  master.last_master_heartbeat = nowIso();
+  master.master_uid_verified = !!(master.master_uid && uid === master.master_uid);
+  master.master_online = true;
+  rt7SaveMasterRegistry_(master);
   try { registerOrUpdateDevice({ id:'#1', name:'RT7 ESP32-S3-CAM', ip, last_online:nowIso(), enabled:true }); } catch(_) {}
-  appendEvent({ type:'platform_master_manual_verify', master_uid:uid, device_id:deviceId, ip:clientIp(req), heartbeat_ip:ip });
-  const msg = '#1 UID 已加入多社區 Master Registry：' + uid + ' / IP=' + (info && info.ip || ip);
+  appendEvent({ type:'platform_master_manual_verify', master_uid:uid, bound_uid:master.master_uid, verified:master.master_uid_verified, device_id:deviceId, ip:clientIp(req), heartbeat_ip:ip });
+  const msg = master.master_uid_verified ? ('#1 UID 比對成功：' + uid) : ('#1 UID 已取得，但與綁定 UID 不一致：' + uid + ' ≠ ' + master.master_uid);
   res.redirect('/rt7_platform_admin?msg=' + encodeURIComponent(msg));
 });
 app.get('/api/platform/master/manual_verify', rt7RequirePlatformAdmin_, (req, res) => {
   const uid = rt7NormalizeMasterUid_(req.query.master_uid || req.query.uid || '');
   const ip = safeString(req.query.ip || '').trim() || clientIp(req);
   if (!uid) return res.status(400).json({ ok:false, version:SERVER_VERSION, error:'MISSING_MASTER_UID' });
-  const info = rt7UpdateMasterHeartbeat_(uid, { ip, request_ip:clientIp(req), device_id:safeString(req.query.device_id || '#1').trim() || '#1', source:'manual_verify_get' });
+  const master = rt7ReadMasterRegistry_();
+  master.real_master_uid = uid;
+  master.heartbeat_master_uid = uid;
+  master.heartbeat_device_id = safeString(req.query.device_id || '#1').trim() || '#1';
+  master.heartbeat_ip = ip;
+  master.last_master_heartbeat = nowIso();
+  master.master_uid_verified = !!(master.master_uid && uid === master.master_uid);
+  master.master_online = true;
+  rt7SaveMasterRegistry_(master);
   try { registerOrUpdateDevice({ id:'#1', name:'RT7 ESP32-S3-CAM', ip, last_online:nowIso(), enabled:true }); } catch(_) {}
-  res.json({ ok:true, version:SERVER_VERSION, master_uid:uid, real_master_uid:uid, verified:true, online:true, heartbeat_ip:ip, last_master_heartbeat:info && info.last_heartbeat || '', known_masters:rt7KnownMastersArray_() });
-});
-
-// V5.8E1 public selector for phone registration. Only sanitized UID/IP/status are exposed.
-app.get('/api/rt7/master/public_masters', (req, res) => {
-  const users = rt7ReadUsers_();
-  const used = {};
-  users.forEach(u => {
-    const uid = rt7NormalizeMasterUid_(u && u.master_uid || '');
-    if (uid && !used[uid]) used[uid] = rt7CommunityName_(u);
-  });
-  const masters = rt7KnownMastersArray_().map(m => ({
-    uid: rt7NormalizeMasterUid_(m.uid || m.master_uid || ''),
-    master_uid: rt7NormalizeMasterUid_(m.uid || m.master_uid || ''),
-    ip: safeString(m.ip || ''),
-    mac: safeString(m.mac || ''),
-    online: !!m.online,
-    last_heartbeat: safeString(m.last_heartbeat || ''),
-    used_by_community: used[rt7NormalizeMasterUid_(m.uid || m.master_uid || '')] || ''
-  })).filter(m => m.uid);
-  res.json({ ok:true, version:SERVER_VERSION, masters });
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, real_master_uid:uid, verified:master.master_uid_verified, online:true, heartbeat_ip:ip, last_master_heartbeat:master.last_master_heartbeat });
 });
 
 // ---------------- V5.7A Auth routes ----------------
@@ -1389,19 +1169,9 @@ app.get('/rt7_register', (req, res) => { res.set('Cache-Control','no-store'); re
 app.post('/api/auth/login', (req, res) => {
   const username = safeString(req.body.username).trim();
   const password = safeString(req.body.password);
-  const loginCommunity = safeString(req.body.community || req.body.community_name || '').trim().slice(0,80);
   const users = rt7ReadUsers_();
-  const matches = users.filter(x => String(x.username).toLowerCase() === username.toLowerCase() && x.enabled !== false);
-  let u = null;
-  if (loginCommunity) {
-    const ck = rt7CommunityKey_(loginCommunity);
-    u = matches.find(x => rt7CommunityKey_(rt7CommunityName_(x)) === ck) || null;
-  } else if (matches.length === 1) {
-    u = matches[0];
-  } else if (matches.length > 1) {
-    return res.status(409).type('html').send(rt7AuthPage_('login', '同一帳號存在多個社區，請輸入社區名稱後登入。'));
-  }
-  if (!u || rt7HashPassword_(password, u.salt) !== u.password_hash) return res.status(401).type('html').send(rt7AuthPage_('login', '帳號、密碼或社區名稱錯誤'));
+  const u = users.find(x => String(x.username).toLowerCase() === username.toLowerCase() && x.enabled !== false);
+  if (!u || rt7HashPassword_(password, u.salt) !== u.password_hash) return res.status(401).type('html').send(rt7AuthPage_('login', '帳號或密碼錯誤'));
   // V5.7E1: 主頁登入閘門必須每次登入都檢查系統開通、主門禁 UID、設備綁定。
   // 未開通帳號不可建立 session 進入主頁，避免未綁定者直接觀看/操作門禁。
   if (!rt7UserSystemEnabled_(u)) {
@@ -1431,28 +1201,22 @@ app.post('/api/auth/register', (req, res) => {
   const code = safeString(req.body.register_code).trim();
   const masterUidInput = rt7NormalizeMasterUid_(req.body.master_uid || '');
   const masterIpInput = safeString(req.body.master_ip || '').trim().replace(/^https?:\/\//i,'').replace(/\/.*$/,'').slice(0,80);
-  const communityInput = safeString(req.body.community || '').trim().slice(0,80);
   const devicePair = safeString(req.body.device_pair || '#1').trim();
   if (!username || password.length < 4) return res.status(400).type('html').send(rt7AuthPage_('register', '帳號或密碼太短'));
-  if (!communityInput) return res.status(400).type('html').send(rt7AuthPage_('register', '請輸入社區名稱'));
   const users = rt7ReadUsers_();
-  const communityKey = rt7CommunityKey_(communityInput);
-  if (users.some(u => String(u.username).toLowerCase() === username.toLowerCase() && rt7CommunityKey_(rt7CommunityName_(u)) === communityKey)) return res.status(409).type('html').send(rt7AuthPage_('register', '此社區帳號已存在'));
-  // V5.8E2: A社區/B社區可各自建立 admin；帳號名稱只在同一社區內不可重複。
+  if (users.some(u => String(u.username).toLowerCase() === username.toLowerCase())) return res.status(409).type('html').send(rt7AuthPage_('register', '帳號已存在'));
+  // If the previous user database exists but has no enabled admin, promote this registration to admin.
+  // This avoids getting locked out of /rt7_user_manager during early tests or after accidental admin deletion.
   const first = users.length === 0;
   const noAdmin = rt7CountAdmins_(users) === 0;
-  const noAdminInCommunity = !users.some(u => rt7CommunityKey_(rt7CommunityName_(u)) === communityKey && String(u.role || 'user') === 'admin' && u.enabled !== false);
-  const makeAdmin = first || noAdmin || noAdminInCommunity;
+  const makeAdmin = first || noAdmin;
   const needCode = process.env.RT7_REGISTER_CODE || 'rt7';
   if (!makeAdmin && code !== needCode) return res.status(403).type('html').send(rt7AuthPage_('register', '註冊碼錯誤'));
   const masterReg = rt7ReadMasterRegistry_();
   const masterUid = masterUidInput || masterReg.master_uid || rt7DefaultMasterUid_();
-  const usedBy = rt7MasterUidUsedByOtherCommunity_(masterUid, communityInput || ('社區_' + username));
-  if (masterUid && usedBy) return res.status(409).type('html').send(rt7AuthPage_('register', '此主門禁 UID 已被其他社區綁定：' + usedBy));
-  const onlineInfo = rt7GetMasterInfo_(masterUid);
   const userDevices = makeAdmin ? ['#1','#2','#3','#4'] : rt7NormalizeDeviceIds_(devicePair || '#1');
   const salt = crypto.randomBytes(16).toString('hex');
-  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:makeAdmin?'admin':'user', enabled:true, system_enabled:!!masterUid && (!!onlineInfo || makeAdmin), community:(communityInput || ('社區_' + username)), master_uid:masterUid, master_ip:(masterIpInput || (onlineInfo && onlineInfo.ip || '')), devices:userDevices, created_at:nowIso(), ip:clientIp(req) };
+  const u = { id:rt7NewId_('u'), username, salt, password_hash:rt7HashPassword_(password, salt), role:makeAdmin?'admin':'user', enabled:true, system_enabled:true, master_uid:masterUid, master_ip:masterIpInput, devices:userDevices, created_at:nowIso(), ip:clientIp(req) };
   users.push(u); rt7SaveUsers_(users);
   if (makeAdmin) {
     masterReg.master_uid = masterUid;
@@ -1464,7 +1228,7 @@ app.post('/api/auth/register', (req, res) => {
   }
   const currentUser = rt7GetSessionUser_(req);
   const currentIsAdmin = currentUser && (currentUser.role || 'user') === 'admin' && rt7UserSystemEnabled_(currentUser);
-  appendEvent({ type:'auth_register', username:u.username, role:u.role, community:u.community, master_uid:u.master_uid, master_ip:u.master_ip, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin, created_by: currentUser && currentUser.username });
+  appendEvent({ type:'auth_register', username:u.username, role:u.role, master_uid:u.master_uid, master_ip:u.master_ip, devices:u.devices, ip:clientIp(req), auto_admin:makeAdmin, created_by: currentUser && currentUser.username });
   // V5.7D7: 若 admin 在 /rt7_register 新增第二個帳號，不切換登入者，避免建立 user01 後失去 /rt7_user_manager 權限。
   if (currentIsAdmin && !makeAdmin) {
     return res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('已新增帳號：' + u.username + '（預設 user，請在本頁改角色或開通/解除）'));
@@ -1472,7 +1236,7 @@ app.post('/api/auth/register', (req, res) => {
   // V5.7E1: 註冊不再自動登入，也不直接進入主頁。
   // 註冊完成後必須回登入頁輸入帳密；登入時再檢查是否已開通、已綁定 UID 與設備。
   const msg = makeAdmin
-    ? '註冊成功，已建立社區 admin 並綁定主門禁。請用 admin 帳密登入後進入主頁。'
+    ? '註冊成功，已建立第一個 admin 並綁定主門禁。請用 admin 帳密登入後進入主頁。'
     : '註冊成功，請等待 Railway 雲端管理平台或社區 admin 開通後再登入。';
   res.redirect('/rt7_login?msg=' + encodeURIComponent(msg));
 });
@@ -1490,7 +1254,7 @@ app.get('/api/rt7/master/status', (req, res) => {
   const online = !!(master.last_master_heartbeat && (Date.now() - Date.parse(master.last_master_heartbeat)) < 120000);
   const verified = !!(master.real_master_uid && master.real_master_uid === master.master_uid && online);
   const userVerify = user ? rt7RealMasterVerifyForUser_(user) : null;
-  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, real_master_uid:master.real_master_uid || '', master_uid_verified:verified, master_online:online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '', known_masters:rt7KnownMastersArray_(), login_uid_verify:userVerify, user:rt7PublicUser_(user) });
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, owner:master.owner, devices:master.devices, real_master_uid:master.real_master_uid || '', master_uid_verified:verified, master_online:online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '', login_uid_verify:userVerify, user:rt7PublicUser_(user) });
 });
 
 // V5.7E4: #1 主門禁 UID heartbeat / verify.
@@ -1502,11 +1266,18 @@ function rt7HandleMasterHeartbeat_(req, res) {
   const uid = rt7NormalizeMasterUid_(q.master_uid || q.uid || q.masterUid || q.device_uid || '');
   const deviceId = safeString(q.device_id || q.device || '#1').trim() || '#1';
   if (!uid) return res.status(400).json({ ok:false, version:SERVER_VERSION, error:'MISSING_MASTER_UID' });
-  const info = rt7UpdateMasterHeartbeat_(uid, { ip:q.ip || clientIp(req), request_ip:clientIp(req), device_id:deviceId, mac:q.mac || q.wifi_mac || q.wifiMac || '', source:'heartbeat' });
-  const usedCommunity = rt7MasterUidUsedByOtherCommunity_(uid, '');
+  const master = rt7ReadMasterRegistry_();
+  master.real_master_uid = uid;
+  master.heartbeat_master_uid = uid;
+  master.heartbeat_device_id = deviceId;
+  master.heartbeat_ip = q.ip || clientIp(req);
+  master.last_master_heartbeat = nowIso();
+  master.master_uid_verified = !!(master.master_uid && uid === master.master_uid);
+  master.master_online = true;
+  rt7SaveMasterRegistry_(master);
   try { registerOrUpdateDevice({ id:'#1', name:'RT7 ESP32-S3-CAM', ip:q.ip || clientIp(req), last_online:nowIso(), enabled:true }); } catch(_) {}
-  appendEvent({ type:'master_heartbeat', master_uid:uid, device_id:deviceId, ip:clientIp(req), heartbeat_ip:info && info.ip || '', community:usedCommunity || '' });
-  res.json({ ok:true, version:SERVER_VERSION, master_uid:uid, real_master_uid:uid, known_masters:rt7KnownMastersArray_().length, online:true, last_master_heartbeat:info && info.last_heartbeat || '' });
+  appendEvent({ type:'master_heartbeat', master_uid:uid, bound_uid:master.master_uid, verified:master.master_uid_verified, device_id:deviceId, ip:clientIp(req) });
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, real_master_uid:uid, verified:master.master_uid_verified, online:true, last_master_heartbeat:master.last_master_heartbeat });
 }
 app.get('/api/rt7/master/heartbeat', rt7HandleMasterHeartbeat_);
 app.post('/api/rt7/master/heartbeat', rt7HandleMasterHeartbeat_);
@@ -1514,7 +1285,7 @@ app.get('/api/rt7/master/verify', (req, res) => {
   const master = rt7ReadMasterRegistry_();
   const online = !!(master.last_master_heartbeat && (Date.now() - Date.parse(master.last_master_heartbeat)) < 120000);
   const verified = !!(master.real_master_uid && master.real_master_uid === master.master_uid && online);
-  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, real_master_uid:master.real_master_uid || '', verified, online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '', known_masters:rt7KnownMastersArray_() });
+  res.json({ ok:true, version:SERVER_VERSION, master_uid:master.master_uid, real_master_uid:master.real_master_uid || '', verified, online, last_master_heartbeat:master.last_master_heartbeat || '', heartbeat_ip:master.heartbeat_ip || '' });
 });
 app.get('/api/rt7/master/verify_user', rt7RequireLogin_, (req, res) => {
   const verify = rt7RealMasterVerifyForUser_(req.rt7User);
@@ -1664,28 +1435,6 @@ app.post('/api/auth/users/password', rt7RequireAdmin_, (req, res) => {
   rt7InvalidateUserSessions_(id);
   appendEvent({ type:'auth_user_password_reset', username:target.username, by:current && current.username, ip:clientIp(req) });
   res.redirect('/rt7_user_manager?msg=' + encodeURIComponent('已重設密碼：' + target.username));
-});
-
-
-// V5.8D: Return from push-enable page to main page without forcing a new login.
-// The main page still requires the one-time gate cookie, so issue it only for a logged-in user.
-app.get('/rt7_return_doorbell', (req, res) => {
-  const user = rt7GetSessionUser_(req);
-  if (!user) {
-    return res.redirect('/rt7_login?next=' + encodeURIComponent('/rt7_cloud_original_ui_doorbell') + '&msg=' + encodeURIComponent('請先登入後進入主頁'));
-  }
-  // V5.8D1: fix 500 Internal Server Error.
-  // Previous V5.8D called undefined helpers rt7UserSystemAccess_ / rt7VerifyUserMasterUid_.
-  // Use the existing access and persistent UID verification helpers instead.
-  if (!rt7UserSystemEnabled_(user)) {
-    return res.redirect('/rt7_login?msg=' + encodeURIComponent('帳號尚未開通或尚未綁定設備，請聯絡管理員。'));
-  }
-  const verify = rt7RealMasterVerifyForUser_(user);
-  if (!verify.ok) {
-    return res.redirect('/rt7_login?msg=' + encodeURIComponent('主門禁 UID 尚未驗證，請聯絡管理員。'));
-  }
-  rt7SetMainGateCookie_(res);
-  res.redirect('/rt7_cloud_original_ui_doorbell');
 });
 
 // Protect human-facing pages. ESP32 device APIs remain open for device compatibility.
@@ -1903,7 +1652,7 @@ app.get('/rt7_push_enable', (req, res) => {
   <h2>啟用門鈴通知</h2>
   <p class="muted">此頁是獨立測試頁，避免主頁其它按鍵或影像區影響通知註冊。</p>
   <button id="rt7PushEnableNow" class="btn green" style="font-size:22px;min-height:64px;width:100%" onclick="return rt7StandalonePushClick(event)">🔔 立即啟用門鈴通知</button>
-  <a class="btn gray" href="/rt7_return_doorbell">返回門禁主頁</a>
+  <a class="btn gray" href="/rt7_cloud_original_ui_doorbell">返回門禁主頁</a>
   <button class="btn" onclick="location.href='/api/push/test'">測試通知 /api/push/test</button>
   <pre id="rt7PushState" class="status" style="text-align:left;margin-top:12px">推播：等待按下啟用</pre>
 </section>
@@ -3128,7 +2877,7 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
   let hint = mode === 'idle' ? '等待影像串流' : '自動判斷：內網直連 / Railway 雲端';
   res.type('html').send(`<!doctype html><html lang="zh-Hant"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>RT7 Cloud Original UI V5.8D8B Push Green</title>
+<title>RT7 Cloud Original UI V5.7E1 Login Gate</title>
 <style>
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
@@ -3139,7 +2888,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.wakePanel{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:#fff}.wakeBtn{border:0;border-radius:8px;color:#fff;background:#16a34a;font-weight:900;font-size:14px;height:38px}.wakeHint{font-size:12px;color:#64748b;font-weight:800;display:flex;align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
 .micZone{text-align:center;padding:18px 0 8px}.bigMic{width:128px;height:128px;border-radius:50%;border:3px solid #cbd5e1;background:#eef2f7;display:inline-flex;align-items:center;justify-content:center;font-size:72px;box-shadow:0 4px 18px rgba(20,40,60,.08);text-decoration:none;color:#24333a}
-.actions{display:flex;justify-content:center;gap:6px;padding:10px 4px 4px}.act{width:60px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:52px;height:52px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.pushEnabled{border-color:#22c55e;background:#ecfdf5;box-shadow:0 0 0 4px rgba(34,197,94,.18)}.circle.pushWarn{border-color:#f59e0b;background:#fffbeb}.circle.pushErr{border-color:#dc2626;background:#fff1f2}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
+.actions{display:flex;justify-content:center;gap:6px;padding:10px 4px 4px}.act{width:60px;text-align:center;font-size:12px;font-weight:900;color:#24333a}.circle{width:52px;height:52px;border:3px solid var(--red);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 4px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-decoration:none;color:#24333a}.circle.aiActive{border-color:#22c55e;background:#ecfdf5}.circle.talking{border-color:#ef4444;background:#fff1f2;box-shadow:0 0 0 4px rgba(239,68,68,.18)}.reg{display:flex;align-items:center;gap:10px;padding:8px 20px}.reg label{font-size:14px;font-weight:900}.reg input{flex:1;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;font-size:16px}.small{font-size:12px;color:#64748b}.debug{display:none!important}
 .selfiePanel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:9999;padding:14px;color:#fff;overflow:auto}.selfieCard{max-width:500px;margin:0 auto;background:#0b252b;border-radius:16px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.45)}.selfieTitle{font-size:20px;font-weight:900;margin:4px 0 10px;text-align:center}.selfieVideo{width:100%;background:#000;border-radius:12px;border:2px solid #334155;aspect-ratio:3/4;object-fit:cover}.selfieBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.selfieBtns button{border:0;border-radius:10px;height:46px;font-size:17px;font-weight:900}.selfieShot{background:#22c55e;color:#fff}.selfieCancel{background:#ef4444;color:#fff}.selfieHint{font-size:13px;color:#dbeafe;line-height:1.45;margin-top:8px;text-align:center}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
@@ -3150,7 +2899,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
 
 <section class="micZone"><button id="btnVoice" class="bigMic" type="button">🎙️</button></section>
-<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle pushWarn" type="button" title="通知設定" onclick="location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section>
+<section class="actions"><div class="act"><button id="btnOpenDoor" class="circle" type="button">🚪</button>開門</div><div class="act"><button id="btnFaceList" class="circle" type="button">👥</button>名單</div><div class="act"><button id="btnEndTalk" class="circle" type="button">◼</button>對講</div><div class="act"><button id="btnFaceEnroll" class="circle" type="button">＋</button>註冊</div><div class="act"><button id="btnWakeXiaoAi" class="circle" type="button">🎙️</button><span id="lblWakeXiaoAi">小艾</span></div><div class="act"><button id="btnPushNotify" class="circle" type="button" onclick="document.getElementById('rt7PushState')&&(document.getElementById('rt7PushState').textContent='推播：開啟設定頁'); location.href='/rt7_push_enable'; return false;">🔔</button><span id="lblPushNotify">通知</span></div></section><div id="rt7PushState" style="padding:2px 20px 8px;color:#16a34a;font-size:12px;font-weight:900;text-align:right">推播：未啟用</div>
 <div class="reg"><label>註冊名稱</label><input id="regName" value="gwansyan"></div>
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
@@ -3409,7 +3158,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var vid='';
     try{ var mm=String(url||'').match(/[?&]v=([a-zA-Z0-9_-]{11})/); if(mm) vid=mm[1]; }catch(e){}
     if(vid){
-      var playerUrl='/rt7_music_player?video_id='+encodeURIComponent(vid)+'&q='+encodeURIComponent(query)+'&return='+encodeURIComponent('/rt7_return_doorbell?from=music');
+      var playerUrl='/rt7_music_player?video_id='+encodeURIComponent(vid)+'&q='+encodeURIComponent(query)+'&return='+encodeURIComponent('/rt7_cloud_original_ui_doorbell');
       setAnswer('已找到第一個 YouTube 影片，進入 RT7 音樂播放器。播放結束會自動返回門禁頁。');
       try{ location.href=playerUrl; }catch(e){ window.open(playerUrl,'_blank'); }
     }else{
@@ -4587,11 +4336,8 @@ app.get('/api/rt7/music/mobile', async (req, res) => {
 app.get('/rt7_music_player', (req, res) => {
   const videoId = safeString(req.query.video_id || req.query.v || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 11);
   const q = safeString(req.query.q || '').slice(0, 120);
-  const returnUrlRaw = safeString(req.query.return || '/rt7_return_doorbell?from=music');
-  let returnUrl = returnUrlRaw.startsWith('/') ? returnUrlRaw : '/rt7_return_doorbell?from=music';
-  // V5.8D3: music player must return through the authenticated one-time main gate.
-  // Directly returning to /rt7_cloud_original_ui_doorbell may show the login page.
-  if (returnUrl === '/rt7_cloud_original_ui_doorbell') returnUrl = '/rt7_return_doorbell?from=music';
+  const returnUrlRaw = safeString(req.query.return || '/rt7_cloud_original_ui_doorbell');
+  const returnUrl = returnUrlRaw.startsWith('/') ? returnUrlRaw : '/rt7_cloud_original_ui_doorbell';
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) return res.status(400).send('missing video_id');
   const h = (v) => String(v || '').replace(/[&<>\"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]));
   appendEvent({ type:'mobile_music_player', video_id:videoId, query:q, message:'RT7 music player opened: '+(q||videoId) });
@@ -5155,7 +4901,7 @@ app.get('/rt7_gpio_control', (req,res)=>{
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;background:#fff;font-family:system-ui,-apple-system,'Noto Sans TC','Microsoft JhengHei',Arial,sans-serif;color:#17262a}body{max-width:520px;margin:0 auto;padding-bottom:34px}.top{height:56px;background:linear-gradient(90deg,#0b252b,#0d2c32);color:#fff;display:flex;align-items:center;padding:0 10px}.back{background:#41546b;color:#fff;text-decoration:none;border-radius:8px;padding:8px 10px;font-weight:900;font-size:13px}.menu{font-size:28px;margin-left:8px;color:#dbeafe;text-decoration:none}.title{flex:1;text-align:center;font-weight:900;line-height:1.05;font-size:12px;letter-spacing:.3px}.wrap{padding:7px}.deviceRow{display:grid;grid-template-columns:1fr 54px;gap:6px}.device{width:100%;height:36px;font-size:13px;font-weight:900;border:1px solid #334155;border-radius:4px;background:#fff;padding:0 7px}.apply{height:36px;border:0;border-radius:5px;background:#40516a;color:#fff;font-weight:900}.video{position:relative;background:#000;aspect-ratio:16/9;overflow:hidden;margin-top:6px}.video img{width:100%;height:100%;object-fit:cover;display:block;background:#000}.badge{position:absolute;top:10px;left:10px;background:#71839d;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.badge2{position:absolute;top:10px;right:10px;background:#e03131;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.hint{position:absolute;left:0;right:0;top:43%;text-align:center;color:#dbe3ee;font-weight:900;font-size:16px}.videoBtns{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.vbtn{display:block;text-align:center;text-decoration:none;color:#fff;border-radius:7px;padding:12px 8px;font-size:17px;font-weight:900;min-height:44px;background:#08272d}.vblue{background:#1293dd}.vdark{background:#0b252b}.keypadBox{display:flex;justify-content:center;margin:12px 0 6px}.keypad{background:#333;border:4px solid #777;border-radius:10px;padding:8px;display:grid;grid-template-columns:repeat(4,56px);gap:8px}.key{width:56px;height:45px;border-radius:6px;background:#2d8fd6;border:2px solid #9fc5dd;color:#fff;font-size:24px;font-weight:900;line-height:41px;padding:0;text-align:center;text-decoration:none;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.key:active{transform:scale(.96);filter:brightness(1.2)}.key.red{background:#c73b3b;border-color:#e6a0a0}.small{text-align:center;color:#64748b;font-size:12px;margin:7px 0}.card{border-top:1px solid #e5e7eb;padding:10px 8px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.btn{display:block;text-align:center;text-decoration:none;border:0;border-radius:8px;padding:13px 8px;font-weight:900;color:#fff;background:#0b88d8;font-size:16px}.green{background:#13a85a}.redBtn{background:#d12f2f}.orange{background:#f39c12}.gray{background:#40516a}input{width:100%;font-size:17px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:7px}.status{white-space:pre-wrap;background:#071120;color:#d8f7ff;border-radius:8px;padding:9px;font-family:monospace;font-size:12px;margin:8px;min-height:38px}@media(max-width:380px){.keypad{grid-template-columns:repeat(4,47px)}.key{width:47px;height:38px;line-height:34px;font-size:20px}.title{font-size:11px}}
 </style></head><body>
-<div class="top"><a class="back" href="/rt7_return_doorbell?from=gpio">← 返回</a><a class="menu" href="/rt7_return_doorbell?from=gpio">☰</a><div class="title">RT7 PHASE10<br>GPIO FAST CONTROL</div></div>
+<div class="top"><a class="back" href="/rt7_cloud_original_ui_doorbell">← 返回</a><a class="menu" href="/rt7_cloud_original_ui_doorbell">☰</a><div class="title">RT7 PHASE10<br>GPIO FAST CONTROL</div></div>
 <div class="wrap">
   <form id="devForm" method="get" action="/rt7_gpio_control" class="deviceRow"><select id="devSel" name="d" class="device">${optHtml}</select><button class="apply" type="submit">切換</button></form>
   <div class="video" id="videoBox"><img id="cam" alt="preview" ${camSrc?`src="${camSrc}"`:''}><div class="badge">${streamOn?'LAN':'IDLE'}</div><div class="badge2">LAN</div>${streamOn?'':`<div class="hint">等待影像串流<br><span style="font-size:12px;color:#94a3b8">按開始影像</span></div>`}</div>
@@ -5271,191 +5017,287 @@ app.get('/rt7_gpio_control', (req,res)=>{
 });
 
 
-// ============================================================================
-// V5.9A DVR Multi-Camera AI Access Platform
-// - HTTP Snapshot first: works with many DVR/NVR devices and avoids RTSP/FFmpeg on Railway.
-// - RTSP fields are stored for future VPS/FFmpeg bridge, but direct RTSP decoding is not done here.
-// ============================================================================
-const DVR_CAMERAS_FILE = path.join(DATA_DIR, 'rt7_dvr_cameras.json');
-const DVR_LAST_SNAPSHOT_FILE = path.join(DATA_DIR, 'rt7_dvr_last_snapshot.jpg');
+// ---------------- V5.9B DVR / SoCatch Multi-Camera AI Gate ----------------
+// 目的：整合社區 DVR 主機（例如 SoCatch 可連線的 192.168.0.123:80）
+// 說明：Railway 雲端無法直接連到 192.168.x.x 內網 DVR；
+//       本模組提供：1) 同 LAN/本機部署時的 server proxy，2) 手機瀏覽器直連顯示模式，
+//       3) 常見 DVR HTTP Snapshot URL 自動偵測，4) 指定 CH01~CH04 做 AI 辨識入口。
+const RT7_DVR_CAMERAS_FILE = path.join(DATA_DIR, 'rt7_dvr_cameras.json');
+const RT7_DVR_LAST_FILE = path.join(DATA_DIR, 'rt7_dvr_last_result.json');
 
 function rt7DvrDefaultCameras_() {
-  return [1,2,3,4].map(n => ({
-    id: 'CH' + String(n).padStart(2, '0'),
-    name: n === 1 ? '大門' : (n === 2 ? '停車場' : (n === 3 ? '側門' : '電梯')),
-    enabled: n === 1,
-    ai_enabled: n === 1,
-    dvr_host: '192.168.0.123:80',
-    channel: n,
-    username: 'admin',
-    password: '',
-    snapshot_url: '',
-    stream_url: '',
-    door_device_id: '#1',
-    note: '請在管理頁填入此通道的 HTTP Snapshot URL；RTSP 可先保留供 VPS/FFmpeg 版本使用。'
-  }));
+  const host = process.env.RT7_DVR_HOST || '192.168.0.123';
+  const port = process.env.RT7_DVR_PORT || '80';
+  const username = process.env.RT7_DVR_USER || 'admin';
+  const password = process.env.RT7_DVR_PASS || '';
+  const arr = [];
+  for (let i = 1; i <= 4; i++) {
+    arr.push({
+      id: 'CH' + String(i).padStart(2, '0'),
+      name: i === 1 ? 'CH01 大門' : ('CH' + String(i).padStart(2, '0')),
+      enabled: true,
+      dvr_host: host,
+      dvr_port: port,
+      username,
+      password,
+      channel: i,
+      ai_enabled: i === 1,
+      snapshot_url: '',
+      snapshot_template: '',
+      direct_mode: true,
+      note: 'SoCatch DVR'
+    });
+  }
+  return arr;
 }
 function rt7DvrReadCameras_() {
   ensureDataDir();
-  if (!fs.existsSync(DVR_CAMERAS_FILE)) rt7DvrSaveCameras_(rt7DvrDefaultCameras_());
-  try {
-    const raw = fs.readFileSync(DVR_CAMERAS_FILE, 'utf8');
-    const arr = JSON.parse(raw || '[]');
-    return rt7DvrNormalizeCameras_(Array.isArray(arr) ? arr : (arr.cameras || []));
-  } catch (_) { return rt7DvrDefaultCameras_(); }
+  const arr = rt7ReadJsonFile_(RT7_DVR_CAMERAS_FILE, null);
+  if (Array.isArray(arr) && arr.length) return arr;
+  const def = rt7DvrDefaultCameras_();
+  rt7WriteJsonFile_(RT7_DVR_CAMERAS_FILE, def);
+  return def;
 }
-function rt7DvrSaveCameras_(cameras) {
-  ensureDataDir();
-  const arr = rt7DvrNormalizeCameras_(cameras);
-  fs.writeFileSync(DVR_CAMERAS_FILE, JSON.stringify(arr, null, 2), 'utf8');
+function rt7DvrSaveCameras_(arr) {
+  arr = Array.isArray(arr) ? arr : rt7DvrDefaultCameras_();
+  rt7WriteJsonFile_(RT7_DVR_CAMERAS_FILE, arr);
   return arr;
 }
-function rt7DvrNormalizeCameras_(arr) {
-  arr = Array.isArray(arr) ? arr : [];
-  if (!arr.length) arr = rt7DvrDefaultCameras_();
-  const out = [];
-  arr.forEach((c, idx) => {
-    c = c && typeof c === 'object' ? c : {};
-    let id = safeString(c.id || c.camera_id || ('CH' + String(idx + 1).padStart(2, '0'))).trim().toUpperCase();
-    if (/^[0-9]+$/.test(id)) id = 'CH' + id.padStart(2, '0');
-    id = id.replace(/[^A-Z0-9_\-]/g, '').slice(0, 24) || ('CH' + String(idx + 1).padStart(2, '0'));
-    out.push({
-      id,
-      name: safeString(c.name || c.label || id).trim() || id,
-      enabled: c.enabled !== false,
-      ai_enabled: c.ai_enabled !== false && c.face_enabled !== false,
-      dvr_host: safeString(c.dvr_host || c.host || '').trim().replace(/^https?:\/\//i,'').replace(/\/$/,''),
-      channel: Number(c.channel || c.ch || idx + 1) || (idx + 1),
-      username: safeString(c.username || c.user || '').trim(),
-      password: safeString(c.password || c.pass || '').trim(),
-      snapshot_url: safeString(c.snapshot_url || c.snapshot || '').trim(),
-      stream_url: safeString(c.stream_url || c.rtsp_url || c.rtsp || '').trim(),
-      door_device_id: safeString(c.door_device_id || c.device_id || '#1').trim() || '#1',
-      note: safeString(c.note || '').trim(),
-      last_snapshot: c.last_snapshot || null,
-      last_ai: c.last_ai || null
-    });
-  });
-  return out;
+function rt7DvrFindCamera_(id) {
+  id = safeString(id || '').toUpperCase();
+  return rt7DvrReadCameras_().find(c => safeString(c.id).toUpperCase() === id) || null;
 }
-function rt7DvrBuildSnapshotUrl_(cam) {
-  const raw = safeString(cam && cam.snapshot_url || '').trim();
-  if (raw) return raw;
-  const host = safeString(cam && cam.dvr_host || '').trim();
+function rt7DvrBaseUrl_(cam) {
+  const host = safeString(cam.dvr_host || cam.host || '').trim();
+  const port = safeString(cam.dvr_port || cam.port || '').trim() || '80';
   if (!host) return '';
-  // Generic fallback only; most DVRs need their own snapshot path.
-  return 'http://' + host.replace(/^https?:\/\//i,'').replace(/\/$/,'') + '/snapshot.jpg?channel=' + encodeURIComponent(cam.channel || 1);
+  const hasScheme = /^https?:\/\//i.test(host);
+  let base = hasScheme ? host.replace(/\/+$/,'') : 'http://' + host.replace(/\/+$/,'');
+  if (!hasScheme && port && port !== '80') base += ':' + port;
+  return base;
 }
-function rt7HttpGetBuffer_(urlText, opt) {
-  opt = opt || {};
-  return new Promise((resolve, reject) => {
-    let u;
-    try { u = new URL(urlText); } catch (e) { return reject(new Error('BAD_URL')); }
-    const mod = u.protocol === 'https:' ? require('https') : require('http');
-    const headers = Object.assign({}, opt.headers || {});
-    if (opt.username) {
-      headers.Authorization = 'Basic ' + Buffer.from(String(opt.username) + ':' + String(opt.password || '')).toString('base64');
+function rt7DvrFillTemplate_(tpl, cam) {
+  const ch = Number(cam.channel || 1);
+  const ch0 = Math.max(0, ch - 1);
+  const enc = encodeURIComponent;
+  return safeString(tpl || '')
+    .replace(/\{host\}/g, safeString(cam.dvr_host || cam.host || '').trim())
+    .replace(/\{port\}/g, safeString(cam.dvr_port || cam.port || '80').trim())
+    .replace(/\{user\}/g, enc(safeString(cam.username || '')))
+    .replace(/\{pass\}/g, enc(safeString(cam.password || '')))
+    .replace(/\{channel\}/g, String(ch))
+    .replace(/\{ch\}/g, String(ch))
+    .replace(/\{channel0\}/g, String(ch0))
+    .replace(/\{ch0\}/g, String(ch0));
+}
+function rt7DvrCandidatePaths_(cam) {
+  const ch = Number(cam.channel || 1);
+  const ch0 = Math.max(0, ch - 1);
+  const u = encodeURIComponent(safeString(cam.username || 'admin'));
+  const p = encodeURIComponent(safeString(cam.password || ''));
+  return [
+    `/cgi-bin/snapshot.cgi?channel=${ch}`,
+    `/cgi-bin/snapshot.cgi?chn=${ch}`,
+    `/cgi-bin/snapshot.cgi?ch=${ch}`,
+    `/cgi-bin/snapshot.cgi?channel=${ch0}`,
+    `/cgi-bin/snapshot.cgi?chn=${ch0}`,
+    `/cgi-bin/snapshot.cgi?ch=${ch0}`,
+    `/cgi-bin/snapshot.cgi?loginuse=${u}&loginpas=${p}&channel=${ch}`,
+    `/cgi-bin/snapshot.cgi?loginuse=${u}&loginpas=${p}&chn=${ch}`,
+    `/cgi-bin/snapshot.cgi?loginuse=${u}&loginpas=${p}&ch=${ch}`,
+    `/cgi-bin/snapshot.cgi?user=${u}&pwd=${p}&channel=${ch}`,
+    `/cgi-bin/snapshot.cgi?user=${u}&password=${p}&channel=${ch}`,
+    `/cgi-bin/net_jpeg.cgi?ch=${ch0}`,
+    `/cgi-bin/net_jpeg.cgi?ch=${ch}`,
+    `/cgi-bin/video.cgi?msubmenu=jpg&channel=${ch}`,
+    `/cgi-bin/viewer/video.jpg?channel=${ch}`,
+    `/cgi-bin/viewer/video.jpg?resolution=640x480&quality=standard&channel=${ch}`,
+    `/webcapture.jpg?command=snap&channel=${ch}`,
+    `/snapshot.jpg?channel=${ch}`,
+    `/snapshot.cgi?channel=${ch}`,
+    `/capture/ch${ch}.jpg`,
+    `/Streaming/Channels/${ch}01/picture`,
+    `/ISAPI/Streaming/channels/${ch}01/picture`
+  ];
+}
+function rt7DvrResolveSnapshotUrl_(cam) {
+  if (!cam) return '';
+  if (cam.snapshot_url) return rt7DvrFillTemplate_(cam.snapshot_url, cam);
+  if (cam.snapshot_template) return rt7DvrBaseUrl_(cam) + rt7DvrFillTemplate_(cam.snapshot_template, cam);
+  const base = rt7DvrBaseUrl_(cam);
+  if (!base) return '';
+  return base + `/cgi-bin/snapshot.cgi?channel=${Number(cam.channel || 1)}`;
+}
+function rt7DvrDirectSnapshotUrl_(cam) {
+  let url = rt7DvrResolveSnapshotUrl_(cam);
+  if (!url) return '';
+  // 若 URL 沒有帳密，手機直連模式可嘗試 Basic Auth 內嵌；部分瀏覽器/DVR 不支援時仍需使用 proxy/bridge。
+  try {
+    const u = new URL(url);
+    if (!u.username && cam.username) {
+      u.username = safeString(cam.username || '');
+      u.password = safeString(cam.password || '');
+      url = u.toString();
     }
-    const req = mod.request(u, { method:'GET', headers, timeout: opt.timeout || 6000 }, (r) => {
-      const chunks = [];
-      let size = 0;
-      r.on('data', (d) => {
-        size += d.length;
-        if (size > (opt.maxBytes || 6*1024*1024)) { req.destroy(new Error('IMAGE_TOO_LARGE')); return; }
-        chunks.push(d);
+  } catch (_) {}
+  return url;
+}
+function rt7HttpGetBuffer_(url, opts) {
+  opts = opts || {};
+  return new Promise((resolve) => {
+    let done = false;
+    function finish(v) { if (!done) { done = true; resolve(v); } }
+    try {
+      const u = new URL(url);
+      const lib = u.protocol === 'https:' ? https : http;
+      const headers = Object.assign({ 'User-Agent':'RT7-DVR-Probe/5.9B', 'Accept':'image/jpeg,image/*,*/*' }, opts.headers || {});
+      if (opts.username) {
+        headers.Authorization = 'Basic ' + Buffer.from(String(opts.username) + ':' + String(opts.password || '')).toString('base64');
+      }
+      const req = lib.request(u, { method:'GET', headers, timeout: opts.timeout || 3500 }, (res) => {
+        const chunks = [];
+        res.on('data', d => { if (chunks.reduce((a,b)=>a+b.length,0) < (opts.maxBytes || 2*1024*1024)) chunks.push(d); });
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          finish({ ok: res.statusCode >= 200 && res.statusCode < 300, status:res.statusCode, headers:res.headers, buffer:buf, url });
+        });
       });
-      r.on('end', () => {
-        const buf = Buffer.concat(chunks);
-        if (r.statusCode < 200 || r.statusCode >= 300) return reject(new Error('HTTP_' + r.statusCode));
-        resolve({ statusCode:r.statusCode, headers:r.headers || {}, buffer:buf });
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('TIMEOUT')));
-    req.on('error', reject);
-    req.end();
+      req.on('timeout', () => { try { req.destroy(new Error('timeout')); } catch (_) {} finish({ ok:false, status:0, error:'timeout', url }); });
+      req.on('error', e => finish({ ok:false, status:0, error:String(e && e.message || e), url }));
+      req.end();
+    } catch (e) { finish({ ok:false, status:0, error:String(e && e.message || e), url }); }
   });
 }
-function rt7DvrGetCamera_(id) {
-  id = safeString(id || '').trim().toUpperCase();
-  const cams = rt7DvrReadCameras_();
-  return cams.find(c => c.id === id) || cams[0] || null;
+function rt7LooksJpeg_(r) {
+  if (!r || !r.buffer || r.buffer.length < 4) return false;
+  const ct = safeString(r.headers && r.headers['content-type'] || '').toLowerCase();
+  return ct.includes('jpeg') || ct.includes('jpg') || (r.buffer[0] === 0xff && r.buffer[1] === 0xd8);
 }
 async function rt7DvrFetchSnapshot_(cam) {
-  if (!cam) throw new Error('CAMERA_NOT_FOUND');
-  if (cam.enabled === false) throw new Error('CAMERA_DISABLED');
-  const url = rt7DvrBuildSnapshotUrl_(cam);
-  if (!url) throw new Error('SNAPSHOT_URL_EMPTY');
-  if (/^rtsp:/i.test(url)) throw new Error('RTSP_NEEDS_VPS_FFMPEG_BRIDGE');
-  const r = await rt7HttpGetBuffer_(url, { username:cam.username, password:cam.password, timeout:7000, maxBytes:6*1024*1024 });
-  const buf = r.buffer;
-  if (!buf || buf.length < 200) throw new Error('SNAPSHOT_TOO_SMALL');
-  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8;
-  if (!isJpeg && !/image\//i.test(String(r.headers['content-type'] || ''))) throw new Error('NOT_IMAGE_RESPONSE');
-  ensureDataDir();
-  fs.writeFileSync(DVR_LAST_SNAPSHOT_FILE, buf);
-  fs.writeFileSync(SNAPSHOT_FILE, buf); // reuse existing RT7 Face Match engine
-  const meta = { ok:true, bytes:buf.length, time:nowIso(), source:'dvr_camera_snapshot', camera_id:cam.id, camera_name:cam.name, device_id:cam.door_device_id || '#1', url:'/api/rt7/dvr/camera/' + encodeURIComponent(cam.id) + '/snapshot.jpg' };
-  cloudState.last_snapshot = Object.assign({}, meta, { url:'/api/rt7/camera/latest.jpg' });
-  const cams = rt7DvrReadCameras_();
-  const idx = cams.findIndex(x => x.id === cam.id);
-  if (idx >= 0) { cams[idx].last_snapshot = meta; rt7DvrSaveCameras_(cams); }
-  appendEvent({ type:'dvr_snapshot', camera_id:cam.id, camera_name:cam.name, bytes:buf.length, message:'DVR snapshot captured' });
-  broadcast('snapshot', meta);
-  return { meta, buffer:buf };
+  const url = rt7DvrResolveSnapshotUrl_(cam);
+  if (!url) return { ok:false, error:'DVR_SNAPSHOT_URL_EMPTY' };
+  const r = await rt7HttpGetBuffer_(url, { username:cam.username, password:cam.password, timeout:4500 });
+  if (r.ok && rt7LooksJpeg_(r)) return Object.assign(r, { ok:true });
+  return Object.assign(r, { ok:false, error:r.error || ('HTTP_' + r.status), hint:'若部署在 Railway，無法直接連線 192.168.x.x 內網 DVR；請使用手機直連顯示，或下一版 RT7 LAN Bridge/FFmpeg Bridge。' });
 }
-async function rt7DvrRecognizeCamera_(id) {
-  const cam = rt7DvrGetCamera_(id);
-  if (!cam) throw new Error('CAMERA_NOT_FOUND');
-  const snap = await rt7DvrFetchSnapshot_(cam);
-  const match = await rt7FaceMatchLatest_();
-  const result = Object.assign({}, match, { dvr:true, camera_id:cam.id, camera_name:cam.name, snapshot:snap.meta });
-  const cams = rt7DvrReadCameras_();
-  const idx = cams.findIndex(x => x.id === cam.id);
-  if (idx >= 0) { cams[idx].last_ai = { time:nowIso(), known_face:!!result.known_face, name:result.matched_name || '', confidence:result.confidence || 0, summary:result.summary || result.answer || '' }; rt7DvrSaveCameras_(cams); }
-  appendEvent({ type:'dvr_face_recognize', camera_id:cam.id, camera_name:cam.name, known_face:!!result.known_face, name:result.matched_name || '', confidence:result.confidence || 0, message:result.summary || result.answer || '' });
-  broadcast('dvr_face_recognize', result);
-  return result;
+async function rt7DvrProbeCamera_(cam) {
+  const base = rt7DvrBaseUrl_(cam);
+  if (!base) return { ok:false, error:'DVR_HOST_EMPTY' };
+  const candidates = [];
+  if (cam.snapshot_url) candidates.push(rt7DvrFillTemplate_(cam.snapshot_url, cam));
+  if (cam.snapshot_template) candidates.push(base + rt7DvrFillTemplate_(cam.snapshot_template, cam));
+  rt7DvrCandidatePaths_(cam).forEach(p => candidates.push(base + p));
+  const tried = [];
+  for (const url of Array.from(new Set(candidates))) {
+    const r = await rt7HttpGetBuffer_(url, { username:cam.username, password:cam.password, timeout:2500, maxBytes:512*1024 });
+    tried.push({ url, status:r.status || 0, content_type:safeString(r.headers && r.headers['content-type'] || ''), bytes:r.buffer ? r.buffer.length : 0, error:r.error || '' });
+    if (r.ok && rt7LooksJpeg_(r)) {
+      return { ok:true, url, template:url.indexOf(base)===0 ? url.slice(base.length) : url, tried };
+    }
+  }
+  return { ok:false, error:'NO_WORKING_HTTP_SNAPSHOT_FOUND', tried, hint:'SoCatch App 可看影像不代表 DVR 一定開放 HTTP Snapshot。請到 DVR 設定查 RTSP/HTTP/ONVIF，或使用 RT7 LAN Bridge/FFmpeg Bridge。' };
 }
-function rt7DvrPlatformPage_() {
-  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c] || c));
+function rt7DvrPage_() {
   const cams = rt7DvrReadCameras_();
-  const cards = cams.map(c => `<div class="cam" data-id="${esc(c.id)}"><div class="camHead"><b>${esc(c.id)} · ${esc(c.name)}</b><span class="pill ${c.enabled?'ok':'bad'}">${c.enabled?'ONLINE':'OFF'}</span></div><div class="video"><img id="img_${esc(c.id)}" src="/api/rt7/dvr/camera/${encodeURIComponent(c.id)}/snapshot.jpg?_=${Date.now()}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="empty">尚無影像<br><small>請設定 Snapshot URL</small></div></div><div class="ops"><button onclick="snap('${esc(c.id)}')">截圖</button><button class="green" onclick="ai('${esc(c.id)}')">AI辨識</button></div><div class="small" id="st_${esc(c.id)}">${esc(c.snapshot_url || c.stream_url || c.dvr_host || '未設定')}</div></div>`).join('');
-  const rows = cams.map(c => `<tr><td><input name="id" value="${esc(c.id)}"></td><td><input name="name" value="${esc(c.name)}"></td><td><input name="enabled" value="${c.enabled?'1':'0'}"></td><td><input name="ai_enabled" value="${c.ai_enabled?'1':'0'}"></td><td><input name="dvr_host" value="${esc(c.dvr_host)}"></td><td><input name="channel" value="${esc(c.channel)}"></td><td><input name="username" value="${esc(c.username)}"></td><td><input name="password" value="${esc(c.password)}"></td><td><input name="snapshot_url" value="${esc(c.snapshot_url)}" placeholder="http://DVR/.../snapshot..."></td><td><input name="stream_url" value="${esc(c.stream_url)}" placeholder="rtsp://..."></td><td><input name="door_device_id" value="${esc(c.door_device_id)}"></td></tr>`).join('');
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const cards = cams.map(c => `<div class="cam" data-id="${esc(c.id)}">
+    <div class="camTop"><b>${esc(c.id)} / ${esc(c.name || '')}</b><span class="${c.enabled!==false?'ok':'bad'}">${c.enabled!==false?'啟用':'停用'}</span></div>
+    <div class="view"><img id="img_${esc(c.id)}" src="/api/rt7/dvr/snapshot/${encodeURIComponent(c.id)}?ts=${Date.now()}" onerror="this.classList.add('err')" alt="${esc(c.id)}"></div>
+    <div class="meta">DVR ${esc(c.dvr_host)}:${esc(c.dvr_port || '80')} / Channel ${esc(c.channel || '')}</div>
+    <div class="btns"><button onclick="rt7RefreshCam('${esc(c.id)}')">刷新</button><button onclick="rt7ProbeCam('${esc(c.id)}')">偵測 Snapshot</button><button onclick="rt7AiCam('${esc(c.id)}')">AI 辨識</button><button onclick="rt7DirectCam('${esc(c.id)}')">手機直連</button></div>
+  </div>`).join('');
+  const rows = cams.map(c => `<tr data-id="${esc(c.id)}"><td>${esc(c.id)}</td><td><input name="name" value="${esc(c.name||'')}"></td><td><input name="dvr_host" value="${esc(c.dvr_host||'')}"></td><td><input name="dvr_port" value="${esc(c.dvr_port||'80')}"></td><td><input name="username" value="${esc(c.username||'admin')}"></td><td><input name="password" value="${esc(c.password||'')}" placeholder="密碼"></td><td><input name="channel" value="${esc(c.channel||'1')}"></td><td><input name="snapshot_url" value="${esc(c.snapshot_url||'')}" placeholder="可空白，按偵測自動帶入"></td><td><button onclick="rt7SaveRow('${esc(c.id)}')">儲存</button></td></tr>`).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 DVR 多攝影機 AI 門禁平台</title><style>
-body{margin:0;background:#07131c;color:#eaf2f8;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#0b2030;padding:14px;display:flex;gap:10px;align-items:center}.top h1{font-size:21px;margin:0;flex:1}.top a{color:white;text-decoration:none;background:#334155;padding:8px 11px;border-radius:10px;font-weight:900}.wrap{max-width:1250px;margin:0 auto;padding:14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.cam,.card{background:#101d2a;border:1px solid #243448;border-radius:14px;padding:12px;box-shadow:0 8px 24px #0005}.camHead{display:flex;align-items:center;gap:8px;margin-bottom:8px}.camHead b{flex:1}.pill{font-size:12px;border-radius:999px;padding:3px 8px;font-weight:900}.ok{background:#113b1f;color:#7cff9c}.bad{background:#4a1b1b;color:#ff9b9b}.video{background:#000;aspect-ratio:4/3;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center}.video img{width:100%;height:100%;object-fit:cover}.empty{display:none;text-align:center;color:#93a4b5;font-weight:900}.ops{display:flex;gap:8px;margin-top:9px}.ops button,.btn{border:0;border-radius:9px;background:#0ea5e9;color:#fff;font-weight:900;padding:9px 12px}.ops button.green,.green{background:#16a34a}.small{font-size:12px;color:#a6b7c8;margin-top:8px;word-break:break-all}table{width:100%;border-collapse:collapse;min-width:1250px}th,td{border-bottom:1px solid #26384d;padding:7px;text-align:left}th{background:#162638}input{box-sizing:border-box;width:100%;background:#0b1520;color:#eaf2f8;border:1px solid #334155;border-radius:7px;padding:7px}.log{white-space:pre-wrap;background:#061018;border-radius:10px;padding:10px;color:#d8e8f3;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}table{min-width:1100px}}</style></head><body><div class="top"><h1>RT7 多攝影機 AI 門禁平台（DVR整合）</h1><a href="/rt7_cloud_original_ui_doorbell">主頁</a><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap"><div class="grid">${cards}</div><div class="card" style="margin-top:14px"><h2>攝影機設定</h2><div class="small">先填每個通道的 HTTP Snapshot URL。RTSP URL 可先記錄，之後 VPS/FFmpeg Bridge 版本再使用。</div><form id="form"><div style="overflow:auto"><table><thead><tr><th>ID</th><th>名稱</th><th>啟用</th><th>AI</th><th>DVR Host</th><th>CH</th><th>User</th><th>Password</th><th>HTTP Snapshot URL</th><th>RTSP URL</th><th>開門設備</th></tr></thead><tbody>${rows}</tbody></table></div><button class="btn green" type="button" onclick="save()">儲存攝影機設定</button></form></div><div class="card" style="margin-top:14px"><h2>測試紀錄</h2><div id="log" class="log">READY</div></div></div><script>
-function $(id){return document.getElementById(id)}
-async function j(url,opt){const r=await fetch(url,opt||{});return await r.json()}
-function log(x){$('log').textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}
-async function snap(id){log('抓取 '+id+' snapshot...');const r=await j('/api/rt7/dvr/camera/'+encodeURIComponent(id)+'/snapshot');log(r);const img=$('img_'+id);if(img){img.style.display='block';img.src='/api/rt7/dvr/camera/'+encodeURIComponent(id)+'/snapshot.jpg?_='+Date.now()}}
-async function ai(id){log('AI 辨識 '+id+'...');const r=await j('/api/rt7/dvr/recognize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({camera_id:id})});log(r)}
-async function save(){const trs=[...document.querySelectorAll('tbody tr')];const cameras=trs.map(tr=>{const o={};tr.querySelectorAll('input').forEach(i=>o[i.name]=i.value);o.enabled=o.enabled!=='0';o.ai_enabled=o.ai_enabled!=='0';return o});const r=await j('/api/rt7/dvr/cameras',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cameras})});log(r);setTimeout(()=>location.reload(),600)}
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:white;padding:14px;display:flex;align-items:center;gap:10px}.top h1{font-size:20px;margin:0;flex:1}.top a{color:white;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:1180px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.cam{background:white;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.view img.err{display:none}.meta{font-size:12px;color:#64748b;margin:7px 0}.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:9px 8px}button:nth-child(3){background:#16a34a}button:nth-child(4){background:#475569}.card{background:white;border-radius:16px;padding:12px;margin-top:12px;overflow:auto}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{border-bottom:1px solid #e5edf2;padding:8px;text-align:left}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}.btns{grid-template-columns:repeat(2,1fr)}} </style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 多攝影機 AI 門禁平台（DVR / SoCatch）</h1><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap">
+<div class="notice"><b>連線修正重點：</b>SoCatch 手機 App 能連到 DVR（圖中 admin@192.168.0.123:80），代表手機在同一個內網可看影像；但 Railway 雲端通常不能直接連到 192.168.0.123。此頁提供「DVR HTTP Snapshot 偵測」與「手機直連」兩種模式。若要讓 Railway AI 真正讀取 DVR 影像，DVR 必須提供可由 Railway 連到的 HTTP/HTTPS Snapshot，或加裝 RT7 LAN Bridge / FFmpeg Bridge。</div>
+<div class="grid">${cards}</div>
+<div class="card"><h2>DVR 攝影機設定</h2><table><thead><tr><th>ID</th><th>名稱</th><th>DVR IP</th><th>Port</th><th>User</th><th>Password</th><th>CH</th><th>Snapshot URL / Template</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+<div class="card"><h2>測試結果</h2><div id="log" class="log">等待測試...</div></div>
+</div><script>
+const CAMS = ${JSON.stringify(cams.map(c => ({id:c.id, direct:rt7DvrDirectSnapshotUrl_(c)})))};
+function log(x){ document.getElementById('log').textContent = typeof x === 'string' ? x : JSON.stringify(x,null,2); }
+function rt7RefreshCam(id){ const img=document.getElementById('img_'+id); img.classList.remove('err'); img.src='/api/rt7/dvr/snapshot/'+encodeURIComponent(id)+'?ts='+Date.now(); }
+async function rt7ProbeCam(id){
+  log('偵測 '+id+' 中...');
+  const r=await fetch('/api/rt7/dvr/probe/'+encodeURIComponent(id),{method:'POST'}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+  log(r);
+  if(r.ok){ alert('找到 Snapshot：'+r.url+'\\n已寫入設定'); location.reload(); }
+}
+async function rt7AiCam(id){
+  log('AI 辨識 '+id+' 中...');
+  const r=await fetch('/api/rt7/dvr/ai/recognize/'+encodeURIComponent(id),{method:'POST'}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
+  log(r);
+  alert(r.ok ? ('AI結果：'+(r.message||r.result||'OK')) : ('AI失敗：'+(r.error||r.hint||'unknown')));
+}
+function rt7DirectCam(id){
+  const c=CAMS.find(x=>x.id===id);
+  if(!c || !c.direct) return alert('沒有 direct URL');
+  window.open(c.direct + (c.direct.indexOf('?')>=0?'&':'?') + 'ts=' + Date.now(), '_blank');
+}
+async function rt7SaveRow(id){
+  const tr=document.querySelector('tr[data-id="'+id+'"]');
+  const data={id};
+  tr.querySelectorAll('input').forEach(i=>data[i.name]=i.value);
+  const r=await fetch('/api/rt7/dvr/cameras/'+encodeURIComponent(id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json());
+  log(r); if(r.ok) location.reload();
+}
+setInterval(()=>{ CAMS.forEach(c=>rt7RefreshCam(c.id)); }, 5000);
 </script></body></html>`;
 }
 
-app.get('/rt7_dvr_ai_platform', rt7RequireLogin_, (req,res)=>res.type('html').send(rt7DvrPlatformPage_()));
-app.get('/api/rt7/dvr/cameras', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, file:'data/rt7_dvr_cameras.json', cameras:rt7DvrReadCameras_() }));
-app.post('/api/rt7/dvr/cameras', rt7RequireAdmin_, (req,res)=>{
-  const cameras = rt7DvrSaveCameras_(req.body && req.body.cameras || []);
-  appendEvent({ type:'dvr_cameras_save', count:cameras.length, ip:clientIp(req) });
-  res.json({ ok:true, version:SERVER_VERSION, count:cameras.length, cameras });
+app.get('/rt7_dvr_ai_platform', rt7RequireLogin_, (req,res) => res.type('html').send(rt7DvrPage_()));
+
+app.get('/api/rt7/dvr/cameras', rt7RequireLogin_, (req,res) => {
+  res.json({ ok:true, version:SERVER_VERSION, cameras:rt7DvrReadCameras_().map(c => Object.assign({}, c, { password: c.password ? '********' : '' })) });
 });
-app.get('/api/rt7/dvr/camera/:id/snapshot.jpg', async (req,res)=>{
-  try { const out = await rt7DvrFetchSnapshot_(rt7DvrGetCamera_(req.params.id)); res.type('image/jpeg').send(out.buffer); }
-  catch(e) { res.status(404).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e) }); }
+app.post('/api/rt7/dvr/cameras/:id', rt7RequireAdmin_, (req,res) => {
+  const id = safeString(req.params.id || req.body.id || '').toUpperCase();
+  let cams = rt7DvrReadCameras_();
+  let cam = cams.find(c => safeString(c.id).toUpperCase() === id);
+  if (!cam) { cam = { id, enabled:true }; cams.push(cam); }
+  ['name','dvr_host','dvr_port','username','password','snapshot_url','snapshot_template','note'].forEach(k => {
+    if (req.body[k] !== undefined) cam[k] = safeString(req.body[k]);
+  });
+  if (req.body.channel !== undefined) cam.channel = Math.max(1, parseInt(req.body.channel, 10) || 1);
+  if (req.body.enabled !== undefined) cam.enabled = req.body.enabled === true || req.body.enabled === 'true' || req.body.enabled === '1';
+  if (req.body.ai_enabled !== undefined) cam.ai_enabled = req.body.ai_enabled === true || req.body.ai_enabled === 'true' || req.body.ai_enabled === '1';
+  rt7DvrSaveCameras_(cams);
+  res.json({ ok:true, camera:Object.assign({}, cam, { password: cam.password ? '********' : '' }) });
 });
-app.get('/api/rt7/dvr/camera/:id/snapshot', async (req,res)=>{
-  try { const out = await rt7DvrFetchSnapshot_(rt7DvrGetCamera_(req.params.id)); res.json({ ok:true, version:SERVER_VERSION, snapshot:out.meta }); }
-  catch(e) { res.status(200).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e) }); }
+app.post('/api/rt7/dvr/probe/:id', rt7RequireAdmin_, async (req,res) => {
+  const cam = rt7DvrFindCamera_(req.params.id);
+  if (!cam) return res.status(404).json({ ok:false, error:'CAMERA_NOT_FOUND' });
+  const r = await rt7DvrProbeCamera_(Object.assign({}, cam, req.body || {}));
+  if (r.ok) {
+    const cams = rt7DvrReadCameras_();
+    const c = cams.find(x => safeString(x.id).toUpperCase() === safeString(cam.id).toUpperCase());
+    if (c) { c.snapshot_url = r.url; c.snapshot_template = r.template; c.last_probe_ok = nowIso(); rt7DvrSaveCameras_(cams); }
+  }
+  res.json(r);
 });
-app.post('/api/rt7/dvr/recognize', async (req,res)=>{
-  try { res.json(await rt7DvrRecognizeCamera_(req.body && (req.body.camera_id || req.body.id) || req.query.camera_id || req.query.id)); }
-  catch(e) { res.status(200).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e), answer:'DVR 攝影機辨識失敗，請先確認 HTTP Snapshot URL 可由 Railway/VPS 存取。' }); }
+app.get('/api/rt7/dvr/snapshot/:id', rt7RequireLogin_, async (req,res) => {
+  const cam = rt7DvrFindCamera_(req.params.id);
+  if (!cam) return res.status(404).type('text/plain').send('CAMERA_NOT_FOUND');
+  const r = await rt7DvrFetchSnapshot_(cam);
+  if (!r.ok) return res.status(502).type('text/plain').send((r.error || 'DVR_FETCH_FAIL') + '\n' + (r.hint || ''));
+  res.setHeader('Cache-Control','no-store');
+  res.setHeader('Content-Type','image/jpeg');
+  res.send(r.buffer);
 });
-app.get('/api/rt7/dvr/recognize', async (req,res)=>{
-  try { res.json(await rt7DvrRecognizeCamera_(req.query.camera_id || req.query.id)); }
-  catch(e) { res.status(200).json({ ok:false, version:SERVER_VERSION, error:String(e && e.message || e), answer:'DVR 攝影機辨識失敗，請先確認 HTTP Snapshot URL 可由 Railway/VPS 存取。' }); }
+app.post('/api/rt7/dvr/ai/recognize/:id', rt7RequireLogin_, async (req,res) => {
+  const cam = rt7DvrFindCamera_(req.params.id);
+  if (!cam) return res.status(404).json({ ok:false, error:'CAMERA_NOT_FOUND' });
+  const r = await rt7DvrFetchSnapshot_(cam);
+  if (!r.ok) return res.status(502).json({ ok:false, error:r.error || 'DVR_FETCH_FAIL', hint:r.hint || '', camera:cam.id });
+  // V5.9B 先完成 DVR 影像接入；若要接既有人臉比對，可在此把 r.buffer 送入 Face Match pipeline。
+  const out = { ok:true, camera:cam.id, bytes:r.buffer.length, message:'DVR_SNAPSHOT_OK_AI_PIPELINE_READY', time:nowIso() };
+  rt7WriteJsonFile_(RT7_DVR_LAST_FILE, out);
+  res.json(out);
 });
-app.get('/api/rt7/dvr/state', (req,res)=>res.json({ ok:true, version:SERVER_VERSION, cameras:rt7DvrReadCameras_(), last_snapshot:cloudState.last_snapshot || null, last_face_match:cloudState.last_face_match || null }));
+app.get('/api/rt7/dvr/last', rt7RequireLogin_, (req,res) => {
+  res.json(rt7ReadJsonFile_(RT7_DVR_LAST_FILE, { ok:false, message:'NO_DVR_AI_RESULT_YET' }));
+});
+
 
 ensureDataDir();
 const port = process.env.PORT || 3000;
