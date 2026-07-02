@@ -1,4 +1,4 @@
-// RT7_V6_2G_ICATCH_SAFE_FFMPEG_DECODE_FIX
+// RT7_V6_2H_ICATCH_3FPS_LOW_DELAY_BALANCE
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -22,7 +22,7 @@ const path = require('path');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2G_ICATCH_SAFE_FFMPEG_DECODE_FIX';
+const VERSION = 'RT7_V6_2H_ICATCH_3FPS_LOW_DELAY_BALANCE';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -36,9 +36,9 @@ const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
 const CHANNELS = String(process.env.DVR_CHANNELS || '1').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 const INTERVAL_MS = Math.max(200, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
 const TRUE_STREAM_MODE = String(process.env.TRUE_STREAM_MODE || '1').trim() !== '0';
-// V6.2G: V6.2F 的 nobuffer/low_delay 會讓 iCATCH Hi3520 octet-stream 偶發解碼錯位，手機出現藍綠屏。
-// 改回安全解碼，預設 4 FPS；若穩定後可在 BAT 改 STREAM_FPS=5。
-const STREAM_FPS = Math.max(1, Math.min(8, parseInt(process.env.STREAM_FPS || '4', 10) || 4));
+// V6.2H: 3FPS low-delay balance.
+// 保留安全解碼避免 V6.2F 藍綠屏；降低到 3FPS，Bridge 僅保留最新 frame，避免排隊造成延遲。
+const STREAM_FPS = Math.max(1, Math.min(8, parseInt(process.env.STREAM_FPS || '3', 10) || 3));
 const UPLOAD_MIN_INTERVAL_MS = Math.max(100, parseInt(process.env.UPLOAD_MIN_INTERVAL_MS || String(Math.floor(1000 / STREAM_FPS)), 10) || Math.floor(1000 / STREAM_FPS));
 const FFMPEG_TIMEOUT_MS = Math.max(2500, parseInt(process.env.FFMPEG_TIMEOUT_MS || '10000', 10) || 10000);
 const DEBUG = String(process.env.DEBUG || '').trim() === '1';
@@ -403,7 +403,7 @@ function startContinuousFfmpegChannel(ch) {
     lastUploadAt = now;
     uploadBusy = true;
     try {
-      const up = await upload(ch, frame, 'icatch-net-video-safe-decode-v62g');
+      const up = await upload(ch, frame, 'icatch-3fps-low-delay-balance-v62h');
       frameCount++;
       console.log(`[${id}] stream frame=${frame.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
     } finally {
@@ -419,8 +419,8 @@ function startContinuousFfmpegChannel(ch) {
   async function spawnLoop() {
     if (stopping) return;
     const videoHeaders = await getVideoHeaders();
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2G', 'Connection':'keep-alive' }));
-    // V6.2G SAFE decode:
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2H', 'Connection':'keep-alive' }));
+    // V6.2H SAFE decode:
     // 不使用 -fflags nobuffer / -flags low_delay / analyzeduration 0，避免 iCATCH/Hi3520 串流
     // 還沒收到完整 SPS/PPS 或 GOP 就被 FFmpeg 立即解碼，造成藍綠屏、交叉畫面或色塊。
     // 延遲會略高於 V6.2F，但畫面穩定度優先。
@@ -436,7 +436,7 @@ function startContinuousFfmpegChannel(ch) {
       '-f', 'mjpeg',
       'pipe:1'
     ];
-    console.log(`[${id}] SAFE_STREAM start url=${mask(urlText)} fps=${STREAM_FPS} decoder=safe`);
+    console.log(`[${id}] SAFE_STREAM start url=${mask(urlText)} fps=${STREAM_FPS} decoder=safe-3fps-balance`);
     proc = spawn('ffmpeg', args, { windowsHide:true });
     let stderrTail = '';
     proc.stdout.on('data', d => {
