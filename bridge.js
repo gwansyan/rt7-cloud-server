@@ -1,4 +1,4 @@
-// RT7_V6_2C_ICATCH_STABLE_POLL_STREAM_FIX
+// RT7_V6_2D_ICATCH_VIDEO_LOSS_FILTER_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -19,8 +19,10 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+let jpegjs = null;
+try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2C_ICATCH_STABLE_POLL_STREAM_FIX';
+const VERSION = 'RT7_V6_2D_ICATCH_VIDEO_LOSS_FILTER_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -260,6 +262,34 @@ async function ffmpegOneJpeg(urlText, ch) {
   });
 }
 
+
+function rt7DetectVideoLossJpeg_(buf) {
+  // iCATCH DVR "VIDEO LOSS" frame is mostly saturated blue with black bars and white text.
+  // We filter it before upload, so Railway keeps the last real image instead of flashing VIDEO LOSS.
+  const out = { video_loss:false, reason:'', blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0 };
+  if (!jpegjs || !buf || buf.length < 128) return out;
+  let img;
+  try { img = jpegjs.decode(buf, { useTArray:true, maxMemoryUsageInMB:80 }); } catch (e) { out.reason='JPEG_DECODE_FAIL'; return out; }
+  const w = img.width || 0, h = img.height || 0, data = img.data;
+  if (!w || !h || !data) return out;
+  const step = Math.max(4, Math.floor(Math.min(w,h) / 48));
+  let n=0, blue=0, sr=0, sg=0, sb=0;
+  for (let y=0; y<h; y+=step) {
+    for (let x=0; x<w; x+=step) {
+      const i = (y*w + x) * 4;
+      const r = data[i] || 0, g = data[i+1] || 0, b = data[i+2] || 0;
+      // ignore near-black letterbox areas
+      if (r < 18 && g < 18 && b < 18) continue;
+      n++; sr += r; sg += g; sb += b;
+      if (b > 95 && b > r * 1.65 && b > g * 1.45 && r < 95 && g < 95) blue++;
+    }
+  }
+  if (n) { out.samples=n; out.blue_ratio=blue/n; out.avg_r=sr/n; out.avg_g=sg/n; out.avg_b=sb/n; }
+  out.video_loss = !!(n > 60 && out.blue_ratio > 0.48 && out.avg_b > 80 && out.avg_r < 95 && out.avg_g < 105);
+  if (out.video_loss) out.reason = 'BLUE_VIDEO_LOSS_FRAME';
+  return out;
+}
+
 function upload(ch, jpeg, source='icatch-net-video') {
   return new Promise(resolve => {
     if (!RAILWAY_URL) return resolve({ ok:false, error:'RAILWAY_URL_EMPTY' });
@@ -295,7 +325,12 @@ async function captureChannel(ch) {
     if (r.error) console.log(`[${padCh(ch)}] ffmpeg error: ${r.error.replace(/\r?\n/g, ' | ')}`);
     return r;
   }
-  const up = await upload(ch, r.jpeg, 'icatch-net-video-ffmpeg');
+  const vl = rt7DetectVideoLossJpeg_(r.jpeg);
+  if (vl.video_loss) {
+    console.log(`[${padCh(ch)}] frame=${r.jpeg.length} SKIP VIDEO_LOSS blue=${vl.blue_ratio.toFixed(2)} avgB=${vl.avg_b.toFixed(1)} keep_last_good=1`);
+    return Object.assign(r, { skipped:true, video_loss:vl });
+  }
+  const up = await upload(ch, r.jpeg, 'icatch-net-video-ffmpeg-videoloss-filter');
   console.log(`[${padCh(ch)}] frame=${r.jpeg.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${up.error||''}`);
   return Object.assign(r, { upload:up });
 }
@@ -315,7 +350,9 @@ async function testOne() {
   const r = await ffmpegOneJpeg(url, ch);
   if (r.ok) {
     fs.writeFileSync(TEST_OUT, r.jpeg);
-    console.log(`[TEST] JPEG saved: ${TEST_OUT} bytes=${r.jpeg.length}`);
+    const vl = rt7DetectVideoLossJpeg_(r.jpeg);
+    fs.writeFileSync(TEST_OUT, r.jpeg);
+    console.log(`[TEST] JPEG saved: ${TEST_OUT} bytes=${r.jpeg.length} video_loss=${vl.video_loss?'YES':'NO'} blue=${vl.blue_ratio ? vl.blue_ratio.toFixed(2) : '0.00'}`);
   } else {
     console.log(`[TEST] ffmpeg did not produce JPEG. code=${r.code} bytes=${r.bytes}`);
     if (r.error) console.log(r.error);
