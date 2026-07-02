@@ -1,4 +1,4 @@
-// RT7_V6_2B_ICATCH_SINGLE_SOURCE_STREAM_FIX
+// RT7_V6_2C_ICATCH_STABLE_POLL_STREAM_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -20,7 +20,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'RT7_V6_2B_ICATCH_SINGLE_SOURCE_STREAM_FIX';
+const VERSION = 'RT7_V6_2C_ICATCH_STABLE_POLL_STREAM_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -268,7 +268,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-RealtimeMJPEG/6.2A' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-StablePoll/6.2C', 'X-RT7-Single-Source':'CH01' },
       timeout:10000
     }, res => {
       const chunks=[];
