@@ -3652,7 +3652,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var src=rt7RxAudioCtx.createBufferSource(); src.buffer=buf; src.connect(rt7RxAudioCtx.destination);
       var wall=Date.now(); var dt=rt7RxLastMs?(wall-rt7RxLastMs):0; rt7RxLastMs=wall; if(dt>rt7RxJitterMaxMs)rt7RxJitterMaxMs=dt;
       var now=rt7RxAudioCtx.currentTime;
-      // V5.5C: fixed low-latency queue like the Node-RED player; do not let adaptive
+      // V5.5C: fixed safe-decode queue like the Node-RED player; do not let adaptive
       // cushion accumulate 0.1s+ tails that cause tremble/echo after speech ends.
       var cushion=0.02;
       if(!rt7RxPlayAt || rt7RxPlayAt<now+cushion) rt7RxPlayAt=now+cushion;
@@ -5414,7 +5414,7 @@ function reloadMjpeg(){const img=document.getElementById('img_CH01'); if(img){im
 function latestStill(){const img=document.getElementById('img_CH01'); if(img){img.src='/api/rt7/dvr/bridge/latest/CH01?still='+Date.now(); setS('STILL','ok');}}
 function single(id){location.href='/api/rt7/dvr/bridge/stream/'+encodeURIComponent(id)+'?fps=5&_='+Date.now();}
 async function ai(id){const r=await fetch('/api/rt7/dvr/ai/recognize/'+encodeURIComponent(id),{method:'POST'}).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); alert(JSON.stringify(r,null,2));}
-async function status(){const r=await fetch('/api/rt7/dvr/bridge/status?ts='+Date.now()).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); document.getElementById('log').textContent=JSON.stringify(r,null,2); const ch=(r.cameras||[]).find(c=>c.id==='CH01'); const m=document.getElementById('m_CH01'); if(ch && (ch.online || (ch.age_ms!=null && ch.age_ms<30000))){lastGoodAt=Date.now(); setS('ONLINE','ok'); if(m) m.textContent='串流狀態：ONLINE / bytes='+(ch.bytes||0)+' / age_ms='+(ch.age_ms||0)+' / low-latency';} else if(Date.now()-lastGoodAt>30000){setS('OFFLINE','bad'); if(m) m.textContent='30秒內沒有收到 Bridge 新影像，仍保留目前畫面：'+new Date().toLocaleTimeString();}}
+async function status(){const r=await fetch('/api/rt7/dvr/bridge/status?ts='+Date.now()).then(r=>r.json()).catch(e=>({ok:false,error:String(e)})); document.getElementById('log').textContent=JSON.stringify(r,null,2); const ch=(r.cameras||[]).find(c=>c.id==='CH01'); const m=document.getElementById('m_CH01'); if(ch && (ch.online || (ch.age_ms!=null && ch.age_ms<30000))){lastGoodAt=Date.now(); setS('ONLINE','ok'); if(m) m.textContent='串流狀態：ONLINE / bytes='+(ch.bytes||0)+' / age_ms='+(ch.age_ms||0)+' / safe-decode';} else if(Date.now()-lastGoodAt>30000){setS('OFFLINE','bad'); if(m) m.textContent='30秒內沒有收到 Bridge 新影像，仍保留目前畫面：'+new Date().toLocaleTimeString();}}
 status(); setInterval(status,3000);
 </script></body></html>`;
 }

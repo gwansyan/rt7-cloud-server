@@ -1,4 +1,4 @@
-// RT7_V6_2F_ICATCH_TRUE_STREAM_FFMPEG_FIX
+// RT7_V6_2G_ICATCH_SAFE_FFMPEG_DECODE_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -22,7 +22,7 @@ const path = require('path');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2F_ICATCH_TRUE_STREAM_FFMPEG_FIX';
+const VERSION = 'RT7_V6_2G_ICATCH_SAFE_FFMPEG_DECODE_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -36,7 +36,9 @@ const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
 const CHANNELS = String(process.env.DVR_CHANNELS || '1').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
 const INTERVAL_MS = Math.max(200, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
 const TRUE_STREAM_MODE = String(process.env.TRUE_STREAM_MODE || '1').trim() !== '0';
-const STREAM_FPS = Math.max(1, Math.min(10, parseInt(process.env.STREAM_FPS || '6', 10) || 4));
+// V6.2G: V6.2F 的 nobuffer/low_delay 會讓 iCATCH Hi3520 octet-stream 偶發解碼錯位，手機出現藍綠屏。
+// 改回安全解碼，預設 4 FPS；若穩定後可在 BAT 改 STREAM_FPS=5。
+const STREAM_FPS = Math.max(1, Math.min(8, parseInt(process.env.STREAM_FPS || '4', 10) || 4));
 const UPLOAD_MIN_INTERVAL_MS = Math.max(100, parseInt(process.env.UPLOAD_MIN_INTERVAL_MS || String(Math.floor(1000 / STREAM_FPS)), 10) || Math.floor(1000 / STREAM_FPS));
 const FFMPEG_TIMEOUT_MS = Math.max(2500, parseInt(process.env.FFMPEG_TIMEOUT_MS || '10000', 10) || 10000);
 const DEBUG = String(process.env.DEBUG || '').trim() === '1';
@@ -187,7 +189,7 @@ async function httpProbe(urlText, timeoutMs=5000) {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-RealtimeMJPEG/6.2A' });
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-SafeDecode/6.2G' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       const chunks = [];
       res.on('data', d => {
@@ -301,7 +303,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-StablePoll/6.2C', 'X-RT7-Single-Source':'CH01' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-SafeDecode/6.2G', 'X-RT7-Single-Source':'CH01' },
       timeout:10000
     }, res => {
       const chunks=[];
@@ -401,7 +403,7 @@ function startContinuousFfmpegChannel(ch) {
     lastUploadAt = now;
     uploadBusy = true;
     try {
-      const up = await upload(ch, frame, 'icatch-net-video-true-stream-v62e');
+      const up = await upload(ch, frame, 'icatch-net-video-safe-decode-v62g');
       frameCount++;
       console.log(`[${id}] stream frame=${frame.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
     } finally {
@@ -417,25 +419,24 @@ function startContinuousFfmpegChannel(ch) {
   async function spawnLoop() {
     if (stopping) return;
     const videoHeaders = await getVideoHeaders();
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2E', 'Connection':'keep-alive' }));
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2G', 'Connection':'keep-alive' }));
+    // V6.2G SAFE decode:
+    // 不使用 -fflags nobuffer / -flags low_delay / analyzeduration 0，避免 iCATCH/Hi3520 串流
+    // 還沒收到完整 SPS/PPS 或 GOP 就被 FFmpeg 立即解碼，造成藍綠屏、交叉畫面或色塊。
+    // 延遲會略高於 V6.2F，但畫面穩定度優先。
     const args = [
       '-hide_banner', '-nostdin',
       '-loglevel', DEBUG ? 'info' : 'error',
-      '-fflags', 'nobuffer',
-      '-flags', 'low_delay',
-      '-analyzeduration', '0',
-      '-probesize', '32768',
       '-headers', headerText,
-      '-rw_timeout', String(Math.max(5000000, FFMPEG_TIMEOUT_MS * 1000)),
+      '-rw_timeout', String(Math.max(8000000, FFMPEG_TIMEOUT_MS * 1000)),
       '-i', urlText,
       '-an',
       '-vf', `fps=${STREAM_FPS}`,
-      '-q:v', '4',
-      '-flush_packets', '1',
+      '-q:v', '5',
       '-f', 'mjpeg',
       'pipe:1'
     ];
-    console.log(`[${id}] TRUE_STREAM start url=${mask(urlText)} fps=${STREAM_FPS}`);
+    console.log(`[${id}] SAFE_STREAM start url=${mask(urlText)} fps=${STREAM_FPS} decoder=safe`);
     proc = spawn('ffmpeg', args, { windowsHide:true });
     let stderrTail = '';
     proc.stdout.on('data', d => {
