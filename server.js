@@ -181,7 +181,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_9B_DVR_SOCATCH_MULTI_CAMERA_AI_GATE';
+const SERVER_VERSION = 'RT7_CLOUD_SERVER_V5_9D_DVR_BRIDGE_RUN_FIX';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -5017,7 +5017,7 @@ app.get('/rt7_gpio_control', (req,res)=>{
 });
 
 
-// ---------------- V5.9C DVR / SoCatch Multi-Camera AI Gate + LAN Bridge ----------------
+// ---------------- V5.9D DVR / SoCatch Multi-Camera AI Gate + LAN Bridge RUN FIX ----------------
 // 目的：整合社區 DVR 主機（例如 SoCatch 可連線的 192.168.0.123:80）
 // 說明：Railway 雲端無法直接連到 192.168.x.x 內網 DVR；
 //       本模組提供：1) 同 LAN/本機部署時的 server proxy，2) 手機瀏覽器直連顯示模式，
@@ -5254,7 +5254,7 @@ function rt7DvrPage_() {
   </div>`).join('');
   const rows = cams.map(c => `<tr data-id="${esc(c.id)}"><td>${esc(c.id)}</td><td><input name="name" value="${esc(c.name||'')}"></td><td><input name="dvr_host" value="${esc(c.dvr_host||'')}"></td><td><input name="dvr_port" value="${esc(c.dvr_port||'80')}"></td><td><input name="username" value="${esc(c.username||'admin')}"></td><td><input name="password" value="${esc(c.password||'')}" placeholder="密碼"></td><td><input name="channel" value="${esc(c.channel||'1')}"></td><td><input name="snapshot_url" value="${esc(c.snapshot_url||'')}" placeholder="可空白，按偵測自動帶入"></td><td><button onclick="rt7SaveRow('${esc(c.id)}')">儲存</button></td></tr>`).join('');
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 DVR 多攝影機 AI 門禁平台</title><style>
-body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:white;padding:14px;display:flex;align-items:center;gap:10px}.top h1{font-size:20px;margin:0;flex:1}.top a{color:white;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:1180px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.cam{background:white;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.view img.err{display:none}.meta{font-size:12px;color:#64748b;margin:7px 0}.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:9px 8px}button:nth-child(3){background:#16a34a}button:nth-child(4){background:#475569}.card{background:white;border-radius:16px;padding:12px;margin-top:12px;overflow:auto}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{border-bottom:1px solid #e5edf2;padding:8px;text-align:left}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}.btns{grid-template-columns:repeat(2,1fr)}} </style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 多攝影機 AI 門禁平台（DVR / SoCatch / LAN Bridge）</h1><a href="/api/rt7/dvr/bridge/status">Bridge</a><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap">
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:white;padding:14px;display:flex;align-items:center;gap:10px}.top h1{font-size:20px;margin:0;flex:1}.top a{color:white;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.wrap{max-width:1180px;margin:0 auto;padding:14px}.notice{background:#fff6cc;border-left:6px solid #f59e0b;border-radius:12px;padding:12px;margin-bottom:12px;line-height:1.55}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.cam{background:white;border-radius:16px;padding:10px;box-shadow:0 4px 16px #0002}.camTop{display:flex;justify-content:space-between;margin-bottom:7px}.ok{color:#0a8f45;font-weight:900}.bad{color:#c62828;font-weight:900}.view{background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}.view img{width:100%;height:100%;object-fit:contain}.view img.err{display:none}.meta{font-size:12px;color:#64748b;margin:7px 0}.btns{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}button{border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:900;padding:9px 8px}button:nth-child(3){background:#16a34a}button:nth-child(4){background:#475569}.card{background:white;border-radius:16px;padding:12px;margin-top:12px;overflow:auto}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{border-bottom:1px solid #e5edf2;padding:8px;text-align:left}input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px}.log{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:10px;max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}@media(max-width:760px){.grid{grid-template-columns:1fr}.top h1{font-size:17px}.btns{grid-template-columns:repeat(2,1fr)}} </style></head><body><div class="top"><a href="/rt7_cloud_original_ui_doorbell">← 主頁</a><h1>RT7 多攝影機 AI 門禁平台（DVR / SoCatch / Bridge）</h1><a href="/rt7_dvr_bridge_setup">Bridge教學</a><a href="/api/rt7/dvr/bridge/status">Bridge JSON</a><a href="/api/rt7/dvr/cameras">JSON</a></div><div class="wrap">
 <div class="notice"><b>連線修正重點：</b>SoCatch 手機 App 能連到 DVR（圖中 admin@192.168.0.123:80），代表手機在同一個內網可看影像；但 Railway 雲端通常不能直接連到 192.168.0.123。此頁提供「DVR HTTP Snapshot 偵測」與「RT7 LAN Bridge」。你目前手機瀏覽器直接開 192.168.0.123 顯示 ERR_EMPTY_RESPONSE，表示 DVR 的 80 port 不是一般網頁/圖片服務；SoCatch App 可能使用專用協定或 RTSP。因此正式修正方式是：在同一內網電腦/主機執行 bridge.js，將 CH01~CH04 JPEG 主動上傳到 Railway，再由 Railway 做 AI 辨識。</div>
 <div class="grid">${cards}</div>
 <div class="card"><h2>DVR 攝影機設定</h2><table><thead><tr><th>ID</th><th>名稱</th><th>DVR IP</th><th>Port</th><th>User</th><th>Password</th><th>CH</th><th>Snapshot URL / Template</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -5276,12 +5276,20 @@ async function rt7AiCam(id){
   alert(r.ok ? ('AI結果：'+(r.message||r.result||'OK')) : ('AI失敗：'+(r.error||r.hint||'unknown')));
 }
 function rt7BridgeInfo(id){
-  alert('手機直連 192.168.0.123 顯示 ERR_EMPTY_RESPONSE，表示 DVR 不是一般網頁。請在同一內網執行 bridge.js，Bridge 會把 '+id+' 的 JPEG 主動上傳到 Railway。');
-  fetchBridgeStatus();
+  fetchBridgeStatus().then(()=>{
+    const b = document.getElementById('bridge').textContent || '';
+    if(b.indexOf('NO_BRIDGE_FRAME') >= 0){
+      alert('目前 Railway 尚未收到 '+id+' 的 Bridge 影像。\n\n請在與 DVR 同一內網的電腦執行：RUN_BRIDGE_WINDOWS.bat 或 node bridge.js。\n\nBridge 會用 FFmpeg 從 DVR RTSP 擷取 JPEG，再主動上傳到 Railway。');
+    } else {
+      rt7RefreshCam(id);
+      alert('已重新讀取 '+id+' Bridge 最新影像。');
+    }
+  });
 }
 async function fetchBridgeStatus(){
   const r=await fetch('/api/rt7/dvr/bridge/status').then(r=>r.json()).catch(e=>({ok:false,error:String(e)}));
   document.getElementById('bridge').textContent=JSON.stringify(r,null,2);
+  return r;
 }
 fetchBridgeStatus();
 setInterval(fetchBridgeStatus, 5000);
@@ -5295,6 +5303,26 @@ async function rt7SaveRow(id){
 setInterval(()=>{ CAMS.forEach(c=>rt7RefreshCam(c.id)); }, 5000);
 </script></body></html>`;
 }
+
+
+function rt7DvrBridgeSetupPage_() {
+  const esc = (v) => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const railway = process.env.RAILWAY_PUBLIC_URL || process.env.RAILWAY_URL || '';
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>RT7 DVR Bridge 教學</title><style>
+body{margin:0;background:#071f25;color:#10212b;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.top{background:#082b32;color:white;padding:14px;display:flex;gap:10px;align-items:center}.top a{color:white;background:#294653;border-radius:10px;padding:9px 12px;text-decoration:none;font-weight:900}.top h1{font-size:20px;margin:0;flex:1}.wrap{max-width:920px;margin:0 auto;padding:14px}.card{background:white;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 4px 16px #0002}.warn{background:#fff6cc;border-left:7px solid #f59e0b}.ok{background:#e8ffe8;border-left:7px solid #16a34a}pre{white-space:pre-wrap;background:#0f172a;color:#d9f99d;border-radius:12px;padding:12px;overflow:auto}code{background:#eef4f7;border-radius:6px;padding:2px 5px}.btn{display:inline-block;background:#0ea5e9;color:white;text-decoration:none;border-radius:10px;padding:11px 14px;font-weight:900;margin:4px 4px 4px 0}</style></head><body><div class="top"><a href="/rt7_dvr_ai_platform">← DVR平台</a><h1>RT7 DVR LAN Bridge 啟動教學</h1><a href="/api/rt7/dvr/bridge/status">狀態JSON</a></div><div class="wrap">
+<div class="card warn"><h2>為什麼按 Bridge 沒有影像？</h2><p>目前狀態 <code>NO_BRIDGE_FRAME</code> 代表 Railway 還沒有收到任何 CH01~CH04 的 JPEG。按網頁上的 Bridge 按鈕不會讓 Railway 自己連進 192.168.0.123，因為 192.168.0.123 是你社區內網 DVR。</p><p>正確方式是：在與 DVR 同一個內網的 Windows 電腦 / 小主機執行 <b>bridge.js</b>，由 Bridge 主動把影像上傳到 Railway。</p></div>
+<div class="card"><h2>Windows 快速啟動</h2><ol><li>在同一個網路的電腦安裝 Node.js。</li><li>安裝 FFmpeg，並確認命令列輸入 <code>ffmpeg -version</code> 有回應。</li><li>解壓縮本版本 ZIP。</li><li>編輯 <code>RUN_BRIDGE_WINDOWS.bat</code>，把 RAILWAY_URL 改成你的 Railway 網址。</li><li>雙擊執行 <code>RUN_BRIDGE_WINDOWS.bat</code>。</li></ol><pre>set RAILWAY_URL=https://你的-railway.up.railway.app
+set DVR_HOST=192.168.0.123
+set DVR_USER=admin
+set DVR_PASS=
+set DVR_CHANNELS=1,2,3,4
+node bridge.js</pre></div>
+<div class="card ok"><h2>成功時會看到</h2><pre>[CH1] jpeg=35421 upload=OK status=200
+[CH2] jpeg=32880 upload=OK status=200</pre><p>然後回到 <a class="btn" href="/rt7_dvr_ai_platform">DVR 平台</a>，Bridge 狀態會從 <code>NO_BRIDGE_FRAME</code> 變成 <code>online:true</code>，黑色畫面會出現 DVR 影像。</p></div>
+<div class="card"><h2>如果 FFmpeg 找不到 RTSP</h2><p>請在 SoCatch / DVR 設定中確認 RTSP 是否啟用，常見 port 是 <code>554</code>。如果 DVR 使用特殊協定，請提供 DVR 品牌/型號，或提供 SoCatch 內的串流/RTSP 設定畫面。</p></div>
+</div></body></html>`;
+}
+app.get('/rt7_dvr_bridge_setup', rt7RequireLogin_, (req,res) => res.type('html').send(rt7DvrBridgeSetupPage_()));
 
 app.get('/rt7_dvr_ai_platform', rt7RequireLogin_, (req,res) => res.type('html').send(rt7DvrPage_()));
 
