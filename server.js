@@ -1,7 +1,7 @@
 'use strict';
 
 /*
-  RT7_V6_4C_DIRECT_SOCKET_RELAY_HTTP_TERMINATOR_FIX
+  RT7_V6_4D_DIRECT_SOCKET_RELAY_DELAYED_MULTIPART_HEADER_FIX
   目的：不再用 latest.jpg / poll / jpeg-js / FFmpeg decode。
   Node 只做 HTTP socket relay：DVR net_video.cgi -> 手機瀏覽器。
 
@@ -13,7 +13,7 @@ const http = require('http');
 const net = require('net');
 const os = require('os');
 
-const VERSION = 'RT7_V6_4C_DIRECT_SOCKET_RELAY_HTTP_TERMINATOR_FIX';
+const VERSION = 'RT7_V6_4D_DIRECT_SOCKET_RELAY_DELAYED_MULTIPART_HEADER_FIX';
 const PORT = Number(process.env.LOCAL_PORT || process.env.PORT || 8787);
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_HTTP_PORT = Number(process.env.DVR_HTTP_PORT || 80);
@@ -150,7 +150,7 @@ function sendDvrGetSocket(res, ch = DVR_CHANNEL) {
       `Authorization: ${authHeader()}`,
       `Magic: ${MAGIC}`,
       sessionCookie ? `Cookie: ${sessionCookie}` : '',
-      'User-Agent: RT7-V6.4C-SocketRelay',
+      'User-Agent: RT7-V6.4D-SocketRelay',
       'Accept: multipart/x-mixed-replace,image/jpeg,*/*',
       'Connection: close',
       '',
@@ -230,11 +230,11 @@ function htmlPage() {
   const base = `http://${host}:${PORT}`;
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RT7 V6.4C Direct Socket Relay</title>
+<title>RT7 V6.4D Direct Socket Relay</title>
 <style>
 body{margin:0;background:#06242a;color:#fff;font-family:Arial,'Microsoft JhengHei',sans-serif}.wrap{max-width:760px;margin:auto;padding:32px 22px}h1{font-size:44px;line-height:1.12}.card{background:#fff;color:#123;border-radius:24px;padding:22px;margin:20px 0}.video{width:100%;border-radius:18px;background:#000}.btn{display:inline-block;background:#11aee8;color:#fff;padding:14px 18px;border-radius:12px;margin:8px;text-decoration:none;font-weight:700}.muted{color:#607080;font-size:15px;line-height:1.6}code{font-size:16px}
 </style></head><body><div class="wrap">
-<h1>RT7 V6.4C<br>Direct Socket Relay</h1>
+<h1>RT7 V6.4D<br>Direct Socket Relay</h1>
 <div class="card"><b>LAN Bridge：</b>${base}<br><b>Socket Relay：</b>/relay/CH01.mjpg<br><span class="muted">本版修正 HTTP GET 結尾 CRLF，避免 DVR 等不到完整 request 而 timeout；Node 不經 FFmpeg、不寫 latest.jpg，只把 DVR HTTP 串流直接轉送給手機。</span></div>
 <div class="card"><img id="v" class="video" src="/relay/CH01.mjpg?ts=${Date.now()}" onerror="document.getElementById('st').textContent='MJPEG_ERROR：請按重連，或改用 /status 檢查 Bridge。'">
 <p id="st" class="muted">若 DVR 輸出 VIDEO LOSS，本版會直接顯示，這是低延遲 relay 的正常現象。</p>
@@ -278,7 +278,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(`RT7 V6.4C 404\n/direct\n/status\n/relay/CH01.mjpg\n`);
+  res.end(`RT7 V6.4D 404\n/direct\n/status\n/relay/CH01.mjpg\n`);
 });
 
 server.on('clientError', (err, socket) => {
