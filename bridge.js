@@ -1,4 +1,4 @@
-// RT7_V6_2N_ICATCH_FFMPEG_BLUE_FRAME_FILTER_FIX
+// RT7_V6_2O_ICATCH_DROP_OLD_FRAME_LOW_LATENCY_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -14,7 +14,7 @@
 //
 // 若 ffmpeg 無法解析，代表 iCATCH octet-stream 有私有封包頭，下一版需加入 depacketizer。
 
-const { spawn, execFile, spawnSync } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -23,7 +23,7 @@ const os = require('os');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2N_ICATCH_FFMPEG_BLUE_FRAME_FILTER_FIX';
+const VERSION = 'RT7_V6_2O_ICATCH_DROP_OLD_FRAME_LOW_LATENCY_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -54,6 +54,11 @@ const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d6
 // V6.2L: fallback VIDEO LOSS filter. Blue VIDEO LOSS frames from this DVR are much smaller
 // than real CH01 frames in your tests (~7KB vs 11~26KB). This works even if jpeg-js is not installed.
 const MIN_REAL_JPEG_BYTES = Math.max(0, parseInt(process.env.MIN_REAL_JPEG_BYTES || '9000', 10) || 0);
+// V6.2O: low latency policy. Do not run heavy RGB/JPEG analysis on every frame.
+// Keep only newest frame and reject sudden small frames after a good frame (usually blue VIDEO LOSS).
+const DROP_OLD_FRAME_MODE = String(process.env.DROP_OLD_FRAME_MODE || '1').trim() !== '0';
+const VIDEOLOSS_DROP_RATIO = Math.max(0.30, Math.min(0.95, parseFloat(process.env.VIDEOLOSS_DROP_RATIO || '0.72') || 0.72));
+const LOCAL_KEEP_ALIVE_MS = Math.max(3000, parseInt(process.env.LOCAL_KEEP_ALIVE_MS || '30000', 10) || 30000);
 
 // V6.2I Direct LAN View: 在 Bridge 電腦本機也提供最新 JPEG / MJPEG，
 // 手機與 Bridge 電腦同一 LAN 時可直接連，避開 Railway 中轉降低延遲。
@@ -84,7 +89,7 @@ function rememberLocalFrame(ch, jpeg) {
 }
 function localFrameStatus() {
   return Object.keys(LOCAL_LATEST).sort().map(id => ({
-    id, online: Date.now() - LOCAL_LATEST[id].ts < 10000,
+    id, online: Date.now() - LOCAL_LATEST[id].ts < LOCAL_KEEP_ALIVE_MS,
     age_ms: Date.now() - LOCAL_LATEST[id].ts,
     seq: LOCAL_LATEST[id].seq,
     bytes: LOCAL_LATEST[id].bytes
@@ -101,7 +106,7 @@ function startLocalLanServer() {
     if (u.pathname === '/' || u.pathname === '/direct') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       const host = LOCAL_PUBLIC_HOST || req.headers.host || ('127.0.0.1:' + LOCAL_HTTP_PORT);
-      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2N Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway，延遲最低。V6.2N 使用 FFmpeg 取樣藍底過濾，不需 jpeg-js。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
+      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2O Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway；V6.2O 丟棄舊 frame，優先降低延遲。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
     }
     if (u.pathname === '/direct-mjpeg') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -371,116 +376,53 @@ async function ffmpegOneJpeg(urlText, ch) {
 
 
 function rt7DetectVideoLossJpeg_(buf) {
-  // V6.2M strict VIDEO LOSS reject.
-  // The iCATCH DVR blue screen can be 7KB~16KB, so size alone is not enough.
-  // Detect the large saturated-blue center area and reject it before saving LOCAL_LATEST.
-  const out = { video_loss:false, reason:'', blue_ratio:0, center_blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0, center_samples:0 };
+  // V6.2O: Disabled by default to avoid 8~10s delay from CPU-heavy JPEG/RGB analysis.
+  // Keep this hook only for optional debug.
+  const out = { video_loss:false, reason:'', blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0 };
+  if (String(process.env.ENABLE_RGB_VIDEOLOSS_FILTER || '').trim() !== '1') return out;
   if (!jpegjs || !buf || buf.length < 128) return out;
   let img;
-  try { img = jpegjs.decode(buf, { useTArray:true, maxMemoryUsageInMB:96 }); } catch (e) { out.reason='JPEG_DECODE_FAIL'; return out; }
+  try { img = jpegjs.decode(buf, { useTArray:true, maxMemoryUsageInMB:64 }); } catch (e) { out.reason='JPEG_DECODE_FAIL'; return out; }
   const w = img.width || 0, h = img.height || 0, data = img.data;
   if (!w || !h || !data) return out;
-
-  const step = Math.max(3, Math.floor(Math.min(w,h) / 64));
-  const x1 = Math.floor(w * 0.08), x2 = Math.floor(w * 0.92);
-  const y1 = Math.floor(h * 0.18), y2 = Math.floor(h * 0.82);
-  let n=0, blue=0, cn=0, cblue=0, sr=0, sg=0, sb=0;
-
-  function isBlue(r,g,b) {
-    // Covers pure DVR blue plus JPEG-compressed blue/purple blocks.
-    return b > 75 && b > r + 28 && b > g + 20 && b > r * 1.35 && b > g * 1.18;
-  }
-
-  for (let y=0; y<h; y+=step) {
-    for (let x=0; x<w; x+=step) {
-      const i = (y*w + x) * 4;
-      const r = data[i] || 0, g = data[i+1] || 0, b = data[i+2] || 0;
-      // ignore black letterbox only; count white VIDEO LOSS text as non-blue.
-      if (r < 16 && g < 16 && b < 16) continue;
-      n++; sr += r; sg += g; sb += b;
-      const ib = isBlue(r,g,b);
-      if (ib) blue++;
-      if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
-        cn++;
-        if (ib) cblue++;
-      }
-    }
+  // Fast sparse sampling only. Do not scan full image.
+  const xs = [0.20,0.35,0.50,0.65,0.80].map(v=>Math.max(0,Math.min(w-1,Math.floor(w*v))));
+  const ys = [0.25,0.40,0.55,0.70].map(v=>Math.max(0,Math.min(h-1,Math.floor(h*v))));
+  let n=0, blue=0, sr=0, sg=0, sb=0;
+  for (const y of ys) for (const x of xs) {
+    const i = (y*w + x) * 4;
+    const r = data[i] || 0, g = data[i+1] || 0, b = data[i+2] || 0;
+    if (r < 18 && g < 18 && b < 18) continue;
+    n++; sr += r; sg += g; sb += b;
+    if (b > 105 && b > r * 1.55 && b > g * 1.35 && r < 120 && g < 130) blue++;
   }
   if (n) { out.samples=n; out.blue_ratio=blue/n; out.avg_r=sr/n; out.avg_g=sg/n; out.avg_b=sb/n; }
-  if (cn) { out.center_samples=cn; out.center_blue_ratio=cblue/cn; }
-
-  out.video_loss = !!(n > 60 && (
-    // Most reliable: the central view area is mostly saturated blue.
-    out.center_blue_ratio > 0.46 ||
-    // Fallback: overall image strongly blue-dominant.
-    (out.blue_ratio > 0.36 && out.avg_b > 78 && out.avg_b > out.avg_r * 1.22 && out.avg_b > out.avg_g * 1.12) ||
-    // Small blue frames are usually VIDEO LOSS from this DVR.
-    (buf.length < 17500 && out.center_blue_ratio > 0.30 && out.avg_b > 80)
-  ));
-  if (out.video_loss) out.reason = 'STRICT_BLUE_VIDEO_LOSS_FRAME';
-  return out;
-}
-
-
-function rt7DetectBlueWithFfmpeg_(buf) {
-  // Dependency-free fallback: use ffmpeg to decode the JPEG into a tiny RGB frame,
-  // then measure saturated blue area. This fixes cases where jpeg-js is not installed
-  // and blue VIDEO LOSS frames were incorrectly saved as latest frame.
-  const out = { video_loss:false, reason:'', blue_ratio:0, center_blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0, center_samples:0, method:'ffmpeg' };
-  if (!Buffer.isBuffer(buf) || buf.length < 128) return out;
-  let r;
-  try {
-    r = spawnSync('ffmpeg', [
-      '-hide_banner','-nostdin','-loglevel','error',
-      '-i','pipe:0',
-      '-vf','scale=40:24',
-      '-f','rawvideo','-pix_fmt','rgb24','pipe:1'
-    ], { input: buf, encoding: null, maxBuffer: 1024*1024, windowsHide:true, timeout:1200 });
-  } catch (e) { out.reason='FFMPEG_BLUE_DETECT_FAIL'; return out; }
-  if (!r || r.status !== 0 || !r.stdout || r.stdout.length < 40*24*3) { out.reason='FFMPEG_BLUE_DETECT_NO_RGB'; return out; }
-  const w=40, h=24, data=r.stdout;
-  let n=0, blue=0, cn=0, cblue=0, sr=0, sg=0, sb=0;
-  function isBlue(rr,gg,bb) {
-    return bb > 70 && bb > rr + 22 && bb > gg + 14 && bb > rr * 1.22 && bb > gg * 1.10;
-  }
-  const x1=4, x2=36, y1=4, y2=20;
-  for (let y=0; y<h; y++) {
-    for (let x=0; x<w; x++) {
-      const i=(y*w+x)*3;
-      const rr=data[i]||0, gg=data[i+1]||0, bb=data[i+2]||0;
-      if (rr < 14 && gg < 14 && bb < 14) continue; // ignore black bars
-      n++; sr += rr; sg += gg; sb += bb;
-      const ib = isBlue(rr,gg,bb);
-      if (ib) blue++;
-      if (x>=x1 && x<=x2 && y>=y1 && y<=y2) { cn++; if (ib) cblue++; }
-    }
-  }
-  if (n) { out.samples=n; out.blue_ratio=blue/n; out.avg_r=sr/n; out.avg_g=sg/n; out.avg_b=sb/n; }
-  if (cn) { out.center_samples=cn; out.center_blue_ratio=cblue/cn; }
-  // The DVR VIDEO LOSS frame is a large saturated blue rectangle with white text.
-  // Real CH01 frames in the user's test are mostly white/grey, not blue-dominant.
-  out.video_loss = !!(n > 60 && (
-    out.center_blue_ratio > 0.28 ||
-    out.blue_ratio > 0.24 ||
-    (out.avg_b > 80 && out.avg_b > out.avg_r * 1.18 && out.avg_b > out.avg_g * 1.08)
-  ));
-  if (out.video_loss) out.reason = 'FFMPEG_BLUE_VIDEO_LOSS_FRAME';
+  out.video_loss = !!(n >= 8 && out.blue_ratio > 0.65 && out.avg_b > 100 && out.avg_b > out.avg_r * 1.35);
+  if (out.video_loss) out.reason = 'FAST_BLUE_VIDEO_LOSS_FRAME';
   return out;
 }
 
 function shouldSkipFrame(ch, frame, whyPrefix) {
   const id = padCh(ch);
-  const hasGood = !!(LOCAL_LATEST[id] && LOCAL_LATEST[id].jpeg);
-  if (MIN_REAL_JPEG_BYTES && frame && frame.length < MIN_REAL_JPEG_BYTES) {
-    // Only skip tiny frames after at least one valid real frame exists, so startup can still recover.
+  const last = LOCAL_LATEST[id];
+  const hasGood = !!(last && last.jpeg);
+  if (!frame || !frame.length) return { skip:true, reason:'EMPTY_FRAME', detail:'' };
+
+  // Startup guard: accept the first valid JPEG unless it is extremely tiny.
+  if (MIN_REAL_JPEG_BYTES && frame.length < MIN_REAL_JPEG_BYTES) {
     if (hasGood) return { skip:true, reason:'SMALL_FRAME_KEEP_LAST_GOOD', detail:'bytes=' + frame.length + ' min=' + MIN_REAL_JPEG_BYTES };
   }
-  let vl = rt7DetectVideoLossJpeg_(frame);
-  if (!vl.video_loss) {
-    const ffvl = rt7DetectBlueWithFfmpeg_(frame);
-    if (ffvl.video_loss) vl = ffvl;
+
+  // V6.2O: lightweight VIDEO LOSS rejection.
+  // Your DVR blue VIDEO LOSS frames are usually much smaller than real CH01 frames.
+  // If a frame suddenly drops below last good frame size ratio, skip it and keep last normal image.
+  if (hasGood && last.bytes && frame.length < Math.floor(last.bytes * VIDEOLOSS_DROP_RATIO)) {
+    return { skip:true, reason:'SIZE_DROP_KEEP_LAST_GOOD', detail:'bytes=' + frame.length + ' last=' + last.bytes + ' ratio=' + VIDEOLOSS_DROP_RATIO };
   }
-  if (vl.video_loss) return { skip:true, reason:vl.reason || 'VIDEO_LOSS', detail:'blue=' + (vl.blue_ratio||0).toFixed(2) + ' center=' + (vl.center_blue_ratio||0).toFixed(2) + ' avgB=' + (vl.avg_b||0).toFixed(1) };
+
+  // Optional fast RGB filter only when explicitly enabled; default off for low latency.
+  const vl = rt7DetectVideoLossJpeg_(frame);
+  if (vl.video_loss) return { skip:true, reason:vl.reason || 'VIDEO_LOSS', detail:'blue=' + (vl.blue_ratio||0).toFixed(2) + ' avgB=' + (vl.avg_b||0).toFixed(1) };
   return { skip:false, detail:'ok' };
 }
 
@@ -575,48 +517,48 @@ function startContinuousFfmpegChannel(ch) {
   let proc = null;
   let stopping = false;
   let buffer = Buffer.alloc(0);
+  let latestFrame = null;
+  let latestFrameSeq = 0;
+  let consumedSeq = 0;
   let uploadBusy = false;
-  let pendingFrame = null;
-  let lastUploadAt = 0;
   let frameCount = 0;
+  let skipCount = 0;
   let restartCount = 0;
+  let timer = null;
 
-  async function uploadFrame(frame) {
+  async function consumeNewestFrame() {
+    if (stopping) return;
+    if (!latestFrame || consumedSeq === latestFrameSeq) return;
+    const frame = latestFrame;
+    consumedSeq = latestFrameSeq;
+
     const skip = shouldSkipFrame(ch, frame);
     if (skip.skip) {
-      console.log(`[${id}] stream SKIP ${skip.reason} ${skip.detail} keep_last_good=1`);
+      skipCount++;
+      if (skipCount % 1 === 0) console.log(`[${id}] DROP ${skip.reason} ${skip.detail} keep_last_good=1 dropped=${skipCount}`);
       return;
     }
-    const now = Date.now();
-    if (now - lastUploadAt < UPLOAD_MIN_INTERVAL_MS) {
-      pendingFrame = frame;
-      return;
-    }
-    lastUploadAt = now;
-    uploadBusy = true;
-    try {
-      rememberLocalFrame(ch, frame);
-      const up = await upload(ch, frame, 'icatch-direct-lan-view-v62n');
-      frameCount++;
-      console.log(`[${id}] stream frame=${frame.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
-    } finally {
-      uploadBusy = false;
-      if (pendingFrame) {
-        const next = pendingFrame;
-        pendingFrame = null;
-        setImmediate(() => uploadFrame(next));
-      }
+
+    // Local LAN display updates immediately, independent from Railway upload.
+    rememberLocalFrame(ch, frame);
+    frameCount++;
+
+    // Upload only latest frame. If an upload is still running, skip upload for this frame.
+    if (!uploadBusy && RAILWAY_URL) {
+      uploadBusy = true;
+      upload(ch, frame, 'icatch-drop-old-low-latency-v62o').then(up => {
+        console.log(`[${id}] frame=${frame.length} local=OK upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
+      }).finally(() => { uploadBusy = false; });
+    } else {
+      if (frameCount % STREAM_FPS === 0) console.log(`[${id}] frame=${frame.length} local=OK upload=${RAILWAY_URL?'SKIP_BUSY':'OFF'} fps=${STREAM_FPS} n=${frameCount}`);
     }
   }
 
   async function spawnLoop() {
     if (stopping) return;
     const videoHeaders = await getVideoHeaders();
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2H', 'Connection':'keep-alive' }));
-    // V6.2H SAFE decode:
-    // 不使用 -fflags nobuffer / -flags low_delay / analyzeduration 0，避免 iCATCH/Hi3520 串流
-    // 還沒收到完整 SPS/PPS 或 GOP 就被 FFmpeg 立即解碼，造成藍綠屏、交叉畫面或色塊。
-    // 延遲會略高於 V6.2F，但畫面穩定度優先。
+    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2O', 'Connection':'keep-alive' }));
+    // V6.2O: safe decode, but drop old frames in Node. Avoid nobuffer/low_delay blue-green artifacts.
     const args = [
       '-hide_banner', '-nostdin',
       '-loglevel', DEBUG ? 'info' : 'error',
@@ -629,36 +571,39 @@ function startContinuousFfmpegChannel(ch) {
       '-f', 'mjpeg',
       'pipe:1'
     ];
-    console.log(`[${id}] SAFE_STREAM start url=${mask(urlText)} fps=${STREAM_FPS} decoder=safe-3fps-balance`);
+    console.log(`[${id}] DROP_OLD_STREAM start url=${mask(urlText)} fps=${STREAM_FPS} decoder=safe drop_old=1 ratio=${VIDEOLOSS_DROP_RATIO}`);
     proc = spawn('ffmpeg', args, { windowsHide:true });
     let stderrTail = '';
     proc.stdout.on('data', d => {
       buffer = Buffer.concat([buffer, d]);
-      if (buffer.length > 4 * 1024 * 1024) buffer = buffer.slice(-1024 * 1024);
+      if (buffer.length > 2 * 1024 * 1024) buffer = buffer.slice(-512 * 1024);
       while (true) {
         const r = findNextJpegFrame(buffer);
         buffer = r.rest;
         if (!r.frame) break;
-        if (!uploadBusy) uploadFrame(r.frame);
-        else pendingFrame = r.frame;
+        // Critical: overwrite, never queue. This removes accumulated delay.
+        latestFrame = r.frame;
+        latestFrameSeq++;
       }
     });
     proc.stderr.on('data', d => { stderrTail = (stderrTail + d.toString('utf8')).slice(-1000); });
     proc.on('close', code => {
       if (stopping) return;
       restartCount++;
-      console.log(`[${id}] TRUE_STREAM ffmpeg closed code=${code} restart=${restartCount} ${stderrTail.replace(/\r?\n/g,' | ')}`);
+      console.log(`[${id}] DROP_OLD_STREAM ffmpeg closed code=${code} restart=${restartCount} ${stderrTail.replace(/\r?\n/g,' | ')}`);
       setTimeout(spawnLoop, Math.min(5000, 900 + restartCount * 300));
     });
     proc.on('error', e => {
       restartCount++;
-      console.log(`[${id}] TRUE_STREAM ffmpeg error ${String(e.message || e)} restart=${restartCount}`);
+      console.log(`[${id}] DROP_OLD_STREAM ffmpeg error ${String(e.message || e)} restart=${restartCount}`);
       setTimeout(spawnLoop, Math.min(5000, 900 + restartCount * 300));
     });
+
+    if (!timer) timer = setInterval(consumeNewestFrame, Math.max(120, Math.floor(1000 / Math.max(1, STREAM_FPS))));
   }
 
   spawnLoop();
-  return () => { stopping = true; try { if (proc) proc.kill('SIGKILL'); } catch (_) {} };
+  return () => { stopping = true; try { if (timer) clearInterval(timer); } catch (_) {} try { if (proc) proc.kill('SIGKILL'); } catch (_) {} };
 }
 
 async function trueStreamLoop() {
