@@ -1,4 +1,4 @@
-// RT7_V6_3C_DIRECT_MJPEG_JPEG_BLUE_DECODE_GATE_FIX
+// RT7_V6_3D_DIRECT_MJPEG_NPM_INSTALL_PATH_FIX
 // iCATCH / SoCatch DVR Direct LAN true MJPEG pipeline
 //
 // 目的：放棄 V6.2 latest.jpg + HTTP poll 架構，改為：
@@ -10,7 +10,7 @@ const jpeg = require('jpeg-js');
 const http = require('http');
 const os = require('os');
 
-const VERSION = 'RT7_V6_3C_DIRECT_MJPEG_JPEG_BLUE_DECODE_GATE_FIX';
+const VERSION = 'RT7_V6_3D_DIRECT_MJPEG_NPM_INSTALL_PATH_FIX';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_USER = process.env.DVR_USER || 'admin';
 const DVR_PASS = process.env.DVR_PASS || 'vbnmmnbv';

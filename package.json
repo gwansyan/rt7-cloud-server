@@ -1,6 +1,6 @@
 {
-  "name": "rt7-v6-3c-direct-mjpeg-jpeg-blue-gate-fix",
-  "version": "6.3.3",
+  "name": "rt7-v6-3d-direct-mjpeg-npm-install-path-fix",
+  "version": "6.3.4",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
