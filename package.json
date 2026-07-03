@@ -1,7 +1,8 @@
 {
-  "name": "rt7-v6-5b-direct-ffmpeg-iframe-mjpeg-fix",
-  "version": "6.5.0-b",
+  "name": "rt7-v6-6a-dvr-native-h264-decoder",
+  "version": "6.6.0",
+  "description": "RT7 V6.6A iCATCH native H264 parser + low latency JPEG bridge",
   "main": "server.js",
-  "scripts": {"start":"node server.js"},
-  "dependencies": {"jpeg-js":"^0.4.4"}
+  "scripts": { "start": "node server.js" },
+  "dependencies": {}
 }
