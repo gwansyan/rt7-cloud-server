@@ -1,4 +1,4 @@
-// RT7_V6_2J_ICATCH_DIRECT_LAN_MJPEG_ERROR_FIX
+// RT7_V6_2K_ICATCH_DIRECT_LAN_LOCAL_FRAME_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -22,7 +22,7 @@ const path = require('path');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2J_ICATCH_DIRECT_LAN_MJPEG_ERROR_FIX';
+const VERSION = 'RT7_V6_2K_ICATCH_DIRECT_LAN_LOCAL_FRAME_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -418,8 +418,11 @@ async function captureChannel(ch) {
     console.log(`[${padCh(ch)}] frame=${r.jpeg.length} SKIP VIDEO_LOSS blue=${vl.blue_ratio.toFixed(2)} avgB=${vl.avg_b.toFixed(1)} keep_last_good=1`);
     return Object.assign(r, { skipped:true, video_loss:vl });
   }
+  // V6.2K: Direct LAN local frame must be stored even when Railway upload is disabled/failed.
+  // This fixes /direct showing NO_LOCAL_FRAME while DVR/FFmpeg test can already save JPEG.
+  rememberLocalFrame(ch, r.jpeg);
   const up = await upload(ch, r.jpeg, 'icatch-net-video-ffmpeg-videoloss-filter');
-  console.log(`[${padCh(ch)}] frame=${r.jpeg.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${up.error||''}`);
+  console.log(`[${padCh(ch)}] frame=${r.jpeg.length} local=OK upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${up.error||''}`);
   return Object.assign(r, { upload:up });
 }
 
