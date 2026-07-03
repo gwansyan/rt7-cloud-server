@@ -1,705 +1,288 @@
-// RT7_V6_2S_ICATCH_REAL_FRAME_ONLY_LOCK_FIX
-// iCATCH / SoCatch DVR net_video.cgi LAN Bridge
+// RT7_V6_3A_DIRECT_MJPEG_PIPELINE_ZERO_BUFFER
+// iCATCH / SoCatch DVR Direct LAN true MJPEG pipeline
 //
-// 根據 PCAPdroid 已確認真正影像 API：
-//   GET /cgi-bin/net_video.cgi?hq=0&iframe=15&pframe=15&audio=0
-//   Authorization: Basic admin:vbnmmnbv
-//   Magic: 39e739de-8d69-aadb-78b9-946a2905858d
-//   Response: multipart/x-mixed-replace + application/octet-stream
-//
-// 本 Bridge 做法：
-// 1) 用同內網 Windows 電腦連 iCATCH DVR 的 net_video.cgi。
-// 2) 交給 ffmpeg 嘗試解 H.264/octet-stream。
-// 3) 擷取 JPEG frame 上傳 Railway /api/rt7/dvr/bridge/upload/CHxx。
-//
-// 若 ffmpeg 無法解析，代表 iCATCH octet-stream 有私有封包頭，下一版需加入 depacketizer。
+// 目的：放棄 V6.2 latest.jpg + HTTP poll 架構，改為：
+// DVR net_video.cgi -> FFmpeg -> MJPEG pipe -> Node multipart/x-mixed-replace -> 手機 Chrome
+// 不寫 latest.jpg、不排隊、不經 Railway，降低同一 LAN 手機延遲。
 
 const { spawn, execFile } = require('child_process');
 const http = require('http');
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
 const os = require('os');
-let jpegjs = null;
-try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2S_ICATCH_REAL_FRAME_ONLY_LOCK_FIX';
-const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
-const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
+const VERSION = 'RT7_V6_3A_DIRECT_MJPEG_PIPELINE_ZERO_BUFFER';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_USER = process.env.DVR_USER || 'admin';
 const DVR_PASS = process.env.DVR_PASS || 'vbnmmnbv';
 const DVR_HTTP_PORT = process.env.DVR_HTTP_PORT || process.env.DVR_PORT || '80';
-// V6.2B: PCAPdroid 確認 iCATCH net_video.cgi 沒有 channel 參數。
-// 同一個 net_video.cgi 其實是目前 SoCatch/主畫面的單一影像來源；
-// 若同時把同一 URL 當成 CH01~CH04 擷取，會造成 CH2/CH4 顯示 CH1 的畫面。
-// 因此預設只上傳 CH01。若未來抓到真正的 channel 參數，再設定 DVR_CHANNELS=1,2,3,4 與 ICATCH_NET_VIDEO_TEMPLATE。
-const CHANNELS = String(process.env.DVR_CHANNELS || '1').split(',').map(s => parseInt(s.trim(), 10)).filter(Boolean);
-const INTERVAL_MS = Math.max(200, parseInt(process.env.INTERVAL_MS || '1000', 10) || 1000);
-const TRUE_STREAM_MODE = String(process.env.TRUE_STREAM_MODE || '1').trim() !== '0';
-// V6.2H: 3FPS low-delay balance.
-// 保留安全解碼避免 V6.2F 藍綠屏；降低到 3FPS，Bridge 僅保留最新 frame，避免排隊造成延遲。
-const STREAM_FPS = Math.max(1, Math.min(8, parseInt(process.env.STREAM_FPS || '4', 10) || 4));
-const UPLOAD_MIN_INTERVAL_MS = Math.max(100, parseInt(process.env.UPLOAD_MIN_INTERVAL_MS || String(Math.floor(1000 / STREAM_FPS)), 10) || Math.floor(1000 / STREAM_FPS));
-const FFMPEG_TIMEOUT_MS = Math.max(2500, parseInt(process.env.FFMPEG_TIMEOUT_MS || '10000', 10) || 10000);
-const DEBUG = String(process.env.DEBUG || '').trim() === '1';
-const PROBE_ONLY = String(process.env.PROBE_ONLY || '').trim() === '1';
-const TEST_ONLY = String(process.env.TEST_ONLY || '').trim() === '1';
-const TEST_OUT = process.env.TEST_OUT || path.join(__dirname, 'icatch_ch1_test.jpg');
-
-const RAW_ONLY = String(process.env.RAW_ONLY || '').trim() === '1';
-const RAW_OUT = process.env.RAW_OUT || path.join(__dirname, 'icatch_ch1_raw.bin');
-const RAW_BYTES = Math.max(65536, parseInt(process.env.RAW_BYTES || '524288', 10) || 524288);
-const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
-// V6.2L: fallback VIDEO LOSS filter. Blue VIDEO LOSS frames from this DVR are much smaller
-// than real CH01 frames in your tests (~7KB vs 11~26KB). This works even if jpeg-js is not installed.
-const MIN_REAL_JPEG_BYTES = Math.max(0, parseInt(process.env.MIN_REAL_JPEG_BYTES || '9000', 10) || 0);
-// V6.2Q: low latency policy. Do not run heavy RGB/JPEG analysis on every frame.
-// Keep only newest frame and reject sudden small frames after a good frame (usually blue VIDEO LOSS).
-const DROP_OLD_FRAME_MODE = String(process.env.DROP_OLD_FRAME_MODE || '1').trim() !== '0';
-const VIDEOLOSS_DROP_RATIO = Math.max(0.30, Math.min(0.95, parseFloat(process.env.VIDEOLOSS_DROP_RATIO || '0.62') || 0.62));
-// V6.2R: if DVR sends a burst of blue VIDEO LOSS frames, reconnect the net_video stream.
-// This prevents long freezes and accumulated decoder delay after VIDEO LOSS bursts.
-const BLUE_STORM_RESTART_DROPS = Math.max(0, parseInt(process.env.BLUE_STORM_RESTART_DROPS || '8', 10) || 0);
-const STARTUP_REJECT_BLUE = String(process.env.STARTUP_REJECT_BLUE || '1').trim() !== '0';
-const LOCAL_KEEP_ALIVE_MS = Math.max(3000, parseInt(process.env.LOCAL_KEEP_ALIVE_MS || '30000', 10) || 30000);
-
-// V6.2I Direct LAN View: 在 Bridge 電腦本機也提供最新 JPEG / MJPEG，
-// 手機與 Bridge 電腦同一 LAN 時可直接連，避開 Railway 中轉降低延遲。
-const LOCAL_HTTP_PORT = Math.max(0, parseInt(process.env.LOCAL_HTTP_PORT || '8787', 10) || 0);
+const LOCAL_HTTP_PORT = parseInt(process.env.LOCAL_HTTP_PORT || '8787', 10) || 8787;
 const LOCAL_HTTP_BIND = process.env.LOCAL_HTTP_BIND || '0.0.0.0';
-const LOCAL_PUBLIC_HOST = process.env.LOCAL_PUBLIC_HOST || autoLanHost(); // auto 192.168.x.x:8787
-function autoLanHost() {
-  try {
-    const nets = os.networkInterfaces();
-    const addrs = [];
-    for (const arr of Object.values(nets)) for (const n of (arr || [])) {
-      if (n && n.family === 'IPv4' && !n.internal) addrs.push(n.address);
-    }
-    const preferred = addrs.find(a => /^192\.168\.0\./.test(a)) ||
-                      addrs.find(a => /^192\.168\./.test(a)) ||
-                      addrs.find(a => /^10\./.test(a)) ||
-                      addrs.find(a => /^172\.(1[6-9]|2\d|3[0-1])\./.test(a)) ||
-                      addrs[0];
-    return preferred ? (preferred + ':' + LOCAL_HTTP_PORT) : '';
-  } catch (_) { return ''; }
-}
-const LOCAL_LATEST = {}; // { CH01: { jpeg, ts, seq, bytes } }
-const LOCAL_STATS = {}; // { CH01: { dropped, accepted, lastDropReason, lastDropAt } }
-function rememberLocalFrame(ch, jpeg) {
-  const id = padCh(ch);
-  if (!Buffer.isBuffer(jpeg) || jpeg.length < 4) return;
-  const old = LOCAL_LATEST[id] || { seq: 0 };
-  LOCAL_LATEST[id] = { jpeg, ts: Date.now(), seq: (old.seq || 0) + 1, bytes: jpeg.length };
-  LOCAL_STATS[id] = Object.assign({ dropped:0, accepted:0 }, LOCAL_STATS[id] || {}, { accepted: ((LOCAL_STATS[id]&&LOCAL_STATS[id].accepted)||0) + 1 });
-}
-function localFrameStatus() {
-  return Object.keys(LOCAL_LATEST).sort().map(id => ({
-    id, online: Date.now() - LOCAL_LATEST[id].ts < LOCAL_KEEP_ALIVE_MS,
-    age_ms: Date.now() - LOCAL_LATEST[id].ts,
-    seq: LOCAL_LATEST[id].seq,
-    bytes: LOCAL_LATEST[id].bytes,
-    accepted: (LOCAL_STATS[id] && LOCAL_STATS[id].accepted) || 0,
-    dropped: (LOCAL_STATS[id] && LOCAL_STATS[id].dropped) || 0,
-    last_drop_reason: (LOCAL_STATS[id] && LOCAL_STATS[id].lastDropReason) || ''
-  }));
-}
-function startLocalLanServer() {
-  if (!LOCAL_HTTP_PORT) return;
-  const boundary = 'rt7lanboundary';
-  const srv = http.createServer((req, res) => {
-    const u = new URL(req.url, 'http://127.0.0.1');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', '*');
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    if (u.pathname === '/' || u.pathname === '/direct') {
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      const host = LOCAL_PUBLIC_HOST || req.headers.host || ('127.0.0.1:' + LOCAL_HTTP_PORT);
-      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2S Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway；V6.2S 嚴格只接受真實 CH01 畫面；藍底 VIDEO LOSS 永遠不寫入 latest，保留上一張正常影像。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
-    }
-    if (u.pathname === '/direct-mjpeg') {
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct MJPEG</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui}.wrap{padding:12px;max-width:760px;margin:auto}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px;margin-top:10px}</style></head><body><div class="wrap"><h2>RT7 Direct MJPEG 備用</h2><div class="view"><img src="/stream/CH01.mjpg?ts=${Date.now()}"></div><a class="btn" href="/direct">回穩定輪詢</a></div></body></html>`);
-    }
-    if (u.pathname === '/status') {
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      return res.end(JSON.stringify({ ok: true, version: VERSION, port: LOCAL_HTTP_PORT, bind: LOCAL_HTTP_BIND, public_host: LOCAL_PUBLIC_HOST, cameras: localFrameStatus() }, null, 2));
-    }
-    const mLatest = u.pathname.match(/^\/latest\/(CH\d+)\.jpg$/i);
-    if (mLatest) {
-      const id = mLatest[1].toUpperCase();
-      const f = LOCAL_LATEST[id];
-      if (!f || !f.jpeg) { res.statusCode = 404; return res.end('NO_LOCAL_FRAME'); }
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.setHeader('X-RT7-Seq', String(f.seq));
-      res.setHeader('X-RT7-Age-Ms', String(Date.now() - f.ts));
-      return res.end(f.jpeg);
-    }
-    const mStream = u.pathname.match(/^\/stream\/(CH\d+)\.mjpg$/i);
-    if (mStream) {
-      const id = mStream[1].toUpperCase();
-      res.writeHead(200, {
-        'Content-Type': 'multipart/x-mixed-replace; boundary=' + boundary,
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-        'Pragma': 'no-cache',
-        'Connection': 'close',
-        'Access-Control-Allow-Origin': '*'
-      });
-      let lastSeq = -1;
-      const timer = setInterval(() => {
-        const f = LOCAL_LATEST[id];
-        if (!f || !f.jpeg || f.seq === lastSeq) return;
-        lastSeq = f.seq;
-        try {
-          res.write(`--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${f.jpeg.length}\r\nX-RT7-Seq: ${f.seq}\r\nX-RT7-Age-Ms: ${Date.now()-f.ts}\r\n\r\n`);
-          res.write(f.jpeg);
-          res.write('\r\n');
-        } catch (_) {}
-      }, Math.max(80, Math.floor(1000 / Math.max(1, STREAM_FPS))));
-      req.on('close', () => clearInterval(timer));
-      return;
-    }
-    res.statusCode = 404; res.end('RT7_LOCAL_NOT_FOUND');
-  });
-  srv.listen(LOCAL_HTTP_PORT, LOCAL_HTTP_BIND, () => {
-    console.log(`[LAN] Direct LAN View server http://${LOCAL_HTTP_BIND}:${LOCAL_HTTP_PORT}/  public=${LOCAL_PUBLIC_HOST || '(auto host unavailable)'}`);
-  });
-  srv.on('error', e => console.log('[LAN] local server error', e.message || e));
-}
+const STREAM_FPS = Math.max(1, Math.min(8, parseInt(process.env.STREAM_FPS || '5', 10) || 5));
+const JPEG_QUALITY = Math.max(2, Math.min(12, parseInt(process.env.JPEG_QUALITY || '5', 10) || 5));
+const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
+const DEBUG = String(process.env.DEBUG || '').trim() === '1';
+const TEST_ONLY = String(process.env.TEST_ONLY || '').trim() === '1';
+const TEST_OUT = process.env.TEST_OUT || 'icatch_v63a_test.jpg';
 
-// V6.2B: 單一 net_video.cgi 來源鎖定 CH01，避免把同一畫面誤標成 CH02/CH03/CH04。
-// V6.1D: iCATCH/SoCatch net_video.cgi 可在 Authorization + Magic 下直接串流。
-// /dvr/cmd 登入可能 status=200 但沒有 Set-Cookie；這是可接受狀態。
-// 因此 Cookie 不再是必要條件，也不在每張 frame 前重複登入。
-let RT7_SESSION_COOKIE = '';
-let RT7_LOGIN_OK = false;
-let RT7_LOGIN_TRIED = false;
-
-// SoCatch 目前抓到的 URL 沒有 channel 參數。部分 iCATCH DVR 會以 hq/chn/ch 參數選通道；
-// 因此保留 template 可測。若封包抓到更完整 URL，可直接在 BAT 設 ICATCH_NET_VIDEO_TEMPLATE。
+// PCAPdroid confirmed endpoint for your iCATCH / Hi3520 DVR.
 const NET_VIDEO_TEMPLATE = process.env.ICATCH_NET_VIDEO_TEMPLATE ||
-  'http://{host}:{port}/cgi-bin/net_video.cgi?hq=0&iframe=15&pframe=15&audio=0';
+  `http://{host}:{port}/cgi-bin/net_video.cgi?hq=0&iframe=15&pframe=15&audio=0`;
 
-function padCh(ch) { return 'CH' + String(ch).padStart(2, '0'); }
-function enc(v) { return encodeURIComponent(String(v == null ? '' : v)); }
-function fill(tpl, ch) {
-  const ch0 = String(Math.max(0, Number(ch) - 1));
-  return String(tpl)
+const BASIC = Buffer.from(`${DVR_USER}:${DVR_PASS}`).toString('base64');
+let sessionCookie = '';
+let ffmpegProc = null;
+let buffer = Buffer.alloc(0);
+let latestFrame = null;
+let latestSeq = 0;
+let latestBytes = 0;
+let latestTime = 0;
+let totalFrames = 0;
+let restartCount = 0;
+let clients = new Set();
+
+function autoLanHost() {
+  const nets = os.networkInterfaces();
+  const addrs = [];
+  for (const arr of Object.values(nets)) for (const n of (arr || [])) {
+    if (n && n.family === 'IPv4' && !n.internal) addrs.push(n.address);
+  }
+  return (addrs.find(a => /^192\.168\.0\./.test(a)) || addrs.find(a => /^192\.168\./.test(a)) || addrs[0] || '127.0.0.1') + ':' + LOCAL_HTTP_PORT;
+}
+const PUBLIC_HOST = process.env.LOCAL_PUBLIC_HOST || autoLanHost();
+
+function fillUrl() {
+  return NET_VIDEO_TEMPLATE
     .replace(/\{host\}/g, DVR_HOST)
     .replace(/\{port\}/g, DVR_HTTP_PORT)
-    .replace(/\{http_port\}/g, DVR_HTTP_PORT)
-    .replace(/\{user\}/g, enc(DVR_USER))
-    .replace(/\{pass\}/g, enc(DVR_PASS))
-    .replace(/\{password\}/g, enc(DVR_PASS))
-    .replace(/\{ch\}/g, String(ch))
-    .replace(/\{channel\}/g, String(ch))
-    .replace(/\{ch0\}/g, ch0)
-    .replace(/\{magic\}/g, MAGIC);
+    .replace(/\{user\}/g, encodeURIComponent(DVR_USER))
+    .replace(/\{pass\}/g, encodeURIComponent(DVR_PASS));
 }
-function mask(s) { return String(s).replace(/:([^:@/]*?)@/, ':****@').replace(/(password|pwd|pass|p)=([^&]*)/gi, '$1=****'); }
-function isJpeg(buf) { return buf && buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8; }
-function extractJpeg(buf) {
-  if (!buf || !buf.length) return null;
-  if (isJpeg(buf)) return buf;
-  const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
-  if (start < 0) return null;
-  const end = buf.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
-  if (end < 0) return null;
-  return buf.slice(start, end + 2);
-}
+function mask(s) { return String(s).replace(DVR_PASS, '****'); }
 
-function authHeader() { return 'Basic ' + Buffer.from(DVR_USER + ':' + DVR_PASS).toString('base64'); }
-
-function buildCommandMultipart(xmlText) {
-  // PCAPdroid: POST /dvr/cmd, Content-Type multipart/form-data; boundary=----maya,
-  // form-data name="datafile"; filename="command.xml"; Content-Type: text/xml
-  const boundary = '----maya';
-  const body = Buffer.from(
-    '--' + boundary + '\r\n' +
-    'Content-Disposition: form-data; name="datafile"; filename="command.xml"\r\n' +
-    'Content-Type: text/xml\r\n\r\n' +
-    xmlText + '\r\n' +
-    '--' + boundary + '--\r\n',
-    'utf8'
-  );
-  return { boundary, body };
-}
-
-function icatchLoginCookie(timeoutMs=5000) {
+function httpRequest(opts, body) {
   return new Promise(resolve => {
-    const xml = '<?xml version="1.0" encoding="UTF-8" ?><DVR Platform="Hi3520"><GetConfiguration File="system.xml" /></DVR>';
-    const mp = buildCommandMultipart(xml);
-    const options = {
-      host: DVR_HOST,
-      port: Number(DVR_HTTP_PORT) || 80,
-      path: '/dvr/cmd',
-      method: 'POST',
-      timeout: timeoutMs,
-      headers: {
-        'Authorization': authHeader(),
-        'Content-Type': 'multipart/form-data; boundary=' + mp.boundary,
-        'Content-Length': mp.body.length,
-        'User-Agent': 'SoCatch/RT7-V6.2A',
-        'Connection': 'close'
-      }
-    };
-    const req = http.request(options, res => {
-      const chunks=[];
-      res.on('data', d => { chunks.push(d); });
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        const setCookie = res.headers['set-cookie'];
-        let cookie = '';
-        if (Array.isArray(setCookie) && setCookie.length) cookie = String(setCookie[0]).split(';')[0];
-        else if (setCookie) cookie = String(setCookie).split(';')[0];
-        resolve({ ok:res.statusCode>=200 && res.statusCode<300, status:res.statusCode, cookie, headers:res.headers, bodySample:text.slice(0,500) });
-      });
+    const req = http.request(opts, res => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
     });
-    req.on('timeout', () => { try { req.destroy(new Error('login timeout')); } catch (_) {} });
-    req.on('error', e => resolve({ ok:false, error:String(e.message || e) }));
-    req.end(mp.body);
+    req.on('error', e => resolve({ status: 0, headers: {}, body: Buffer.alloc(0), error: String(e.message || e) }));
+    req.setTimeout(4000, () => { req.destroy(); resolve({ status: 0, headers: {}, body: Buffer.alloc(0), error: 'timeout' }); });
+    if (body) req.write(body);
+    req.end();
   });
 }
 
-async function initIcatchSessionOnce() {
-  if (RT7_LOGIN_TRIED) return { ok: RT7_LOGIN_OK, cookie: RT7_SESSION_COOKIE, cached: true };
-  RT7_LOGIN_TRIED = true;
-  const login = await icatchLoginCookie();
-  const body = String(login.bodySample || '');
-  RT7_LOGIN_OK = !!(login.ok || login.status === 200 || body.includes('GetConfigurationResponse') || body.includes('Return="0"'));
-  RT7_SESSION_COOKIE = login.cookie || '';
-  if (RT7_SESSION_COOKIE) {
-    console.log('[AUTH] login OK cookie=' + RT7_SESSION_COOKIE);
-  } else if (RT7_LOGIN_OK) {
-    console.log('[AUTH] login OK without cookie; sessionless mode enabled. status=' + (login.status || ''));
-  } else {
-    console.log('[AUTH] login warn status=' + (login.status || '') + ' error=' + (login.error || '') + ' body=' + body.replace(/\r?\n/g, ' ').slice(0, 160));
+async function login() {
+  const boundary = '----maya';
+  const xml = `<?xml version="1.0" encoding="UTF-8" ?><DVR Platform="Hi3520"><GetConfiguration File="profile.xml" /></DVR>`;
+  const body = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="datafile"; filename="command.xml"\r\nContent-Type: text/xml\r\n\r\n${xml}\r\n--${boundary}--\r\n`);
+  const r = await httpRequest({
+    hostname: DVR_HOST,
+    port: parseInt(DVR_HTTP_PORT, 10),
+    path: '/dvr/cmd',
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${BASIC}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      'Content-Length': body.length
+    }
+  }, body);
+  const setCookie = r.headers && r.headers['set-cookie'];
+  if (setCookie && setCookie[0]) {
+    const m = String(setCookie[0]).match(/sessionid=[^;]+/i);
+    if (m) sessionCookie = m[0];
   }
-  return { ok: RT7_LOGIN_OK, cookie: RT7_SESSION_COOKIE };
+  console.log(`[AUTH] login status=${r.status} cookie=${sessionCookie || '(none)'}`);
 }
 
-async function getVideoHeaders() {
-  if (!RT7_LOGIN_TRIED) await initIcatchSessionOnce();
-  const h = {
-    'Authorization': authHeader(),
-    'Magic': MAGIC,
-    'User-Agent': 'SoCatch/RT7-V6.2A',
-    'Accept': '*/*',
-    'Connection': 'close'
-  };
-  if (RT7_SESSION_COOKIE) h['Cookie'] = RT7_SESSION_COOKIE;
+function headersForFfmpeg() {
+  let h = '';
+  h += `Authorization: Basic ${BASIC}\r\n`;
+  h += `Magic: ${MAGIC}\r\n`;
+  if (sessionCookie) h += `Cookie: ${sessionCookie}\r\n`;
+  h += `User-Agent: SoCatch/RT7-V6.3A\r\n`;
+  h += `Connection: keep-alive\r\n`;
   return h;
 }
 
-function headersToFfmpegText(headers) {
-  let lines = '';
-  for (const [k,v] of Object.entries(headers || {})) {
-    if (v !== undefined && v !== null && String(v) !== '') lines += k + ': ' + String(v) + '\r\n';
-  }
-  return lines;
+function findNextJpegFrame(buf) {
+  const soi = buf.indexOf(Buffer.from([0xff, 0xd8]));
+  if (soi < 0) return { frame: null, rest: buf.length > 1024 * 1024 ? buf.slice(-1024) : buf };
+  const eoi = buf.indexOf(Buffer.from([0xff, 0xd9]), soi + 2);
+  if (eoi < 0) return { frame: null, rest: soi > 0 ? buf.slice(soi) : buf };
+  return { frame: buf.slice(soi, eoi + 2), rest: buf.slice(eoi + 2) };
 }
 
-async function httpProbe(urlText, timeoutMs=5000) {
-  const videoHeaders = await getVideoHeaders();
-  return new Promise(resolve => {
-    let u;
-    try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
-    const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-DirectLAN/6.2L' });
-    const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
-      const chunks = [];
-      res.on('data', d => {
-        chunks.push(d);
-        const len = chunks.reduce((a,b)=>a+b.length, 0);
-        if (len > 8192) { try { req.destroy(); } catch (_) {} }
-      });
-      res.on('end', () => {
-        const b = Buffer.concat(chunks);
-        resolve({ ok:res.statusCode >= 200 && res.statusCode < 300, status:res.statusCode, headers:res.headers, bytes:b.length, sample:b.slice(0,240).toString('latin1').replace(/[^\x20-\x7E\r\n]/g,'.') });
-      });
-    });
-    req.on('timeout', () => { try { req.destroy(new Error('probe timeout')); } catch (_) {} });
-    req.on('error', e => resolve({ ok:false, error:String(e.message || e) }));
-    req.end();
+function writeFrameToClient(res, frame) {
+  try {
+    res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\nCache-Control: no-store\r\nX-RT7-Seq: ${latestSeq}\r\n\r\n`);
+    res.write(frame);
+    res.write('\r\n');
+  } catch (_) {
+    try { res.destroy(); } catch (__) {}
+  }
+}
+
+function broadcastFrame(frame) {
+  latestFrame = frame;
+  latestSeq++;
+  latestBytes = frame.length;
+  latestTime = Date.now();
+  totalFrames++;
+
+  for (const res of [...clients]) {
+    if (res.destroyed || res.writableEnded) {
+      clients.delete(res);
+      continue;
+    }
+    writeFrameToClient(res, frame);
+  }
+
+  if (totalFrames % STREAM_FPS === 0) {
+    console.log(`[PIPE] frame=${frame.length} seq=${latestSeq} fps=${STREAM_FPS} clients=${clients.size} age_ms=${Date.now() - latestTime}`);
+  }
+}
+
+function startFfmpeg() {
+  const url = fillUrl();
+  const args = [
+    '-hide_banner', '-nostdin',
+    '-loglevel', DEBUG ? 'info' : 'error',
+    '-headers', headersForFfmpeg(),
+    // Use safe decode. Do not use nobuffer/low_delay because it produced blue-green artifacts on this DVR.
+    '-i', url,
+    '-an',
+    '-vf', `fps=${STREAM_FPS}`,
+    '-q:v', String(JPEG_QUALITY),
+    '-f', 'mjpeg',
+    'pipe:1'
+  ];
+  console.log(`[PIPE] start ffmpeg url=${mask(url)} fps=${STREAM_FPS} quality=${JPEG_QUALITY}`);
+  ffmpegProc = spawn('ffmpeg', args, { windowsHide: true });
+  let stderrTail = '';
+
+  ffmpegProc.stdout.on('data', d => {
+    buffer = Buffer.concat([buffer, d]);
+    // zero-buffer policy: never keep old MJPEG data.
+    if (buffer.length > 2 * 1024 * 1024) buffer = buffer.slice(-512 * 1024);
+    while (true) {
+      const r = findNextJpegFrame(buffer);
+      buffer = r.rest;
+      if (!r.frame) break;
+      // No queue, no latest.jpg: immediately broadcast current frame.
+      broadcastFrame(r.frame);
+    }
   });
-}
-
-
-async function httpRawDump(urlText, outFile, maxBytes=RAW_BYTES, timeoutMs=8000) {
-  const videoHeaders = await getVideoHeaders();
-  return new Promise(resolve => {
-    let u;
-    try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
-    const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'SoCatch/RT7-V6.2A' });
-    const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
-      let bytes = 0;
-      const ws = fs.createWriteStream(outFile);
-      res.on('data', d => {
-        bytes += d.length;
-        ws.write(d);
-        if (bytes >= maxBytes) { try { req.destroy(); } catch (_) {} }
-      });
-      res.on('end', () => { ws.end(); resolve({ ok:res.statusCode>=200 && res.statusCode<300, status:res.statusCode, headers:res.headers, bytes, outFile }); });
-      res.on('close', () => { ws.end(); resolve({ ok:res.statusCode>=200 && res.statusCode<300 && bytes>0, status:res.statusCode, headers:res.headers, bytes, outFile, closed:true }); });
-    });
-    req.on('timeout', () => { try { req.destroy(new Error('raw timeout')); } catch (_) {} });
-    req.on('error', e => resolve({ ok:false, error:String(e.message || e), outFile }));
-    req.end();
-  });
-}
-
-async function ffmpegOneJpeg(urlText, ch) {
-  const videoHeaders = await getVideoHeaders();
-  return new Promise(resolve => {
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2A' }));
-    // 嘗試讓 ffmpeg 自動判斷 iCATCH multipart/octet-stream。輸出單張 MJPEG 到 stdout。
-    const args = [
-      '-hide_banner', '-nostdin',
-      '-loglevel', DEBUG ? 'info' : 'error',
-      '-headers', headerText,
-      '-rw_timeout', String(Math.max(1000000, FFMPEG_TIMEOUT_MS * 1000)),
-      '-i', urlText,
-      '-frames:v', '1',
-      '-q:v', '4',
-      '-f', 'image2pipe',
-      '-vcodec', 'mjpeg',
-      'pipe:1'
-    ];
-    const child = spawn('ffmpeg', args, { windowsHide:true });
-    const out = [];
-    const err = [];
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (_) {} }, FFMPEG_TIMEOUT_MS);
-    child.stdout.on('data', d => out.push(d));
-    child.stderr.on('data', d => err.push(d));
-    child.on('close', code => {
-      clearTimeout(timer);
-      const b = Buffer.concat(out);
-      const jpg = extractJpeg(b);
-      const errText = Buffer.concat(err).toString('utf8').slice(-1800);
-      resolve({ ok:!!jpg, code, jpeg:jpg, bytes:b.length, error:errText, url:urlText, ch });
-    });
-    child.on('error', e => { clearTimeout(timer); resolve({ ok:false, code:-1, error:String(e.message || e), url:urlText, ch }); });
-  });
-}
-
-
-function rt7DetectVideoLossJpeg_(buf) {
-  // V6.2S: strict real-frame gate.
-  // Goal: VIDEO LOSS must never become LOCAL_LATEST, even if its JPEG size is large.
-  const out = { video_loss:false, real_like:false, reason:'', blue_ratio:0, center_blue_ratio:0, lower_blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0, center_samples:0, lower_samples:0, jpegjs:!!jpegjs };
-  if (String(process.env.ENABLE_FAST_BLUE_FILTER || '1').trim() === '0') { out.real_like = true; return out; }
-  if (!jpegjs || !buf || buf.length < 128) { out.reason = jpegjs ? 'NO_BUFFER' : 'JPEGJS_MISSING'; return out; }
-  let img;
-  try { img = jpegjs.decode(buf, { useTArray:true, maxMemoryUsageInMB:48 }); } catch (e) { out.reason='JPEG_DECODE_FAIL'; return out; }
-  const w = img.width || 0, h = img.height || 0, data = img.data;
-  if (!w || !h || !data) return out;
-
-  // Dense but still cheap grid. Do not decode again elsewhere.
-  const xs = [];
-  const ys = [];
-  for (let i=1;i<=15;i++) xs.push(Math.max(0,Math.min(w-1,Math.floor(w*i/16))));
-  for (let j=2;j<=14;j++) ys.push(Math.max(0,Math.min(h-1,Math.floor(h*j/16))));
-  const cx1=Math.floor(w*0.08), cx2=Math.floor(w*0.92), cy1=Math.floor(h*0.16), cy2=Math.floor(h*0.88);
-  const ly1=Math.floor(h*0.38), ly2=Math.floor(h*0.90);
-  let n=0, blue=0, cn=0, cblue=0, ln=0, lblue=0, sr=0, sg=0, sb=0;
-  function isBlue(r,g,b){
-    return b > 62 && b > r + 14 && b > g + 6 && b > r * 1.10 && b > g * 1.00;
-  }
-  for (const y of ys) for (const x of xs) {
-    const i = (y*w + x) * 4;
-    const r = data[i] || 0, g = data[i+1] || 0, b = data[i+2] || 0;
-    if (r < 10 && g < 10 && b < 10) continue;
-    n++; sr += r; sg += g; sb += b;
-    const ib = isBlue(r,g,b);
-    if (ib) blue++;
-    if (x>=cx1 && x<=cx2 && y>=cy1 && y<=cy2) { cn++; if (ib) cblue++; }
-    if (y>=ly1 && y<=ly2) { ln++; if (ib) lblue++; }
-  }
-  if (n) { out.samples=n; out.blue_ratio=blue/n; out.avg_r=sr/n; out.avg_g=sg/n; out.avg_b=sb/n; }
-  if (cn) { out.center_samples=cn; out.center_blue_ratio=cblue/cn; }
-  if (ln) { out.lower_samples=ln; out.lower_blue_ratio=lblue/ln; }
-
-  const blueDominant = out.avg_b > 70 && out.avg_b > out.avg_r * 1.08 && out.avg_b > out.avg_g * 1.00;
-  out.video_loss = !!(n >= 50 && (
-    out.center_blue_ratio >= 0.20 ||
-    out.lower_blue_ratio >= 0.24 ||
-    out.blue_ratio >= 0.18 ||
-    (blueDominant && out.blue_ratio >= 0.12)
-  ));
-  out.real_like = !!(!out.video_loss && n >= 50);
-  if (out.video_loss) out.reason = 'STRICT_BLUE_VIDEOLOSS_REJECT';
-  return out;
-}
-
-function markDrop(id, reason, detail) {
-  const st = LOCAL_STATS[id] || { dropped:0, accepted:0 };
-  st.dropped = (st.dropped || 0) + 1;
-  st.lastDropReason = reason + (detail ? (' ' + detail) : '');
-  st.lastDropAt = Date.now();
-  LOCAL_STATS[id] = st;
-  return st.dropped;
-}
-
-function shouldSkipFrame(ch, frame, whyPrefix) {
-  const id = padCh(ch);
-  const last = LOCAL_LATEST[id];
-  const hasGood = !!(last && last.jpeg);
-  if (!frame || !frame.length) return { skip:true, reason:'EMPTY_FRAME', detail:'' };
-
-  // Always run strict blue detector BEFORE size rules. Blue VIDEO LOSS can be 12K~20K+.
-  const vl = rt7DetectVideoLossJpeg_(frame);
-  if (vl.video_loss) {
-    return { skip:true, reason:vl.reason || 'STRICT_BLUE_VIDEOLOSS_REJECT', detail:'blue=' + (vl.blue_ratio||0).toFixed(2) + ' center=' + (vl.center_blue_ratio||0).toFixed(2) + ' lower=' + (vl.lower_blue_ratio||0).toFixed(2) + ' avgB=' + (vl.avg_b||0).toFixed(1) };
-  }
-  // Startup: if decoder is not available, never accept very small first frame.
-  if (!hasGood && STARTUP_REJECT_BLUE && !vl.real_like && frame.length < Math.max(MIN_REAL_JPEG_BYTES, 15000)) {
-    return { skip:true, reason:'STARTUP_WAIT_REAL_SCENE', detail:'bytes=' + frame.length + ' blue=' + (vl.blue_ratio||0).toFixed(2) + ' detector=' + (vl.reason||'') };
-  }
-
-  if (MIN_REAL_JPEG_BYTES && frame.length < MIN_REAL_JPEG_BYTES) {
-    if (hasGood) return { skip:true, reason:'SMALL_FRAME_KEEP_LAST_GOOD', detail:'bytes=' + frame.length + ' min=' + MIN_REAL_JPEG_BYTES };
-    return { skip:true, reason:'STARTUP_SMALL_WAIT_REAL_FRAME', detail:'bytes=' + frame.length + ' min=' + MIN_REAL_JPEG_BYTES };
-  }
-
-  // Size drop is only a secondary guard. Keep it loose to avoid freezing real movement.
-  if (hasGood && last.bytes && frame.length < Math.floor(last.bytes * VIDEOLOSS_DROP_RATIO)) {
-    return { skip:true, reason:'SIZE_DROP_KEEP_LAST_GOOD', detail:'bytes=' + frame.length + ' last=' + last.bytes + ' ratio=' + VIDEOLOSS_DROP_RATIO };
-  }
-  return { skip:false, detail:'ok' };
-}
-
-function upload(ch, jpeg, source='icatch-net-video') {
-  return new Promise(resolve => {
-    if (!RAILWAY_URL) return resolve({ ok:false, error:'RAILWAY_URL_EMPTY' });
-    const id = padCh(ch);
-    const url = new URL(RAILWAY_URL + '/api/rt7/dvr/bridge/upload/' + encodeURIComponent(id) + '?source=' + encodeURIComponent(source));
-    const lib = url.protocol === 'https:' ? https : http;
-    const req = lib.request(url, {
-      method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-DirectLAN/6.2L', 'X-RT7-Single-Source':'CH01' },
-      timeout:10000
-    }, res => {
-      const chunks=[];
-      res.on('data',d=>chunks.push(d));
-      res.on('end',()=>resolve({ ok:res.statusCode>=200&&res.statusCode<300, status:res.statusCode, body:Buffer.concat(chunks).toString('utf8').slice(0,300) }));
-    });
-    req.on('timeout',()=>{ try{req.destroy(new Error('upload timeout'));}catch(_){} resolve({ok:false,error:'upload timeout'}); });
-    req.on('error', e=>resolve({ ok:false, error:String(e.message || e) }));
-    req.end(jpeg);
-  });
-}
-
-async function captureChannel(ch) {
-  const url = fill(NET_VIDEO_TEMPLATE, ch);
-  if (RAW_ONLY) {
-    const rr = await httpRawDump(url, RAW_OUT);
-    console.log('[RAW] ' + JSON.stringify({ ok:rr.ok, status:rr.status, bytes:rr.bytes, contentType:rr.headers && rr.headers['content-type'], outFile:rr.outFile, error:rr.error }, null, 2));
-    console.log('[RAW] 如果 bytes > 0，代表 DVR net_video.cgi 已可讀；若 ffmpeg 不能轉 JPEG，表示需要下一版 depacketizer。');
-    return;
-  }
-  const r = await ffmpegOneJpeg(url, ch);
-  if (!r.ok) {
-    console.log(`[${padCh(ch)}] ffmpeg FAIL code=${r.code} bytes=${r.bytes} url=${mask(url)}`);
-    if (r.error) console.log(`[${padCh(ch)}] ffmpeg error: ${r.error.replace(/\r?\n/g, ' | ')}`);
-    return r;
-  }
-  const skip = shouldSkipFrame(ch, r.jpeg);
-  if (skip.skip) {
-    markDrop(padCh(ch), skip.reason || 'DROP', skip.detail || '');
-    console.log(`[${padCh(ch)}] frame=${r.jpeg.length} SKIP ${skip.reason} ${skip.detail} keep_last_good=1`);
-    return Object.assign(r, { skipped:true, skip });
-  }
-  // V6.2K: Direct LAN local frame must be stored even when Railway upload is disabled/failed.
-  // This fixes /direct showing NO_LOCAL_FRAME while DVR/FFmpeg test can already save JPEG.
-  rememberLocalFrame(ch, r.jpeg);
-  const up = await upload(ch, r.jpeg, 'icatch-net-video-ffmpeg-videoloss-filter');
-  console.log(`[${padCh(ch)}] frame=${r.jpeg.length} local=OK upload=${up.ok?'OK':'FAIL'} ${up.status||''} ${up.error||''}`);
-  return Object.assign(r, { upload:up });
-}
-
-async function testOne() {
-  const ch = CHANNELS[0] || 1;
-  const url = fill(NET_VIDEO_TEMPLATE, ch);
-  console.log('Test URL:', mask(url));
-  const p = await httpProbe(url, 5000);
-  console.log('HTTP probe:', JSON.stringify({ ok:p.ok, status:p.status, bytes:p.bytes, contentType:p.headers && p.headers['content-type'], sample:p.sample || p.error }, null, 2));
-  if (RAW_ONLY) {
-    const rr = await httpRawDump(url, RAW_OUT);
-    console.log('[RAW] ' + JSON.stringify({ ok:rr.ok, status:rr.status, bytes:rr.bytes, contentType:rr.headers && rr.headers['content-type'], outFile:rr.outFile, error:rr.error }, null, 2));
-    console.log('[RAW] 如果 bytes > 0，代表 DVR net_video.cgi 已可讀；若 ffmpeg 不能轉 JPEG，表示需要下一版 depacketizer。');
-    return;
-  }
-  const r = await ffmpegOneJpeg(url, ch);
-  if (r.ok) {
-    fs.writeFileSync(TEST_OUT, r.jpeg);
-    const vl = rt7DetectVideoLossJpeg_(r.jpeg);
-    fs.writeFileSync(TEST_OUT, r.jpeg);
-    console.log(`[TEST] JPEG saved: ${TEST_OUT} bytes=${r.jpeg.length} video_loss=${vl.video_loss?'YES':'NO'} blue=${vl.blue_ratio ? vl.blue_ratio.toFixed(2) : '0.00'}`);
-  } else {
-    console.log(`[TEST] ffmpeg did not produce JPEG. code=${r.code} bytes=${r.bytes}`);
-    if (r.error) console.log(r.error);
-    console.log('[NEXT] 若這裡失敗，請把 PCAPdroid 匯出的 .pcapng 上傳，需分析 iCATCH octet-stream 私有封包頭。');
-  }
-}
-
-
-function findNextJpegFrame(buffer) {
-  if (!buffer || buffer.length < 4) return { frame:null, rest:buffer || Buffer.alloc(0) };
-  const soi = buffer.indexOf(Buffer.from([0xff, 0xd8]));
-  if (soi < 0) return { frame:null, rest: buffer.length > 1024*1024 ? buffer.slice(-1024) : buffer };
-  const eoi = buffer.indexOf(Buffer.from([0xff, 0xd9]), soi + 2);
-  if (eoi < 0) return { frame:null, rest: soi > 0 ? buffer.slice(soi) : buffer };
-  const frame = buffer.slice(soi, eoi + 2);
-  const rest = buffer.slice(eoi + 2);
-  return { frame, rest };
-}
-
-function startContinuousFfmpegChannel(ch) {
-  const id = padCh(ch);
-  const urlText = fill(NET_VIDEO_TEMPLATE, ch);
-  let proc = null;
-  let stopping = false;
-  let buffer = Buffer.alloc(0);
-  let latestFrame = null;
-  let latestFrameSeq = 0;
-  let consumedSeq = 0;
-  let uploadBusy = false;
-  let frameCount = 0;
-  let skipCount = 0;
-  let consecutiveDrop = 0;
-  let restartCount = 0;
-  let timer = null;
-
-  function restartNow(reason) {
+  ffmpegProc.stderr.on('data', d => { stderrTail = (stderrTail + d.toString('utf8')).slice(-2000); });
+  ffmpegProc.on('close', code => {
     restartCount++;
-    console.log(`[${id}] BLUE_STORM_RESTART reason=${reason} restart=${restartCount}`);
-    buffer = Buffer.alloc(0);
-    latestFrame = null;
-    latestFrameSeq = 0;
-    consumedSeq = 0;
-    consecutiveDrop = 0;
-    try { if (proc) proc.kill('SIGKILL'); } catch (_) {}
-  }
+    console.log(`[PIPE] ffmpeg closed code=${code} restart=${restartCount} ${stderrTail.replace(/\r?\n/g, ' | ')}`);
+    setTimeout(startFfmpeg, Math.min(4000, 800 + restartCount * 250));
+  });
+  ffmpegProc.on('error', e => {
+    restartCount++;
+    console.log(`[PIPE] ffmpeg error ${String(e.message || e)} restart=${restartCount}`);
+    setTimeout(startFfmpeg, Math.min(4000, 800 + restartCount * 250));
+  });
+}
 
-  async function consumeNewestFrame() {
-    if (stopping) return;
-    if (!latestFrame || consumedSeq === latestFrameSeq) return;
-    const frame = latestFrame;
-    consumedSeq = latestFrameSeq;
+function statusJson() {
+  return {
+    ok: true,
+    version: VERSION,
+    port: LOCAL_HTTP_PORT,
+    bind: LOCAL_HTTP_BIND,
+    public_host: PUBLIC_HOST,
+    dvr: `${DVR_HOST}:${DVR_HTTP_PORT}`,
+    pipeline: 'DVR -> FFmpeg -> MJPEG pipe -> Node multipart -> Browser',
+    mode: 'zero_buffer_direct_mjpeg',
+    fps: STREAM_FPS,
+    seq: latestSeq,
+    bytes: latestBytes,
+    age_ms: latestTime ? Date.now() - latestTime : null,
+    clients: clients.size,
+    restarts: restartCount,
+    session: !!sessionCookie
+  };
+}
 
-    const skip = shouldSkipFrame(ch, frame);
-    if (skip.skip) {
-      skipCount++;
-      const totalDropped = markDrop(id, skip.reason || 'DROP', skip.detail || '');
-      consecutiveDrop++;
-      if (skipCount % 1 === 0) console.log(`[${id}] DROP ${skip.reason} ${skip.detail} keep_last_good=1 dropped=${totalDropped} consecutive=${consecutiveDrop}`);
-      if (BLUE_STORM_RESTART_DROPS && consecutiveDrop >= BLUE_STORM_RESTART_DROPS && /BLUE|SIZE_DROP|SMALL_FRAME/.test(skip.reason || '')) {
-        restartNow(skip.reason);
-      }
+function startServer() {
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, `http://${req.headers.host || PUBLIC_HOST}`);
+    if (u.pathname === '/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify(statusJson(), null, 2));
+    }
+    if (u.pathname === '/latest/CH01.jpg') {
+      if (!latestFrame) { res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end('NO_FRAME'); }
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': latestFrame.length, 'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache' });
+      return res.end(latestFrame);
+    }
+    if (u.pathname === '/stream/CH01.mjpg' || u.pathname === '/mjpeg/CH01' || u.pathname === '/direct.mjpg') {
+      res.writeHead(200, {
+        'Content-Type': 'multipart/x-mixed-replace; boundary=rt7frame',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+      clients.add(res);
+      if (latestFrame) writeFrameToClient(res, latestFrame);
+      req.on('close', () => clients.delete(res));
       return;
     }
-
-    consecutiveDrop = 0;
-
-    // Local LAN display updates immediately, independent from Railway upload.
-    rememberLocalFrame(ch, frame);
-    frameCount++;
-
-    // Upload only latest frame. If an upload is still running, skip upload for this frame.
-    if (!uploadBusy && RAILWAY_URL) {
-      uploadBusy = true;
-      upload(ch, frame, 'icatch-real-frame-only-lock-v62s').then(up => {
-        console.log(`[${id}] frame=${frame.length} local=OK upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
-      }).finally(() => { uploadBusy = false; });
-    } else {
-      if (frameCount % STREAM_FPS === 0) console.log(`[${id}] frame=${frame.length} local=OK upload=${RAILWAY_URL?'SKIP_BUSY':'OFF'} fps=${STREAM_FPS} n=${frameCount}`);
+    if (u.pathname === '/' || u.pathname === '/direct') {
+      const html = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 V6.3A Direct MJPEG</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}.meta{font-size:18px;line-height:1.45}</style></head><body><div class="wrap"><h1>RT7 V6.3A Direct MJPEG<br>Zero Buffer</h1><div class="card"><b>LAN Bridge：</b>http://${PUBLIC_HOST}<br><b>真 MJPEG：</b>/stream/CH01.mjpg<br>本版不寫 latest.jpg、不做輪詢、不排隊、不經 Railway；手機直接接收 Node 的 multipart MJPEG。</div><div class="card"><div class="view"><img id="img" src="/stream/CH01.mjpg?ts=${Date.now()}"></div><p class="meta" id="meta">MJPEG 串流連線中...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/stream/CH01.mjpg?ts=${Date.now()}">直接MJPEG</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>async function s(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();document.getElementById('meta').textContent='ONLINE seq='+j.seq+' age_ms='+j.age_ms+' bytes='+j.bytes+' clients='+j.clients+' restarts='+j.restarts;}catch(e){document.getElementById('meta').textContent='status error '+e;}setTimeout(s,1000);}s();</script></div></body></html>`;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(html);
     }
-  }
-
-  async function spawnLoop() {
-    if (stopping) return;
-    const videoHeaders = await getVideoHeaders();
-    const headerText = headersToFfmpegText(Object.assign({}, videoHeaders, { 'User-Agent':'SoCatch/RT7-V6.2S', 'Connection':'keep-alive' }));
-    // V6.2Q: safe decode, but drop old frames in Node. Avoid nobuffer/low_delay blue-green artifacts.
-    const args = [
-      '-hide_banner', '-nostdin',
-      '-loglevel', DEBUG ? 'info' : 'error',
-      '-headers', headerText,
-      '-rw_timeout', String(Math.max(8000000, FFMPEG_TIMEOUT_MS * 1000)),
-      '-i', urlText,
-      '-an',
-      '-vf', `fps=${STREAM_FPS}`,
-      '-q:v', '5',
-      '-f', 'mjpeg',
-      'pipe:1'
-    ];
-    console.log(`[${id}] BLUE_STORM_STREAM start url=${mask(urlText)} fps=${STREAM_FPS} decoder=safe drop_old=1 blue_storm_restart=${BLUE_STORM_RESTART_DROPS} ratio=${VIDEOLOSS_DROP_RATIO}`);
-    proc = spawn('ffmpeg', args, { windowsHide:true });
-    let stderrTail = '';
-    proc.stdout.on('data', d => {
-      buffer = Buffer.concat([buffer, d]);
-      if (buffer.length > 2 * 1024 * 1024) buffer = buffer.slice(-512 * 1024);
-      while (true) {
-        const r = findNextJpegFrame(buffer);
-        buffer = r.rest;
-        if (!r.frame) break;
-        // Critical: overwrite, never queue. This removes accumulated delay.
-        latestFrame = r.frame;
-        latestFrameSeq++;
-      }
-    });
-    proc.stderr.on('data', d => { stderrTail = (stderrTail + d.toString('utf8')).slice(-1000); });
-    proc.on('close', code => {
-      if (stopping) return;
-      restartCount++;
-      console.log(`[${id}] BLUE_STORM_STREAM ffmpeg closed code=${code} restart=${restartCount} ${stderrTail.replace(/\r?\n/g,' | ')}`);
-      setTimeout(spawnLoop, Math.min(5000, 900 + restartCount * 300));
-    });
-    proc.on('error', e => {
-      restartCount++;
-      console.log(`[${id}] BLUE_STORM_STREAM ffmpeg error ${String(e.message || e)} restart=${restartCount}`);
-      setTimeout(spawnLoop, Math.min(5000, 900 + restartCount * 300));
-    });
-
-    if (!timer) timer = setInterval(consumeNewestFrame, Math.max(120, Math.floor(1000 / Math.max(1, STREAM_FPS))));
-  }
-
-  spawnLoop();
-  return () => { stopping = true; try { if (timer) clearInterval(timer); } catch (_) {} try { if (proc) proc.kill('SIGKILL'); } catch (_) {} };
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('RT7 V6.3A: use /direct or /stream/CH01.mjpg');
+  });
+  server.listen(LOCAL_HTTP_PORT, LOCAL_HTTP_BIND, () => {
+    console.log(`[LAN] Direct MJPEG server http://${PUBLIC_HOST}/direct`);
+    console.log(`[LAN] MJPEG stream       http://${PUBLIC_HOST}/stream/CH01.mjpg`);
+  });
 }
 
-async function trueStreamLoop() {
-  if (!RAILWAY_URL) console.log('[WARN] RAILWAY_URL_EMPTY: local Direct LAN server still runs; Railway upload disabled.');
-  await initIcatchSessionOnce();
-  CHANNELS.forEach(ch => startContinuousFfmpegChannel(ch));
-}
-
-async function loop() {
-  if (TRUE_STREAM_MODE && !TEST_ONLY && !RAW_ONLY && !PROBE_ONLY) return trueStreamLoop();
-  for (const ch of CHANNELS) await captureChannel(ch);
-  setTimeout(loop, INTERVAL_MS);
-}
 function checkFfmpeg() {
   return new Promise(resolve => execFile('ffmpeg', ['-version'], { windowsHide:true, timeout:3000 }, (err, stdout) => resolve(err ? {ok:false,error:String(err.message||err)} : {ok:true,version:String(stdout||'').split('\n')[0]})));
 }
 
+async function testOne() {
+  await login();
+  return new Promise(resolve => {
+    const url = fillUrl();
+    const args = ['-hide_banner','-nostdin','-loglevel','error','-headers',headersForFfmpeg(),'-i',url,'-an','-frames:v','1','-q:v',String(JPEG_QUALITY),'-f','mjpeg','pipe:1'];
+    const p = spawn('ffmpeg', args, { windowsHide:true });
+    let b = Buffer.alloc(0);
+    let e = '';
+    p.stdout.on('data', d => b = Buffer.concat([b,d]));
+    p.stderr.on('data', d => e += d.toString('utf8'));
+    p.on('close', code => {
+      if (b.length > 1000) {
+        require('fs').writeFileSync(TEST_OUT, b);
+        console.log(`[TEST] JPEG saved ${TEST_OUT} bytes=${b.length}`);
+      } else {
+        console.log(`[TEST] no JPEG code=${code} bytes=${b.length} ${e.replace(/\r?\n/g,' | ')}`);
+      }
+      resolve();
+    });
+  });
+}
+
 (async () => {
-  console.log(VERSION + ' starting...');
-  console.log('Railway:', RAILWAY_URL || '(missing RAILWAY_URL)');
-  console.log('DVR:', `iCATCH ${DVR_USER}@${DVR_HOST}:${DVR_HTTP_PORT} channels=${CHANNELS.join(',')}`);
-  if (!process.env.ICATCH_NET_VIDEO_TEMPLATE && CHANNELS.length > 1) console.log('[WARN] net_video.cgi 未帶 channel 參數；多路可能全部是同一畫面。建議只用 DVR_CHANNELS=1。');
+  console.log(`${VERSION} starting...`);
+  console.log('DVR:', `iCATCH ${DVR_USER}@${DVR_HOST}:${DVR_HTTP_PORT}`);
   console.log('Magic:', MAGIC);
   console.log('Template:', NET_VIDEO_TEMPLATE);
-  console.log('Mode:', RAW_ONLY ? 'RAW_ONLY' : (TEST_ONLY ? 'TEST_ONLY' : 'BRIDGE_LOOP'));
-  console.log('Token:', TOKEN ? '(set)' : '(empty)');
+  console.log('Mode:', TEST_ONLY ? 'TEST_ONLY' : 'DIRECT_MJPEG_PIPELINE');
   const ff = await checkFfmpeg();
   console.log('FFmpeg:', ff.ok ? ff.version : ('NOT FOUND: ' + ff.error));
-  if (!ff.ok) console.log('[ERROR] 請先安裝 FFmpeg，並確認 ffmpeg.exe 可在命令列執行。');
-  if (!RAILWAY_URL) console.log('[WARN] RAILWAY_URL_EMPTY: 可測 DVR/FFmpeg，但無法上傳 Railway。');
-  await initIcatchSessionOnce();
-  if (PROBE_ONLY || TEST_ONLY) { await testOne(); return; }
+  if (!ff.ok) return console.log('[ERROR] 請先安裝 FFmpeg，並確認 ffmpeg.exe 可在命令列執行。');
+  if (TEST_ONLY) return testOne();
+  await login();
+  startServer();
+  startFfmpeg();
   console.log('Press Ctrl+C to stop.');
-startLocalLanServer();
-  loop();
 })();
