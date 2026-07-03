@@ -1,4 +1,4 @@
-// RT7_V6_2K_ICATCH_DIRECT_LAN_LOCAL_FRAME_FIX
+// RT7_V6_2L_ICATCH_DIRECT_LAN_AUTO_HOST_VIDEOLOSS_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -19,10 +19,11 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2K_ICATCH_DIRECT_LAN_LOCAL_FRAME_FIX';
+const VERSION = 'RT7_V6_2L_ICATCH_DIRECT_LAN_AUTO_HOST_VIDEOLOSS_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -50,12 +51,30 @@ const RAW_ONLY = String(process.env.RAW_ONLY || '').trim() === '1';
 const RAW_OUT = process.env.RAW_OUT || path.join(__dirname, 'icatch_ch1_raw.bin');
 const RAW_BYTES = Math.max(65536, parseInt(process.env.RAW_BYTES || '524288', 10) || 524288);
 const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
+// V6.2L: fallback VIDEO LOSS filter. Blue VIDEO LOSS frames from this DVR are much smaller
+// than real CH01 frames in your tests (~7KB vs 11~26KB). This works even if jpeg-js is not installed.
+const MIN_REAL_JPEG_BYTES = Math.max(0, parseInt(process.env.MIN_REAL_JPEG_BYTES || '9000', 10) || 0);
 
 // V6.2I Direct LAN View: 在 Bridge 電腦本機也提供最新 JPEG / MJPEG，
 // 手機與 Bridge 電腦同一 LAN 時可直接連，避開 Railway 中轉降低延遲。
 const LOCAL_HTTP_PORT = Math.max(0, parseInt(process.env.LOCAL_HTTP_PORT || '8787', 10) || 0);
 const LOCAL_HTTP_BIND = process.env.LOCAL_HTTP_BIND || '0.0.0.0';
-const LOCAL_PUBLIC_HOST = process.env.LOCAL_PUBLIC_HOST || ''; // 可填 192.168.0.55，狀態頁顯示用
+const LOCAL_PUBLIC_HOST = process.env.LOCAL_PUBLIC_HOST || autoLanHost(); // auto 192.168.x.x:8787
+function autoLanHost() {
+  try {
+    const nets = os.networkInterfaces();
+    const addrs = [];
+    for (const arr of Object.values(nets)) for (const n of (arr || [])) {
+      if (n && n.family === 'IPv4' && !n.internal) addrs.push(n.address);
+    }
+    const preferred = addrs.find(a => /^192\.168\.0\./.test(a)) ||
+                      addrs.find(a => /^192\.168\./.test(a)) ||
+                      addrs.find(a => /^10\./.test(a)) ||
+                      addrs.find(a => /^172\.(1[6-9]|2\d|3[0-1])\./.test(a)) ||
+                      addrs[0];
+    return preferred ? (preferred + ':' + LOCAL_HTTP_PORT) : '';
+  } catch (_) { return ''; }
+}
 const LOCAL_LATEST = {}; // { CH01: { jpeg, ts, seq, bytes } }
 function rememberLocalFrame(ch, jpeg) {
   const id = padCh(ch);
@@ -82,7 +101,7 @@ function startLocalLanServer() {
     if (u.pathname === '/' || u.pathname === '/direct') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       const host = LOCAL_PUBLIC_HOST || req.headers.host || ('127.0.0.1:' + LOCAL_HTTP_PORT);
-      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2I Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway，延遲最低。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
+      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2L Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway，延遲最低。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
     }
     if (u.pathname === '/direct-mjpeg') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -129,7 +148,7 @@ function startLocalLanServer() {
     res.statusCode = 404; res.end('RT7_LOCAL_NOT_FOUND');
   });
   srv.listen(LOCAL_HTTP_PORT, LOCAL_HTTP_BIND, () => {
-    console.log(`[LAN] Direct LAN View server http://${LOCAL_HTTP_BIND}:${LOCAL_HTTP_PORT}/  public=${LOCAL_PUBLIC_HOST || '(set LOCAL_PUBLIC_HOST=192.168.0.xx)'}`);
+    console.log(`[LAN] Direct LAN View server http://${LOCAL_HTTP_BIND}:${LOCAL_HTTP_PORT}/  public=${LOCAL_PUBLIC_HOST || '(auto host unavailable)'}`);
   });
   srv.on('error', e => console.log('[LAN] local server error', e.message || e));
 }
@@ -272,7 +291,7 @@ async function httpProbe(urlText, timeoutMs=5000) {
     let u;
     try { u = new URL(urlText); } catch (e) { return resolve({ ok:false, error:'BAD_URL ' + e.message }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-SafeDecode/6.2G' });
+    const headers = Object.assign({}, videoHeaders, { 'User-Agent': 'RT7-iCATCH-DirectLAN/6.2L' });
     const req = lib.request(u, { method:'GET', headers, timeout:timeoutMs }, res => {
       const chunks = [];
       res.on('data', d => {
@@ -373,9 +392,24 @@ function rt7DetectVideoLossJpeg_(buf) {
     }
   }
   if (n) { out.samples=n; out.blue_ratio=blue/n; out.avg_r=sr/n; out.avg_g=sg/n; out.avg_b=sb/n; }
-  out.video_loss = !!(n > 60 && out.blue_ratio > 0.48 && out.avg_b > 80 && out.avg_r < 95 && out.avg_g < 105);
+  out.video_loss = !!(n > 60 && (
+    (out.blue_ratio > 0.40 && out.avg_b > 70 && out.avg_r < 105 && out.avg_g < 120) ||
+    (out.blue_ratio > 0.32 && out.avg_b > 105 && out.avg_b > out.avg_r * 1.45 && out.avg_b > out.avg_g * 1.25)
+  ));
   if (out.video_loss) out.reason = 'BLUE_VIDEO_LOSS_FRAME';
   return out;
+}
+
+function shouldSkipFrame(ch, frame, whyPrefix) {
+  const id = padCh(ch);
+  const hasGood = !!(LOCAL_LATEST[id] && LOCAL_LATEST[id].jpeg);
+  if (MIN_REAL_JPEG_BYTES && frame && frame.length < MIN_REAL_JPEG_BYTES) {
+    // Only skip tiny frames after at least one valid real frame exists, so startup can still recover.
+    if (hasGood) return { skip:true, reason:'SMALL_FRAME_KEEP_LAST_GOOD', detail:'bytes=' + frame.length + ' min=' + MIN_REAL_JPEG_BYTES };
+  }
+  const vl = rt7DetectVideoLossJpeg_(frame);
+  if (vl.video_loss) return { skip:true, reason:vl.reason || 'VIDEO_LOSS', detail:'blue=' + (vl.blue_ratio||0).toFixed(2) + ' avgB=' + (vl.avg_b||0).toFixed(1) };
+  return { skip:false, detail:'ok' };
 }
 
 function upload(ch, jpeg, source='icatch-net-video') {
@@ -386,7 +420,7 @@ function upload(ch, jpeg, source='icatch-net-video') {
     const lib = url.protocol === 'https:' ? https : http;
     const req = lib.request(url, {
       method:'POST',
-      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-SafeDecode/6.2G', 'X-RT7-Single-Source':'CH01' },
+      headers:{ 'Content-Type':'image/jpeg', 'Content-Length':jpeg.length, 'X-RT7-Bridge-Token':TOKEN, 'User-Agent':'RT7-iCATCH-DirectLAN/6.2L', 'X-RT7-Single-Source':'CH01' },
       timeout:10000
     }, res => {
       const chunks=[];
@@ -413,10 +447,10 @@ async function captureChannel(ch) {
     if (r.error) console.log(`[${padCh(ch)}] ffmpeg error: ${r.error.replace(/\r?\n/g, ' | ')}`);
     return r;
   }
-  const vl = rt7DetectVideoLossJpeg_(r.jpeg);
-  if (vl.video_loss) {
-    console.log(`[${padCh(ch)}] frame=${r.jpeg.length} SKIP VIDEO_LOSS blue=${vl.blue_ratio.toFixed(2)} avgB=${vl.avg_b.toFixed(1)} keep_last_good=1`);
-    return Object.assign(r, { skipped:true, video_loss:vl });
+  const skip = shouldSkipFrame(ch, r.jpeg);
+  if (skip.skip) {
+    console.log(`[${padCh(ch)}] frame=${r.jpeg.length} SKIP ${skip.reason} ${skip.detail} keep_last_good=1`);
+    return Object.assign(r, { skipped:true, skip });
   }
   // V6.2K: Direct LAN local frame must be stored even when Railway upload is disabled/failed.
   // This fixes /direct showing NO_LOCAL_FRAME while DVR/FFmpeg test can already save JPEG.
@@ -476,9 +510,9 @@ function startContinuousFfmpegChannel(ch) {
   let restartCount = 0;
 
   async function uploadFrame(frame) {
-    const vl = rt7DetectVideoLossJpeg_(frame);
-    if (vl.video_loss) {
-      console.log(`[${id}] stream SKIP VIDEO_LOSS blue=${vl.blue_ratio.toFixed(2)} avgB=${vl.avg_b.toFixed(1)} keep_last_good=1`);
+    const skip = shouldSkipFrame(ch, frame);
+    if (skip.skip) {
+      console.log(`[${id}] stream SKIP ${skip.reason} ${skip.detail} keep_last_good=1`);
       return;
     }
     const now = Date.now();
