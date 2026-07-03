@@ -1,4 +1,4 @@
-// RT7_V6_3B_DIRECT_MJPEG_PIPELINE_BLUE_GATE_FIX
+// RT7_V6_3C_DIRECT_MJPEG_JPEG_BLUE_DECODE_GATE_FIX
 // iCATCH / SoCatch DVR Direct LAN true MJPEG pipeline
 //
 // 目的：放棄 V6.2 latest.jpg + HTTP poll 架構，改為：
@@ -6,10 +6,11 @@
 // 不寫 latest.jpg、不排隊、不經 Railway，降低同一 LAN 手機延遲。
 
 const { spawn, execFile } = require('child_process');
+const jpeg = require('jpeg-js');
 const http = require('http');
 const os = require('os');
 
-const VERSION = 'RT7_V6_3B_DIRECT_MJPEG_PIPELINE_BLUE_GATE_FIX';
+const VERSION = 'RT7_V6_3C_DIRECT_MJPEG_JPEG_BLUE_DECODE_GATE_FIX';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_USER = process.env.DVR_USER || 'admin';
 const DVR_PASS = process.env.DVR_PASS || 'vbnmmnbv';
@@ -38,16 +39,13 @@ let latestTime = 0;
 let totalFrames = 0;
 let restartCount = 0;
 let clients = new Set();
-const RAW_W = parseInt(process.env.COLOR_GATE_W || '16', 10);
-const RAW_H = parseInt(process.env.COLOR_GATE_H || '9', 10);
-const RAW_FRAME_BYTES = RAW_W * RAW_H * 3;
-const BLUE_RATIO_LIMIT = parseFloat(process.env.BLUE_RATIO_LIMIT || '0.78');
-const BLUE_CENTER_LIMIT = parseFloat(process.env.BLUE_CENTER_LIMIT || '0.72');
-let rawBuffer = Buffer.alloc(0);
-let rawQueue = [];
-let jpegQueue = [];
+const JPEG_BLUE_RATIO_LIMIT = parseFloat(process.env.JPEG_BLUE_RATIO_LIMIT || '0.55');
+const JPEG_BLUE_CENTER_LIMIT = parseFloat(process.env.JPEG_BLUE_CENTER_LIMIT || '0.50');
+const JPEG_SAMPLE_STEP = Math.max(2, parseInt(process.env.JPEG_SAMPLE_STEP || '12', 10));
+const MIN_REAL_FRAME_BYTES = Math.max(1000, parseInt(process.env.MIN_REAL_FRAME_BYTES || '9000', 10));
 let droppedBlue = 0;
-let droppedNoRaw = 0;
+let droppedSmall = 0;
+let droppedDecode = 0;
 
 function autoLanHost() {
   const nets = os.networkInterfaces();
@@ -134,50 +132,63 @@ function writeFrameToClient(res, frame) {
 }
 
 
-function analyzeRawColor(raw) {
-  if (!raw || raw.length < RAW_FRAME_BYTES) return { blueRatio: 0, centerBlueRatio: 0, avgB: 0, isBlue: false };
-  let blue = 0, total = RAW_W * RAW_H, sumB = 0;
-  let cBlue = 0, cTotal = 0;
-  const cx1 = Math.floor(RAW_W * 0.25), cx2 = Math.ceil(RAW_W * 0.75);
-  const cy1 = Math.floor(RAW_H * 0.22), cy2 = Math.ceil(RAW_H * 0.78);
-  for (let y = 0; y < RAW_H; y++) {
-    for (let x = 0; x < RAW_W; x++) {
-      const i = (y * RAW_W + x) * 3;
-      const r = raw[i], g = raw[i + 1], b = raw[i + 2];
-      sumB += b;
-      // iCATCH VIDEO LOSS is strong blue background. Use very cheap RGB gate.
-      const isBluePx = (b > 105 && b > r * 1.35 && b > g * 1.25);
-      if (isBluePx) blue++;
-      if (x >= cx1 && x < cx2 && y >= cy1 && y < cy2) {
-        cTotal++;
-        if (isBluePx) cBlue++;
+function analyzeJpegBlue(frame) {
+  if (!frame || frame.length < MIN_REAL_FRAME_BYTES) {
+    return { isSmall: true, isBlue: false, blueRatio: 0, centerBlueRatio: 0, avgB: 0, w: 0, h: 0 };
+  }
+  try {
+    const img = jpeg.decode(frame, { useTArray: true, maxMemoryUsageInMB: 64 });
+    const { width: w, height: h, data } = img;
+    let blue = 0, total = 0, sumB = 0;
+    let cBlue = 0, cTotal = 0;
+    const cx1 = Math.floor(w * 0.20), cx2 = Math.ceil(w * 0.82);
+    const cy1 = Math.floor(h * 0.18), cy2 = Math.ceil(h * 0.82);
+    const step = JPEG_SAMPLE_STEP;
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        const i = (y * w + x) * 4;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        sumB += b; total++;
+        // iCATCH VIDEO LOSS: large saturated blue field.
+        // Use permissive blue test, then require large area + center area.
+        const isBluePx = (b > 85 && b > r * 1.18 && b > g * 1.12 && (b - Math.max(r, g)) > 18);
+        if (isBluePx) blue++;
+        if (x >= cx1 && x < cx2 && y >= cy1 && y < cy2) {
+          cTotal++;
+          if (isBluePx) cBlue++;
+        }
       }
     }
+    const blueRatio = blue / Math.max(1, total);
+    const centerBlueRatio = cBlue / Math.max(1, cTotal);
+    const avgB = sumB / Math.max(1, total);
+    const isBlue = blueRatio >= JPEG_BLUE_RATIO_LIMIT && centerBlueRatio >= JPEG_BLUE_CENTER_LIMIT && avgB > 80;
+    return { isSmall: false, isBlue, blueRatio, centerBlueRatio, avgB, w, h };
+  } catch (e) {
+    return { decodeError: String(e.message || e), isBlue: true, blueRatio: 1, centerBlueRatio: 1, avgB: 0, w: 0, h: 0 };
   }
-  const blueRatio = blue / Math.max(1, total);
-  const centerBlueRatio = cBlue / Math.max(1, cTotal);
-  const avgB = sumB / Math.max(1, total);
-  const isBlue = blueRatio >= BLUE_RATIO_LIMIT && centerBlueRatio >= BLUE_CENTER_LIMIT && avgB > 120;
-  return { blueRatio, centerBlueRatio, avgB, isBlue };
 }
 
-function tryProcessQueues() {
-  while (jpegQueue.length && rawQueue.length) {
-    const frame = jpegQueue.shift();
-    const raw = rawQueue.shift();
-    const a = analyzeRawColor(raw);
-    if (a.isBlue) {
-      droppedBlue++;
-      if (droppedBlue <= 10 || droppedBlue % 20 === 0) {
-        console.log(`[PIPE] DROP_BLUE_KEEP_LAST_GOOD blue=${a.blueRatio.toFixed(2)} center=${a.centerBlueRatio.toFixed(2)} avgB=${a.avgB.toFixed(1)} bytes=${frame.length} droppedBlue=${droppedBlue}`);
-      }
-      continue;
-    }
-    broadcastFrame(frame);
+function acceptOrDropFrame(frame) {
+  const a = analyzeJpegBlue(frame);
+  if (a.isSmall) {
+    droppedSmall++;
+    if (droppedSmall <= 10 || droppedSmall % 20 === 0) console.log(`[PIPE] DROP_SMALL_JPEG_KEEP_LAST_GOOD bytes=${frame.length} min=${MIN_REAL_FRAME_BYTES} droppedSmall=${droppedSmall}`);
+    return;
   }
-  // Never queue old frames. If raw gate falls behind, discard oldest JPEGs.
-  while (jpegQueue.length > 2) { jpegQueue.shift(); droppedNoRaw++; }
-  while (rawQueue.length > 2) rawQueue.shift();
+  if (a.decodeError) {
+    droppedDecode++;
+    if (droppedDecode <= 10 || droppedDecode % 20 === 0) console.log(`[PIPE] DROP_DECODE_ERROR_KEEP_LAST_GOOD err=${a.decodeError} bytes=${frame.length} droppedDecode=${droppedDecode}`);
+    return;
+  }
+  if (a.isBlue) {
+    droppedBlue++;
+    if (droppedBlue <= 10 || droppedBlue % 20 === 0) {
+      console.log(`[PIPE] DROP_BLUE_JPEG_DECODE_KEEP_LAST_GOOD blue=${a.blueRatio.toFixed(2)} center=${a.centerBlueRatio.toFixed(2)} avgB=${a.avgB.toFixed(1)} wh=${a.w}x${a.h} bytes=${frame.length} droppedBlue=${droppedBlue}`);
+    }
+    return;
+  }
+  broadcastFrame(frame);
 }
 
 function broadcastFrame(frame) {
@@ -202,7 +213,6 @@ function broadcastFrame(frame) {
 
 function startFfmpeg() {
   const url = fillUrl();
-  const vf = `[0:v]fps=${STREAM_FPS},split=2[vjpeg][vraw];[vraw]scale=${RAW_W}:${RAW_H},format=rgb24[vrawout]`;
   const args = [
     '-hide_banner', '-nostdin',
     '-loglevel', DEBUG ? 'info' : 'error',
@@ -210,12 +220,12 @@ function startFfmpeg() {
     // Safe decode: no nobuffer/low_delay because older tests produced blue-green artifacts.
     '-i', url,
     '-an',
-    '-filter_complex', vf,
-    '-map', '[vjpeg]', '-q:v', String(JPEG_QUALITY), '-f', 'mjpeg', 'pipe:1',
-    '-map', '[vrawout]', '-f', 'rawvideo', 'pipe:3'
+    '-vf', `fps=${STREAM_FPS}`,
+    '-q:v', String(JPEG_QUALITY),
+    '-f', 'mjpeg', 'pipe:1'
   ];
-  console.log(`[PIPE] start ffmpeg url=${mask(url)} fps=${STREAM_FPS} quality=${JPEG_QUALITY} rawGate=${RAW_W}x${RAW_H} blueLimit=${BLUE_RATIO_LIMIT}/${BLUE_CENTER_LIMIT}`);
-  ffmpegProc = spawn('ffmpeg', args, { windowsHide: true, stdio: ['ignore','pipe','pipe','pipe'] });
+  console.log(`[PIPE] start ffmpeg url=${mask(url)} fps=${STREAM_FPS} quality=${JPEG_QUALITY} jpegBlueGate=${JPEG_BLUE_RATIO_LIMIT}/${JPEG_BLUE_CENTER_LIMIT} sampleStep=${JPEG_SAMPLE_STEP}`);
+  ffmpegProc = spawn('ffmpeg', args, { windowsHide: true, stdio: ['ignore','pipe','pipe'] });
   let stderrTail = '';
 
   ffmpegProc.stdout.on('data', d => {
@@ -226,22 +236,10 @@ function startFfmpeg() {
       const r = findNextJpegFrame(buffer);
       buffer = r.rest;
       if (!r.frame) break;
-      // No disk, no poll. Queue only until matching low-res raw color sample arrives.
-      jpegQueue.push(r.frame);
-      tryProcessQueues();
+      // No disk, no poll, no dual-pipe desync. Decode this JPEG itself for blue gate.
+      acceptOrDropFrame(r.frame);
     }
   });
-  if (ffmpegProc.stdio && ffmpegProc.stdio[3]) {
-    ffmpegProc.stdio[3].on('data', d => {
-      rawBuffer = Buffer.concat([rawBuffer, d]);
-      while (rawBuffer.length >= RAW_FRAME_BYTES) {
-        rawQueue.push(rawBuffer.slice(0, RAW_FRAME_BYTES));
-        rawBuffer = rawBuffer.slice(RAW_FRAME_BYTES);
-        tryProcessQueues();
-      }
-      if (rawBuffer.length > RAW_FRAME_BYTES * 4) rawBuffer = rawBuffer.slice(-RAW_FRAME_BYTES);
-    });
-  }
   ffmpegProc.stderr.on('data', d => { stderrTail = (stderrTail + d.toString('utf8')).slice(-2000); });
   ffmpegProc.on('close', code => {
     restartCount++;
@@ -271,6 +269,8 @@ function statusJson() {
     age_ms: latestTime ? Date.now() - latestTime : null,
     clients: clients.size,
     dropped_blue: droppedBlue,
+    dropped_small: droppedSmall,
+    dropped_decode: droppedDecode,
     dropped_no_raw: droppedNoRaw,
     raw_gate: `${RAW_W}x${RAW_H}`,
     restarts: restartCount,
@@ -304,12 +304,12 @@ function startServer() {
       return;
     }
     if (u.pathname === '/' || u.pathname === '/direct') {
-      const html = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 V6.3B Direct MJPEG</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}.meta{font-size:18px;line-height:1.45}</style></head><body><div class="wrap"><h1>RT7 V6.3B Direct MJPEG<br>Zero Buffer</h1><div class="card"><b>LAN Bridge：</b>http://${PUBLIC_HOST}<br><b>真 MJPEG：</b>/stream/CH01.mjpg<br>本版不寫 latest.jpg、不做輪詢、不排隊、不經 Railway；新增同一個 FFmpeg 低解析 raw color gate，藍底 VIDEO LOSS 不送出，瀏覽器保留上一張真實影像。</div><div class="card"><div class="view"><img id="img" src="/stream/CH01.mjpg?ts=${Date.now()}"></div><p class="meta" id="meta">MJPEG 串流連線中...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/stream/CH01.mjpg?ts=${Date.now()}">直接MJPEG</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>async function s(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();document.getElementById('meta').textContent='ONLINE seq='+j.seq+' age_ms='+j.age_ms+' bytes='+j.bytes+' clients='+j.clients+' droppedBlue='+j.dropped_blue+' restarts='+j.restarts;}catch(e){document.getElementById('meta').textContent='status error '+e;}setTimeout(s,1000);}s();</script></div></body></html>`;
+      const html = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 V6.3C Direct MJPEG</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}.meta{font-size:18px;line-height:1.45}</style></head><body><div class="wrap"><h1>RT7 V6.3C Direct MJPEG<br>Zero Buffer</h1><div class="card"><b>LAN Bridge：</b>http://${PUBLIC_HOST}<br><b>真 MJPEG：</b>/stream/CH01.mjpg<br>本版不寫 latest.jpg、不做輪詢、不排隊、不經 Railway；改用每張 JPEG 本身解碼取樣判斷藍底，避免 V6.3B 雙 pipe 對位錯誤造成藍屏漏出。</div><div class="card"><div class="view"><img id="img" src="/stream/CH01.mjpg?ts=${Date.now()}"></div><p class="meta" id="meta">MJPEG 串流連線中...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/stream/CH01.mjpg?ts=${Date.now()}">直接MJPEG</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>async function s(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();document.getElementById('meta').textContent='ONLINE seq='+j.seq+' age_ms='+j.age_ms+' bytes='+j.bytes+' clients='+j.clients+' droppedBlue='+j.dropped_blue+' small='+j.dropped_small+' restarts='+j.restarts;}catch(e){document.getElementById('meta').textContent='status error '+e;}setTimeout(s,1000);}s();</script></div></body></html>`;
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(html);
     }
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('RT7 V6.3B: use /direct or /stream/CH01.mjpg');
+    res.end('RT7 V6.3C: use /direct or /stream/CH01.mjpg');
   });
   server.listen(LOCAL_HTTP_PORT, LOCAL_HTTP_BIND, () => {
     console.log(`[LAN] Direct MJPEG server http://${PUBLIC_HOST}/direct`);
