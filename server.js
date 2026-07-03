@@ -1,7 +1,7 @@
 'use strict';
 
 /*
-  RT7_V6_4D_DIRECT_SOCKET_RELAY_DELAYED_MULTIPART_HEADER_FIX
+  RT7_V6_4E_DIRECT_SOCKET_RELAY_OCTET_TO_JPEG_FIX
   目的：不再用 latest.jpg / poll / jpeg-js / FFmpeg decode。
   Node 只做 HTTP socket relay：DVR net_video.cgi -> 手機瀏覽器。
 
@@ -13,7 +13,7 @@ const http = require('http');
 const net = require('net');
 const os = require('os');
 
-const VERSION = 'RT7_V6_4D_DIRECT_SOCKET_RELAY_DELAYED_MULTIPART_HEADER_FIX';
+const VERSION = 'RT7_V6_4E_DIRECT_SOCKET_RELAY_OCTET_TO_JPEG_FIX';
 const PORT = Number(process.env.LOCAL_PORT || process.env.PORT || 8787);
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_HTTP_PORT = Number(process.env.DVR_HTTP_PORT || 80);
@@ -32,6 +32,21 @@ let relayErrors = 0;
 let lastRelayAt = 0;
 let lastBytes = 0;
 let lastError = '';
+
+
+function normalizeMultipartChunk(chunk) {
+  // iCATCH net_video.cgi 的每一張圖常用：Content-Type: application/octet-stream
+  // Android/Chrome <img> MJPEG 對 octet-stream 相容性差，會顯示破圖/MJPEG_ERROR。
+  // 只改 HTTP part header 文字，不改 JPEG binary。
+  const a = Buffer.from('Content-Type: application/octet-stream', 'latin1');
+  const b = Buffer.from('Content-Type: image/jpeg', 'latin1');
+  const a2 = Buffer.from('Content-type: application/octet-stream', 'latin1');
+  const b2 = Buffer.from('Content-Type: image/jpeg', 'latin1');
+  let out = chunk;
+  if (out.indexOf(a) >= 0) out = Buffer.from(out.toString('latin1').replaceAll('Content-Type: application/octet-stream', 'Content-Type: image/jpeg'), 'latin1');
+  if (out.indexOf(a2) >= 0) out = Buffer.from(out.toString('latin1').replaceAll('Content-type: application/octet-stream', 'Content-Type: image/jpeg'), 'latin1');
+  return out;
+}
 
 function authHeader() {
   return 'Basic ' + Buffer.from(`${DVR_USER}:${DVR_PASS}`).toString('base64');
@@ -125,10 +140,9 @@ function sendDvrGetSocket(res, ch = DVR_CHANNEL) {
 
   const path = dvrPath(ch);
   const sock = net.createConnection({ host: DVR_HOST, port: DVR_HTTP_PORT });
-  let headerBuf = Buffer.alloc(0);
-  let headerDone = false;
+  let buf = Buffer.alloc(0);
+  let state = 'status_header'; // status_header -> maybe_inner_header -> streaming
   let clientClosed = false;
-  let dvrStatusLine = '';
 
   function closeAll(reason) {
     if (clientClosed) return;
@@ -139,72 +153,120 @@ function sendDvrGetSocket(res, ch = DVR_CHANNEL) {
     if (reason) console.log(`[RELAY] close reason=${reason} active=${activeClients}`);
   }
 
+  function startBrowser(boundary, firstBody) {
+    if (res.headersSent) return;
+    boundary = String(boundary || 'myboundary').replace(/^--/, '').trim() || 'myboundary';
+    res.writeHead(200, {
+      'Content-Type': `multipart/x-mixed-replace; boundary=${boundary}`,
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Connection': 'close',
+      'X-RT7-Version': VERSION,
+      'X-RT7-Mode': 'direct-socket-relay-octet-to-jpeg'
+    });
+    state = 'streaming';
+    if (firstBody && firstBody.length) {
+      lastBytes += firstBody.length;
+      res.write(normalizeMultipartChunk(firstBody));
+    }
+  }
+
   res.on('close', () => closeAll('browser_close'));
   res.on('error', () => closeAll('browser_error'));
 
   sock.setTimeout(RELAY_TIMEOUT_MS);
   sock.on('connect', () => {
-    const lines = [
+    // 注意：最後一定要 \r\n\r\n。不要多加，也不要少加。
+    const reqLines = [
       `GET ${path} HTTP/1.0`,
       `Host: ${DVR_HOST}:${DVR_HTTP_PORT}`,
       `Authorization: ${authHeader()}`,
       `Magic: ${MAGIC}`,
-      sessionCookie ? `Cookie: ${sessionCookie}` : '',
+      sessionCookie ? `Cookie: ${sessionCookie}` : null,
       'User-Agent: RT7-V6.4D-SocketRelay',
       'Accept: multipart/x-mixed-replace,image/jpeg,*/*',
-      'Connection: close',
-      '',
-      ''
-    ].filter(x => x !== '').join('\r\n') + '\r\n\r\n';
+      'Connection: close'
+    ].filter(Boolean);
+    const requestText = reqLines.join('\r\n') + '\r\n\r\n';
     console.log(`[RELAY] start CH${String(ch).padStart(2,'0')} ${DVR_HOST}:${DVR_HTTP_PORT}${path} clients=${activeClients}`);
-    sock.write(lines);
+    sock.write(requestText, 'latin1');
   });
 
   sock.on('data', (chunk) => {
     if (clientClosed) return;
-    if (!headerDone) {
-      headerBuf = Buffer.concat([headerBuf, chunk]);
-      const idx = headerBuf.indexOf('\r\n\r\n');
-      if (idx < 0) return;
 
-      const rawHeader = headerBuf.subarray(0, idx).toString('latin1');
-      const body = headerBuf.subarray(idx + 4);
-      dvrStatusLine = rawHeader.split(/\r?\n/)[0] || '';
-
-      if (!/200/.test(dvrStatusLine)) {
+    if (state === 'streaming') {
+      lastBytes += chunk.length;
+      const ok = res.write(normalizeMultipartChunk(chunk));
+      if (!ok && res.writableLength > 512 * 1024) {
         relayErrors++;
-        lastError = `DVR_STATUS_${dvrStatusLine}`;
-        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end(`DVR relay failed: ${dvrStatusLine}\nPath: ${path}\n`);
-        closeAll('dvr_non_200');
-        return;
-      }
-
-      // 不解析 JPEG；直接用 DVR 的 multipart body。
-      // 對瀏覽器重新送乾淨 header，避免 DVR HTTP/1.0 header 對手機瀏覽器相容性問題。
-      res.writeHead(200, {
-        'Content-Type': 'multipart/x-mixed-replace; boundary=myboundary',
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
-        'Pragma': 'no-cache',
-        'Connection': 'close',
-        'X-RT7-Version': VERSION,
-        'X-RT7-Mode': 'direct-socket-relay'
-      });
-      headerDone = true;
-      if (body.length) {
-        lastBytes += body.length;
-        res.write(body);
+        lastError = 'BROWSER_BACKPRESSURE_CLOSE';
+        closeAll('browser_backpressure');
       }
       return;
     }
 
-    lastBytes += chunk.length;
-    // Zero-buffer：若手機端暫時塞住，不累積大量 buffer，直接結束讓使用者重連。
-    const ok = res.write(chunk);
-    if (!ok && res.writableLength > 512 * 1024) {
-      relayErrors++;
-      lastError = 'BROWSER_BACKPRESSURE_CLOSE';
-      closeAll('browser_backpressure');
+    buf = Buffer.concat([buf, chunk]);
+
+    if (state === 'status_header') {
+      const idx = buf.indexOf('\r\n\r\n');
+      if (idx < 0) return;
+      const rawHeader = buf.subarray(0, idx).toString('latin1');
+      const body = buf.subarray(idx + 4);
+      const statusLine = rawHeader.split(/\r?\n/)[0] || '';
+      const ctLine = (rawHeader.match(/content-type\s*:\s*([^\r\n]+)/i) || [])[1] || '';
+      if (!/200/.test(statusLine)) {
+        relayErrors++;
+        lastError = `DVR_STATUS_${statusLine}`;
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(`DVR relay failed: ${statusLine}\nPath: ${path}\n`);
+        closeAll('dvr_non_200');
+        return;
+      }
+      // 正常 DVR 可能在 HTTP header 內帶 Content-Type，也可能先只回 HTTP/1.0 200 OK，
+      // 再把 Content-type: multipart... 當成後續 body 送出。手機 Chrome 不能把那段當影像，必須剝掉。
+      if (/multipart\/x-mixed-replace/i.test(ctLine)) {
+        const b = (ctLine.match(/boundary\s*=\s*([^;\s]+)/i) || [])[1] || 'myboundary';
+        startBrowser(b, body);
+        return;
+      }
+      buf = body;
+      state = 'maybe_inner_header';
+    }
+
+    if (state === 'maybe_inner_header') {
+      // 等待 DVR 延遲送出的內層 multipart header，例如：
+      // Content-type: multipart/x-mixed-replace;boundary=--myboundary\r\n\r\n--myboundary...
+      const txtHead = buf.subarray(0, Math.min(buf.length, 512)).toString('latin1');
+      if (/^\s*Content-Type\s*:/i.test(txtHead) || /^\s*Content-type\s*:/i.test(txtHead)) {
+        const idx2 = buf.indexOf('\r\n\r\n');
+        if (idx2 < 0) {
+          if (buf.length > 4096) {
+            relayErrors++;
+            lastError = 'INNER_HEADER_TOO_LONG';
+            res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('DVR inner multipart header too long\n');
+            closeAll('inner_header_too_long');
+          }
+          return;
+        }
+        const innerHeader = buf.subarray(0, idx2).toString('latin1');
+        const innerBody = buf.subarray(idx2 + 4);
+        const ct = (innerHeader.match(/content-type\s*:\s*([^\r\n]+)/i) || [])[1] || '';
+        const b = (ct.match(/boundary\s*=\s*([^;\s]+)/i) || [])[1] || 'myboundary';
+        console.log(`[RELAY] delayed multipart header boundary=${b} firstBody=${innerBody.length}`);
+        startBrowser(b, normalizeMultipartChunk(innerBody));
+        return;
+      }
+
+      // 若已經直接看到 boundary 或 JPEG，就直接開始。
+      if (buf.length > 0) {
+        const m = txtHead.match(/--([A-Za-z0-9_\-]+)/);
+        const b = m ? m[1] : 'myboundary';
+        startBrowser(b, normalizeMultipartChunk(buf));
+        buf = Buffer.alloc(0);
+        return;
+      }
     }
   });
 
@@ -230,14 +292,14 @@ function htmlPage() {
   const base = `http://${host}:${PORT}`;
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RT7 V6.4D Direct Socket Relay</title>
+<title>RT7 V6.4E Direct Socket Relay</title>
 <style>
 body{margin:0;background:#06242a;color:#fff;font-family:Arial,'Microsoft JhengHei',sans-serif}.wrap{max-width:760px;margin:auto;padding:32px 22px}h1{font-size:44px;line-height:1.12}.card{background:#fff;color:#123;border-radius:24px;padding:22px;margin:20px 0}.video{width:100%;border-radius:18px;background:#000}.btn{display:inline-block;background:#11aee8;color:#fff;padding:14px 18px;border-radius:12px;margin:8px;text-decoration:none;font-weight:700}.muted{color:#607080;font-size:15px;line-height:1.6}code{font-size:16px}
 </style></head><body><div class="wrap">
-<h1>RT7 V6.4D<br>Direct Socket Relay</h1>
-<div class="card"><b>LAN Bridge：</b>${base}<br><b>Socket Relay：</b>/relay/CH01.mjpg<br><span class="muted">本版修正 HTTP GET 結尾 CRLF，避免 DVR 等不到完整 request 而 timeout；Node 不經 FFmpeg、不寫 latest.jpg，只把 DVR HTTP 串流直接轉送給手機。</span></div>
+<h1>RT7 V6.4E<br>Direct Socket Relay</h1>
+<div class="card"><b>LAN Bridge：</b>${base}<br><b>Socket Relay：</b>/relay/CH01.mjpg<br><span class="muted">本版修正 iCATCH DVR 每張 frame 使用 application/octet-stream，手機 Chrome 無法當 MJPEG 顯示；Bridge 會改寫為 image/jpeg 後再送手機。</span></div>
 <div class="card"><img id="v" class="video" src="/relay/CH01.mjpg?ts=${Date.now()}" onerror="document.getElementById('st').textContent='MJPEG_ERROR：請按重連，或改用 /status 檢查 Bridge。'">
-<p id="st" class="muted">若 DVR 輸出 VIDEO LOSS，本版會直接顯示，這是低延遲 relay 的正常現象。</p>
+<p id="st" class="muted">若仍出現 MJPEG_ERROR，請開 /relay/CH01.mjpg 直接測試；本版會把 octet-stream part header 改為 image/jpeg。</p>
 <a class="btn" href="javascript:location.reload()">重連</a><a class="btn" href="/relay/CH01.mjpg">直接MJPEG</a><a class="btn" href="/status">狀態JSON</a></div>
 </div></body></html>`;
 }
@@ -278,7 +340,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(`RT7 V6.4D 404\n/direct\n/status\n/relay/CH01.mjpg\n`);
+  res.end(`RT7 V6.4E 404\n/direct\n/status\n/relay/CH01.mjpg\n`);
 });
 
 server.on('clientError', (err, socket) => {
