@@ -1,4 +1,4 @@
-// RT7_V6_2L_ICATCH_DIRECT_LAN_AUTO_HOST_VIDEOLOSS_FIX
+// RT7_V6_2M_ICATCH_STRICT_VIDEOLOSS_REJECT_FIX
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -23,7 +23,7 @@ const os = require('os');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2L_ICATCH_DIRECT_LAN_AUTO_HOST_VIDEOLOSS_FIX';
+const VERSION = 'RT7_V6_2M_ICATCH_STRICT_VIDEOLOSS_REJECT_FIX';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -101,7 +101,7 @@ function startLocalLanServer() {
     if (u.pathname === '/' || u.pathname === '/direct') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       const host = LOCAL_PUBLIC_HOST || req.headers.host || ('127.0.0.1:' + LOCAL_HTTP_PORT);
-      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2L Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway，延遲最低。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
+      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2M Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway，延遲最低。V6.2M 已強化藍底 VIDEO LOSS 過濾。</div><div class="card"><div class="view"><img id="img" src="/latest/CH01.jpg?ts=${Date.now()}"></div><p id="meta">Direct stable poll starting...</p><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/direct-mjpeg">MJPEG備用</a><a class="btn" href="/status">狀態 JSON</a></p></div><script>let seq=0;async function tick(){try{const r=await fetch('/status?ts='+Date.now(),{cache:'no-store'});const j=await r.json();const c=(j.cameras||[]).find(x=>x.id==='CH01');if(c&&c.seq!==seq){seq=c.seq;const im=new Image();im.onload=()=>{document.getElementById('img').src=im.src;document.getElementById('meta').textContent='ONLINE seq='+seq+' age_ms='+c.age_ms+' bytes='+c.bytes;};im.src='/latest/CH01.jpg?seq='+seq+'&ts='+Date.now();}}catch(e){document.getElementById('meta').textContent='poll error '+e;}setTimeout(tick,250);}tick();</script></div></body></html>`);
     }
     if (u.pathname === '/direct-mjpeg') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -371,32 +371,53 @@ async function ffmpegOneJpeg(urlText, ch) {
 
 
 function rt7DetectVideoLossJpeg_(buf) {
-  // iCATCH DVR "VIDEO LOSS" frame is mostly saturated blue with black bars and white text.
-  // We filter it before upload, so Railway keeps the last real image instead of flashing VIDEO LOSS.
-  const out = { video_loss:false, reason:'', blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0 };
+  // V6.2M strict VIDEO LOSS reject.
+  // The iCATCH DVR blue screen can be 7KB~16KB, so size alone is not enough.
+  // Detect the large saturated-blue center area and reject it before saving LOCAL_LATEST.
+  const out = { video_loss:false, reason:'', blue_ratio:0, center_blue_ratio:0, avg_r:0, avg_g:0, avg_b:0, samples:0, center_samples:0 };
   if (!jpegjs || !buf || buf.length < 128) return out;
   let img;
-  try { img = jpegjs.decode(buf, { useTArray:true, maxMemoryUsageInMB:80 }); } catch (e) { out.reason='JPEG_DECODE_FAIL'; return out; }
+  try { img = jpegjs.decode(buf, { useTArray:true, maxMemoryUsageInMB:96 }); } catch (e) { out.reason='JPEG_DECODE_FAIL'; return out; }
   const w = img.width || 0, h = img.height || 0, data = img.data;
   if (!w || !h || !data) return out;
-  const step = Math.max(4, Math.floor(Math.min(w,h) / 48));
-  let n=0, blue=0, sr=0, sg=0, sb=0;
+
+  const step = Math.max(3, Math.floor(Math.min(w,h) / 64));
+  const x1 = Math.floor(w * 0.08), x2 = Math.floor(w * 0.92);
+  const y1 = Math.floor(h * 0.18), y2 = Math.floor(h * 0.82);
+  let n=0, blue=0, cn=0, cblue=0, sr=0, sg=0, sb=0;
+
+  function isBlue(r,g,b) {
+    // Covers pure DVR blue plus JPEG-compressed blue/purple blocks.
+    return b > 75 && b > r + 28 && b > g + 20 && b > r * 1.35 && b > g * 1.18;
+  }
+
   for (let y=0; y<h; y+=step) {
     for (let x=0; x<w; x+=step) {
       const i = (y*w + x) * 4;
       const r = data[i] || 0, g = data[i+1] || 0, b = data[i+2] || 0;
-      // ignore near-black letterbox areas
-      if (r < 18 && g < 18 && b < 18) continue;
+      // ignore black letterbox only; count white VIDEO LOSS text as non-blue.
+      if (r < 16 && g < 16 && b < 16) continue;
       n++; sr += r; sg += g; sb += b;
-      if (b > 95 && b > r * 1.65 && b > g * 1.45 && r < 95 && g < 95) blue++;
+      const ib = isBlue(r,g,b);
+      if (ib) blue++;
+      if (x >= x1 && x <= x2 && y >= y1 && y <= y2) {
+        cn++;
+        if (ib) cblue++;
+      }
     }
   }
   if (n) { out.samples=n; out.blue_ratio=blue/n; out.avg_r=sr/n; out.avg_g=sg/n; out.avg_b=sb/n; }
+  if (cn) { out.center_samples=cn; out.center_blue_ratio=cblue/cn; }
+
   out.video_loss = !!(n > 60 && (
-    (out.blue_ratio > 0.40 && out.avg_b > 70 && out.avg_r < 105 && out.avg_g < 120) ||
-    (out.blue_ratio > 0.32 && out.avg_b > 105 && out.avg_b > out.avg_r * 1.45 && out.avg_b > out.avg_g * 1.25)
+    // Most reliable: the central view area is mostly saturated blue.
+    out.center_blue_ratio > 0.46 ||
+    // Fallback: overall image strongly blue-dominant.
+    (out.blue_ratio > 0.36 && out.avg_b > 78 && out.avg_b > out.avg_r * 1.22 && out.avg_b > out.avg_g * 1.12) ||
+    // Small blue frames are usually VIDEO LOSS from this DVR.
+    (buf.length < 17500 && out.center_blue_ratio > 0.30 && out.avg_b > 80)
   ));
-  if (out.video_loss) out.reason = 'BLUE_VIDEO_LOSS_FRAME';
+  if (out.video_loss) out.reason = 'STRICT_BLUE_VIDEO_LOSS_FRAME';
   return out;
 }
 
