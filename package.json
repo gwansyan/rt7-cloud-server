@@ -1,8 +1,7 @@
 {
-  "name": "rt7-v6-4d-direct-socket-relay-delayed-multipart-header-fix",
-  "version": "6.4.4",
-  "description": "RT7 V6.4D iCATCH DVR direct socket relay delayed multipart header fix",
+  "name": "rt7-v6-4g-direct-jpeg-poll-view-fix",
+  "version": "6.4.0-g",
   "main": "bridge.js",
-  "scripts": { "start": "node bridge.js" },
+  "scripts": {"start":"node bridge.js"},
   "dependencies": {}
 }
