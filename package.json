@@ -1,1 +1,7 @@
-{"name":"rt7-v6-5a-direct-ffmpeg-rgb-bmp-view","version":"6.5.0","main":"server.js","scripts":{"start":"node server.js"},"dependencies":{}}
+{
+  "name": "rt7-v6-5b-direct-ffmpeg-iframe-mjpeg-fix",
+  "version": "6.5.0-b",
+  "main": "server.js",
+  "scripts": {"start":"node server.js"},
+  "dependencies": {"jpeg-js":"^0.4.4"}
+}
