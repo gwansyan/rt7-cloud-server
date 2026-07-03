@@ -1,152 +1,203 @@
 'use strict';
-
-/* RT7_V6_4F_DIRECT_SOCKET_RELAY_JPEG_FRAME_EXTRACT_FIX
-   iCATCH net_video.cgi -> Node socket -> extract JPEG SOI/EOI -> browser MJPEG.
-   不使用 FFmpeg / jpeg-js / latest.jpg。避免 Android Chrome 不接受 DVR 原始 multipart/octet-stream。
-*/
 const http = require('http');
-const net = require('net');
-const os = require('os');
+const { spawn } = require('child_process');
+const { Buffer } = require('buffer');
 
-const VERSION = 'RT7_V6_4F_DIRECT_SOCKET_RELAY_JPEG_FRAME_EXTRACT_FIX';
-const PORT = Number(process.env.LOCAL_PORT || process.env.PORT || 8787);
+const VERSION = 'RT7_V6_5A_DIRECT_FFMPEG_RGB_BMP_VIEW';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
-const DVR_HTTP_PORT = Number(process.env.DVR_HTTP_PORT || 80);
+const DVR_HTTP_PORT = parseInt(process.env.DVR_HTTP_PORT || '80', 10);
 const DVR_USER = process.env.DVR_USER || 'admin';
 const DVR_PASS = process.env.DVR_PASS || 'vbnmmnbv';
-const DVR_CHANNEL = process.env.DVR_CHANNEL || '1';
-const MAGIC = process.env.ICATCH_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
-const TEMPLATE = process.env.ICATCH_HTTP_TEMPLATE || '/cgi-bin/net_video.cgi?hq=0&iframe=15&pframe=15&audio=0';
-const RELAY_TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS || 30000);
-const MIN_JPEG_BYTES = Number(process.env.MIN_JPEG_BYTES || 7000);
-const MAX_BUFFER_BYTES = Number(process.env.MAX_BUFFER_BYTES || 1024 * 1024);
+const LOCAL_PORT = parseInt(process.env.LOCAL_PORT || '8787', 10);
+const LOCAL_PUBLIC_HOST = process.env.LOCAL_PUBLIC_HOST || '';
+const CATCH_MAGIC = process.env.ICATCH_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
+const PATH = process.env.ICATCH_HTTP_TEMPLATE || '/cgi-bin/net_video.cgi?hq=0&iframe=15&pframe=15&audio=0';
+const FPS = parseInt(process.env.FPS || '5', 10);
+const W = parseInt(process.env.OUT_W || '480', 10);
+const H = parseInt(process.env.OUT_H || '270', 10);
+const FRAME_BYTES = W * H * 3;
+const POLL_MS = parseInt(process.env.POLL_MS || '250', 10);
+const BLUE_RATIO = parseFloat(process.env.BLUE_RATIO || '0.62');
+const BLUE_CENTER_RATIO = parseFloat(process.env.BLUE_CENTER_RATIO || '0.55');
 
-let sessionCookie = '';
-let totalClients = 0, activeClients = 0, relayStarts = 0, relayErrors = 0;
-let lastRelayAt = 0, lastBytes = 0, lastError = '', lastFrameBytes = 0, lastSeq = 0, extracted = 0, droppedSmall = 0;
+let cookie = '';
+let ff = null;
+let rawBuf = Buffer.alloc(0);
+let latestBmp = null;
+let latestAt = 0;
+let seq = 0, accepted = 0, droppedBlue = 0, droppedSmall = 0, restarts = 0, totalRaw = 0;
+let lastError = '';
+let lastBlue = null;
+let clients = 0;
 
-function authHeader(){ return 'Basic ' + Buffer.from(`${DVR_USER}:${DVR_PASS}`).toString('base64'); }
-function localIPv4(){
-  if (process.env.LOCAL_PUBLIC_HOST && process.env.LOCAL_PUBLIC_HOST.trim()) return process.env.LOCAL_PUBLIC_HOST.trim();
-  const nets=os.networkInterfaces(), all=[];
-  for (const name of Object.keys(nets)) {
-    if (/vmware|virtualbox|tailscale|loopback|docker|hyper-v/i.test(name)) continue;
-    for (const ni of nets[name]||[]) if (ni.family==='IPv4' && !ni.internal) all.push(ni.address);
-  }
-  const parts=String(DVR_HOST).split('.');
-  if (parts.length===4){ const pre=parts.slice(0,3).join('.')+'.'; const same=all.find(ip=>ip.startsWith(pre)); if(same) return same; }
-  return all.find(ip=>ip.startsWith('192.168.')) || all.find(ip=>ip.startsWith('10.')) || all[0] || '127.0.0.1';
-}
-function dvrPath(ch){ let p=TEMPLATE.replaceAll('{ch}',String(ch)).replaceAll('{channel}',String(ch)); return p.startsWith('/')?p:'/'+p; }
+function basicAuth(){ return 'Basic ' + Buffer.from(`${DVR_USER}:${DVR_PASS}`).toString('base64'); }
+function now(){ return Date.now(); }
 
-function postDvrCmd(xml, timeoutMs=3500){
+function httpReq(opts, body){
   return new Promise(resolve=>{
-    const boundary='----rt7v64f';
-    const body=`--${boundary}\r\nContent-Disposition: form-data; name="datafile"; filename="command.xml"\r\nContent-Type: text/xml\r\n\r\n${xml}\r\n--${boundary}--\r\n`;
-    const req=http.request({host:DVR_HOST,port:DVR_HTTP_PORT,method:'POST',path:'/dvr/cmd',timeout:timeoutMs,headers:{Authorization:authHeader(),'Content-Type':`multipart/form-data; boundary=${boundary}`,'Content-Length':Buffer.byteLength(body),Connection:'close'}},res=>{
-      let sample='';
-      if(res.headers['set-cookie']&&res.headers['set-cookie'][0]){const m=/sessionid=([^;]+)/.exec(res.headers['set-cookie'][0]); if(m) sessionCookie=`sessionid=${m[1]}`;}
-      res.on('data',d=>{ if(sample.length<220) sample+=d.toString('utf8'); });
-      res.on('end',()=>resolve({ok:res.statusCode===200,status:res.statusCode,cookie:sessionCookie,sample}));
+    const req = http.request(opts, res=>{
+      const chunks=[];
+      res.on('data', c=>chunks.push(c));
+      res.on('end', ()=>resolve({status:res.statusCode, headers:res.headers, body:Buffer.concat(chunks)}));
     });
-    req.on('timeout',()=>req.destroy(new Error('login timeout')));
-    req.on('error',e=>resolve({ok:false,status:0,error:e.message}));
-    req.end(body);
+    req.on('error', e=>resolve({status:0, headers:{}, body:Buffer.from(String(e)), error:e.message}));
+    req.setTimeout(2500, ()=>req.destroy(new Error('timeout')));
+    if(body) req.write(body);
+    req.end();
   });
 }
-async function ensureLogin(){
-  const xml='<?xml version="1.0" encoding="UTF-8"?><DVR Platform="Hi3520"><GetConfiguration File="system.xml" /></DVR>';
-  const r=await postDvrCmd(xml);
-  console.log(r.ok?`[AUTH] login OK cookie=${sessionCookie||'(none)'}`:`[AUTH] login FAIL status=${r.status||0} error=${r.error||''}`);
-  return r;
+
+async function login(){
+  const boundary='----maya';
+  const xml='<?xml version="1.0" encoding="UTF-8"?><DVR Platform="Hi3520"><GetConfiguration File="profile.xml" /></DVR>';
+  const body=`--${boundary}\r\nContent-Disposition: form-data; name="datafile"; filename="command.xml"\r\nContent-Type: text/xml\r\n\r\n${xml}\r\n--${boundary}--\r\n`;
+  const r = await httpReq({hostname:DVR_HOST, port:DVR_HTTP_PORT, method:'POST', path:'/dvr/cmd', headers:{
+    Authorization: basicAuth(), 'Content-Type':`multipart/form-data; boundary=${boundary}`, 'Content-Length':Buffer.byteLength(body)
+  }}, body);
+  const sc = r.headers['set-cookie'];
+  if(sc && sc.length) cookie = String(sc[0]).split(';')[0];
+  console.log(`[AUTH] login status=${r.status} cookie=${cookie || '(none)'}`);
 }
 
-function writeMjpegHeader(res){
-  if(res.headersSent) return;
-  res.writeHead(200,{
-    'Content-Type':'multipart/x-mixed-replace; boundary=rt7frame',
-    'Cache-Control':'no-store, no-cache, must-revalidate, max-age=0',
-    'Pragma':'no-cache',
-    'Connection':'close',
-    'X-RT7-Version':VERSION,
-    'X-Accel-Buffering':'no'
-  });
-  if (res.flushHeaders) res.flushHeaders();
-}
-function sendJpegPart(res, jpg){
-  writeMjpegHeader(res);
-  res.write(`--rt7frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpg.length}\r\nX-Seq: ${++lastSeq}\r\n\r\n`,'latin1');
-  res.write(jpg);
-  res.write('\r\n','latin1');
-  lastFrameBytes=jpg.length; lastRelayAt=Date.now(); extracted++;
-}
-
-function relayExtractJpeg(res, ch=DVR_CHANNEL){
-  totalClients++; activeClients++; relayStarts++;
-  let closed=false, buf=Buffer.alloc(0), headerDone=false;
-  const path=dvrPath(ch);
-  const sock=net.createConnection({host:DVR_HOST,port:DVR_HTTP_PORT});
-  function closeAll(reason){
-    if(closed) return; closed=true; activeClients=Math.max(0,activeClients-1);
-    try{sock.destroy();}catch(_){ } try{ if(!res.writableEnded) res.end(); }catch(_){ }
-    console.log(`[RELAY] close reason=${reason} active=${activeClients}`);
+function blueStats(rgb){
+  let blue=0, total=0, centerBlue=0, centerTotal=0;
+  const x1=Math.floor(W*0.18), x2=Math.floor(W*0.82), y1=Math.floor(H*0.18), y2=Math.floor(H*0.82);
+  // sample every 4 pixels for speed
+  for(let y=0; y<H; y+=4){
+    for(let x=0; x<W; x+=4){
+      const i=(y*W+x)*3;
+      const r=rgb[i], g=rgb[i+1], b=rgb[i+2];
+      const isBlue = b > 105 && b > r*1.35 && b > g*1.15;
+      if(isBlue) blue++;
+      total++;
+      if(x>=x1 && x<=x2 && y>=y1 && y<=y2){ if(isBlue) centerBlue++; centerTotal++; }
+    }
   }
-  res.on('close',()=>closeAll('browser_close')); res.on('error',()=>closeAll('browser_error'));
-  sock.setTimeout(RELAY_TIMEOUT_MS);
-  sock.on('connect',()=>{
-    const lines=[`GET ${path} HTTP/1.0`,`Host: ${DVR_HOST}:${DVR_HTTP_PORT}`,`Authorization: ${authHeader()}`,`Magic: ${MAGIC}`,sessionCookie?`Cookie: ${sessionCookie}`:null,'User-Agent: RT7-V6.4F-JPEG-Extractor','Accept: */*','Connection: close'].filter(Boolean);
-    console.log(`[RELAY] start CH${String(ch).padStart(2,'0')} ${DVR_HOST}:${DVR_HTTP_PORT}${path} clients=${activeClients}`);
-    sock.write(lines.join('\r\n')+'\r\n\r\n','latin1');
-  });
-  sock.on('data',chunk=>{
-    if(closed) return; lastBytes += chunk.length;
-    if(!headerDone){
-      buf=Buffer.concat([buf,chunk]);
-      const idx=buf.indexOf('\r\n\r\n');
-      if(idx<0){ if(buf.length>16384){ relayErrors++; lastError='DVR_HEADER_TOO_LONG'; closeAll('header_too_long'); } return; }
-      const hdr=buf.subarray(0,idx).toString('latin1');
-      if(!/^HTTP\/\d\.\d\s+200/i.test(hdr)){
-        relayErrors++; lastError=(hdr.split(/\r?\n/)[0]||'DVR_NON_200');
-        if(!res.headersSent){res.writeHead(502,{'Content-Type':'text/plain; charset=utf-8'}); res.end(lastError+'\n');}
-        closeAll('dvr_non_200'); return;
+  return {blue: total?blue/total:0, center: centerTotal?centerBlue/centerTotal:0};
+}
+
+function makeBmp(rgb){
+  const rowBytes = W*3;
+  const pad = (4 - (rowBytes % 4)) % 4;
+  const imgSize = (rowBytes + pad) * H;
+  const fileSize = 54 + imgSize;
+  const out = Buffer.alloc(fileSize);
+  out.write('BM',0,'ascii');
+  out.writeUInt32LE(fileSize,2);
+  out.writeUInt32LE(54,10);
+  out.writeUInt32LE(40,14);
+  out.writeInt32LE(W,18);
+  out.writeInt32LE(H,22); // bottom-up BMP
+  out.writeUInt16LE(1,26);
+  out.writeUInt16LE(24,28);
+  out.writeUInt32LE(0,30);
+  out.writeUInt32LE(imgSize,34);
+  let p=54;
+  for(let y=H-1; y>=0; y--){
+    const row=y*W*3;
+    for(let x=0; x<W; x++){
+      const i=row+x*3;
+      out[p++] = rgb[i+2]; // B
+      out[p++] = rgb[i+1]; // G
+      out[p++] = rgb[i];   // R
+    }
+    for(let k=0;k<pad;k++) out[p++]=0;
+  }
+  return out;
+}
+
+function startFfmpeg(){
+  if(ff) return;
+  restarts++;
+  const url = `http://${DVR_HOST}:${DVR_HTTP_PORT}${PATH}`;
+  const headerLines = [`Authorization: ${basicAuth()}`, cookie ? `Cookie: ${cookie}` : '', `Magic: ${CATCH_MAGIC}`, 'User-Agent: RT7-V6.5A'].filter(Boolean).join('\r\n') + '\r\n';
+  const args = [
+    '-hide_banner','-loglevel','error',
+    '-fflags','nobuffer','-flags','low_delay','-analyzeduration','0','-probesize','32768',
+    '-headers', headerLines,
+    '-i', url,
+    '-an','-vf',`fps=${FPS},scale=${W}:${H}:flags=fast_bilinear`,
+    '-pix_fmt','rgb24','-f','rawvideo','pipe:1'
+  ];
+  console.log(`[FFMPEG] start ${url} fps=${FPS} out=${W}x${H}`);
+  ff = spawn('ffmpeg', args, {stdio:['ignore','pipe','pipe']});
+  rawBuf = Buffer.alloc(0);
+  ff.stdout.on('data', chunk=>{
+    totalRaw += chunk.length;
+    rawBuf = Buffer.concat([rawBuf, chunk]);
+    // keep only newest if client/CPU lags
+    if(rawBuf.length > FRAME_BYTES * 6) rawBuf = rawBuf.slice(rawBuf.length - FRAME_BYTES * 3);
+    while(rawBuf.length >= FRAME_BYTES){
+      const frame = rawBuf.slice(0, FRAME_BYTES);
+      rawBuf = rawBuf.slice(FRAME_BYTES);
+      seq++;
+      const st = blueStats(frame);
+      lastBlue = st;
+      if(st.blue >= BLUE_RATIO || st.center >= BLUE_CENTER_RATIO){
+        droppedBlue++;
+        if(droppedBlue % 20 === 0) console.log(`[PIPE] DROP_BLUE_KEEP_LAST blue=${st.blue.toFixed(2)} center=${st.center.toFixed(2)} droppedBlue=${droppedBlue}`);
+        continue;
       }
-      chunk=buf.subarray(idx+4); buf=Buffer.alloc(0); headerDone=true;
-      writeMjpegHeader(res); // 先讓手機知道是 MJPEG；後續只送真正 JPEG frame。
-      if(!chunk.length) return;
-    }
-    buf=Buffer.concat([buf,chunk]);
-    while(true){
-      const soi=buf.indexOf(Buffer.from([0xff,0xd8]));
-      if(soi<0){ if(buf.length>MAX_BUFFER_BYTES) buf=buf.subarray(buf.length-1024); return; }
-      if(soi>0) buf=buf.subarray(soi);
-      const eoi=buf.indexOf(Buffer.from([0xff,0xd9]),2);
-      if(eoi<0){ if(buf.length>MAX_BUFFER_BYTES) buf=buf.subarray(0, MAX_BUFFER_BYTES); return; }
-      const jpg=buf.subarray(0,eoi+2);
-      buf=buf.subarray(eoi+2);
-      if(jpg.length<MIN_JPEG_BYTES){ droppedSmall++; continue; }
-      sendJpegPart(res,jpg);
-      if(res.writableLength>512*1024){ relayErrors++; lastError='BROWSER_BACKPRESSURE'; closeAll('browser_backpressure'); return; }
+      latestBmp = makeBmp(frame);
+      latestAt = now();
+      accepted++;
+      if(accepted % 10 === 0) console.log(`[PIPE] accept seq=${seq} accepted=${accepted} age_ms=0 bmp=${latestBmp.length} clients=${clients} blue=${st.blue.toFixed(2)}`);
     }
   });
-  sock.on('timeout',()=>{ relayErrors++; lastError='DVR_SOCKET_TIMEOUT'; closeAll('dvr_timeout'); });
-  sock.on('error',e=>{ relayErrors++; lastError=e.message; if(!res.headersSent){res.writeHead(502,{'Content-Type':'text/plain; charset=utf-8'});res.end(e.message+'\n');} closeAll('dvr_error'); });
-  sock.on('close',()=>closeAll('dvr_close'));
+  ff.stderr.on('data', d=>{ const s=d.toString('utf8').trim(); if(s){ lastError=s.slice(-500); console.log('[FFMPEG]', s); } });
+  ff.on('close', code=>{
+    console.log(`[FFMPEG] close code=${code}`);
+    ff=null; lastError=`ffmpeg_close_${code}`;
+    setTimeout(async()=>{ await login(); startFfmpeg(); }, 1200);
+  });
+  ff.on('error', e=>{ console.log('[FFMPEG] error', e.message); lastError=e.message; ff=null; setTimeout(startFfmpeg,1200); });
 }
 
-function htmlPage(){
- const host=localIPv4(), base=`http://${host}:${PORT}`;
- return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 V6.4F Direct Socket Relay</title><style>body{margin:0;background:#06242a;color:#fff;font-family:Arial,'Microsoft JhengHei',sans-serif}.wrap{max-width:760px;margin:auto;padding:32px 22px}h1{font-size:44px;line-height:1.12}.card{background:#fff;color:#123;border-radius:24px;padding:22px;margin:20px 0}.video{width:100%;border-radius:18px;background:#000}.btn{display:inline-block;background:#11aee8;color:#fff;padding:14px 18px;border-radius:12px;margin:8px;text-decoration:none;font-weight:700}.muted{color:#607080;font-size:15px;line-height:1.6}</style></head><body><div class="wrap"><h1>RT7 V6.4F<br>Direct Socket Relay</h1><div class="card"><b>LAN Bridge：</b>${base}<br><b>JPEG Extract Relay：</b>/relay/CH01.mjpg<br><span class="muted">本版不直接轉送 DVR 原始 octet-stream；改從資料流抽出真正 JPEG，重包成標準 MJPEG，解決手機 MJPEG_ERROR。</span></div><div class="card"><img class="video" src="/relay/CH01.mjpg?ts=${Date.now()}" onerror="document.getElementById('st').textContent='MJPEG_ERROR：請按重連，或開 /status 檢查 last_error。'"><p id="st" class="muted">ONLINE 時會直接顯示 /relay/CH01.mjpg。</p><a class="btn" href="javascript:location.reload()">重連</a><a class="btn" href="/relay/CH01.mjpg">直接MJPEG</a><a class="btn" href="/status">狀態JSON</a></div></div></body></html>`;
+function statusJson(){
+  const age = latestAt ? now()-latestAt : null;
+  return {ok:true, version:VERSION, mode:'ffmpeg_raw_rgb_to_bmp_poll_blue_filter',
+    dvr:{host:DVR_HOST, port:DVR_HTTP_PORT, user:DVR_USER, path:PATH},
+    local:{port:LOCAL_PORT, host:LOCAL_PUBLIC_HOST || '(auto)'},
+    stream:{online:!!latestBmp && age < 5000, seq, accepted, age_ms:age, bmp_bytes:latestBmp?latestBmp.length:0, total_raw:totalRaw, droppedBlue, droppedSmall, restarts, clients, ffmpeg_running:!!ff, last_blue:lastBlue, last_error:lastError}
+  };
 }
-function statusJson(){return {ok:true,version:VERSION,mode:'jpeg_frame_extract_no_decode',dvr:{host:DVR_HOST,port:DVR_HTTP_PORT,user:DVR_USER,path:dvrPath(DVR_CHANNEL)},local:{port:PORT,host:localIPv4(),direct:`http://${localIPv4()}:${PORT}/direct`},auth:{cookie_set:!!sessionCookie},relay:{active_clients:activeClients,total_clients:totalClients,starts:relayStarts,errors:relayErrors,last_bytes:lastBytes,last_frame_bytes:lastFrameBytes,seq:lastSeq,extracted,droppedSmall,age_ms:lastRelayAt?Date.now()-lastRelayAt:null,last_error:lastError}};}
 
-const server=http.createServer(async (req,res)=>{
- const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);
- if(url.pathname==='/'||url.pathname==='/direct'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(htmlPage());return;}
- if(url.pathname==='/status'||url.pathname==='/status.json'){res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(statusJson(),null,2));return;}
- if(url.pathname==='/login'){const r=await ensureLogin();res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(r,null,2));return;}
- const m=/^\/relay\/(CH)?(\d+)\.mjpg$/i.exec(url.pathname)||/^\/stream\/(CH)?(\d+)\.mjpg$/i.exec(url.pathname);
- if(m){relayExtractJpeg(res,m[2]||DVR_CHANNEL);return;}
- res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'});res.end('RT7 V6.4F 404\n/direct\n/status\n/relay/CH01.mjpg\n');
+function page(host){
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 V6.5A BMP View</title>
+<style>body{margin:0;background:#062326;color:#123;font-family:Arial,'Noto Sans TC',sans-serif}.wrap{max-width:900px;margin:auto;padding:28px}.title{font-size:52px;line-height:1.15;color:#fff;font-weight:900}.card{background:#fff;border-radius:28px;padding:22px;margin:24px 0}.hint{font-size:26px;line-height:1.45}.video{width:100%;border-radius:18px;background:#111;display:block}.stat{font-size:25px;color:#5f6f80;line-height:1.35;margin-top:14px}.btn{display:inline-block;background:#19aee6;color:white;text-decoration:none;border-radius:14px;padding:14px 22px;margin:8px 6px;font-size:23px;font-weight:800}@media(max-width:600px){.wrap{padding:18px}.title{font-size:46px}.hint,.stat{font-size:22px}.btn{font-size:21px}}</style>
+</head><body><div class="wrap"><div class="title">RT7 V6.5A<br>Direct BMP Poll</div><div class="card hint"><b>LAN Bridge：</b>http://${host}<br><b>顯示：</b>/frame.bmp 每 ${POLL_MS}ms 更新<br>本版改用 FFmpeg 解 DVR，輸出 RGB，再由 Node 轉 BMP；手機不解 MJPEG、不讀壞 JPG，並過濾藍底 VIDEO LOSS。</div><div class="card"><img id="img" class="video" src="/frame.bmp?t=${Date.now()}"><div id="stat" class="stat">讀取中...</div><a class="btn" href="javascript:reloadImg()">重讀一張</a><a class="btn" href="/status">狀態 JSON</a><a class="btn" href="/frame.bmp" target="_blank">單張 BMP</a></div></div>
+<script>let lastA=-1;const img=document.getElementById('img'),stat=document.getElementById('stat');function reloadImg(){img.src='/frame.bmp?t='+Date.now()}async function tick(){try{const j=await fetch('/status?t='+Date.now(),{cache:'no-store'}).then(r=>r.json());const s=j.stream||{};stat.textContent=(s.online?'ONLINE':'WAIT')+' accepted='+s.accepted+' seq='+s.seq+' age_ms='+s.age_ms+' blueDrop='+s.droppedBlue+' bmp='+s.bmp_bytes;if(s.accepted!==lastA&&s.online){lastA=s.accepted;reloadImg()}}catch(e){stat.textContent='poll error '+e}}setInterval(tick,${POLL_MS});tick()</script></body></html>`;
+}
+
+const server = http.createServer((req,res)=>{
+  const u = new URL(req.url, 'http://x');
+  if(u.pathname==='/' || u.pathname==='/direct'){
+    clients++;
+    res.writeHead(200, {'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
+    res.end(page(req.headers.host || `127.0.0.1:${LOCAL_PORT}`));
+    setTimeout(()=>{clients=Math.max(0,clients-1);},1000);
+    return;
+  }
+  if(u.pathname==='/status'){
+    res.writeHead(200, {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Access-Control-Allow-Origin':'*'});
+    res.end(JSON.stringify(statusJson(), null, 2)); return;
+  }
+  if(u.pathname==='/frame.bmp'){
+    if(!latestBmp){ res.writeHead(503, {'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'}); res.end('NO_BMP_FRAME_YET'); return; }
+    res.writeHead(200, {'Content-Type':'image/bmp','Content-Length':latestBmp.length,'Cache-Control':'no-store, no-cache, must-revalidate, max-age=0','Pragma':'no-cache','Access-Control-Allow-Origin':'*'});
+    res.end(latestBmp); return;
+  }
+  if(u.pathname==='/frame.jpg'){
+    res.writeHead(302, {Location:'/frame.bmp'}); res.end(); return;
+  }
+  res.writeHead(404, {'Content-Type':'text/plain'}); res.end('404');
 });
-server.on('clientError',(err,socket)=>{try{socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')}catch(_){}});
-server.listen(PORT,'0.0.0.0',async()=>{console.log(`${VERSION} starting...`);console.log(`DVR: iCATCH ${DVR_USER}@${DVR_HOST}:${DVR_HTTP_PORT} channel=${DVR_CHANNEL}`);console.log(`Template: ${TEMPLATE}`);console.log(`Direct LAN View: http://${localIPv4()}:${PORT}/direct`);await ensureLogin();console.log('Press Ctrl+C to stop.');});
+
+(async function main(){
+  console.log(`${VERSION} starting...`);
+  console.log(`DVR: iCATCH ${DVR_USER}@${DVR_HOST}:${DVR_HTTP_PORT} channel=1`);
+  console.log(`Phone URL: http://${LOCAL_PUBLIC_HOST || '192.168.0.55'}:${LOCAL_PORT}/direct`);
+  await login();
+  startFfmpeg();
+  server.listen(LOCAL_PORT, '0.0.0.0', ()=>console.log(`[LAN] server http://0.0.0.0:${LOCAL_PORT}/ public=${LOCAL_PUBLIC_HOST || '192.168.0.55'}:${LOCAL_PORT}`));
+})();
