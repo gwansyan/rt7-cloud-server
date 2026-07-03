@@ -1,4 +1,4 @@
-// RT7_V6_2H_ICATCH_3FPS_LOW_DELAY_BALANCE
+// RT7_V6_2I_ICATCH_DIRECT_LAN_VIEW_MODE
 // iCATCH / SoCatch DVR net_video.cgi LAN Bridge
 //
 // 根據 PCAPdroid 已確認真正影像 API：
@@ -22,7 +22,7 @@ const path = require('path');
 let jpegjs = null;
 try { jpegjs = require('jpeg-js'); } catch (_) { jpegjs = null; }
 
-const VERSION = 'RT7_V6_2H_ICATCH_3FPS_LOW_DELAY_BALANCE';
+const VERSION = 'RT7_V6_2I_ICATCH_DIRECT_LAN_VIEW_MODE';
 const RAILWAY_URL = (process.env.RAILWAY_URL || '').replace(/\/+$/, '');
 const TOKEN = process.env.RT7_DVR_BRIDGE_TOKEN || 'rt7-dvr-bridge';
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
@@ -50,6 +50,85 @@ const RAW_ONLY = String(process.env.RAW_ONLY || '').trim() === '1';
 const RAW_OUT = process.env.RAW_OUT || path.join(__dirname, 'icatch_ch1_raw.bin');
 const RAW_BYTES = Math.max(65536, parseInt(process.env.RAW_BYTES || '524288', 10) || 524288);
 const MAGIC = process.env.ICATCH_MAGIC || process.env.DVR_MAGIC || '39e739de-8d69-aadb-78b9-946a2905858d';
+
+// V6.2I Direct LAN View: 在 Bridge 電腦本機也提供最新 JPEG / MJPEG，
+// 手機與 Bridge 電腦同一 LAN 時可直接連，避開 Railway 中轉降低延遲。
+const LOCAL_HTTP_PORT = Math.max(0, parseInt(process.env.LOCAL_HTTP_PORT || '8787', 10) || 0);
+const LOCAL_HTTP_BIND = process.env.LOCAL_HTTP_BIND || '0.0.0.0';
+const LOCAL_PUBLIC_HOST = process.env.LOCAL_PUBLIC_HOST || ''; // 可填 192.168.0.55，狀態頁顯示用
+const LOCAL_LATEST = {}; // { CH01: { jpeg, ts, seq, bytes } }
+function rememberLocalFrame(ch, jpeg) {
+  const id = padCh(ch);
+  if (!Buffer.isBuffer(jpeg) || jpeg.length < 4) return;
+  const old = LOCAL_LATEST[id] || { seq: 0 };
+  LOCAL_LATEST[id] = { jpeg, ts: Date.now(), seq: (old.seq || 0) + 1, bytes: jpeg.length };
+}
+function localFrameStatus() {
+  return Object.keys(LOCAL_LATEST).sort().map(id => ({
+    id, online: Date.now() - LOCAL_LATEST[id].ts < 10000,
+    age_ms: Date.now() - LOCAL_LATEST[id].ts,
+    seq: LOCAL_LATEST[id].seq,
+    bytes: LOCAL_LATEST[id].bytes
+  }));
+}
+function startLocalLanServer() {
+  if (!LOCAL_HTTP_PORT) return;
+  const boundary = 'rt7lanboundary';
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    if (u.pathname === '/' || u.pathname === '/direct') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      const host = LOCAL_PUBLIC_HOST || req.headers.host || ('127.0.0.1:' + LOCAL_HTTP_PORT);
+      return res.end(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RT7 Direct LAN Bridge</title><style>body{margin:0;background:#071f25;color:white;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}.wrap{max-width:760px;margin:0 auto;padding:14px}.card{background:white;color:#10212b;border-radius:18px;padding:14px;margin:12px 0}.view{background:#000;border-radius:14px;overflow:hidden}.view img{width:100%;display:block}.btn{display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:10px;padding:10px 12px;font-weight:900;margin:4px}</style></head><body><div class="wrap"><h1>RT7 V6.2I Direct LAN View</h1><div class="card"><b>LAN Bridge：</b>http://${host}<br><b>CH01：</b>/stream/CH01.mjpg<br>此頁由 Bridge 電腦直接提供，不經 Railway，延遲最低。</div><div class="card"><div class="view"><img src="/stream/CH01.mjpg?ts=${Date.now()}"></div><p><a class="btn" href="/latest/CH01.jpg?ts=${Date.now()}">看單張</a><a class="btn" href="/status">狀態 JSON</a></p></div></div></body></html>`);
+    }
+    if (u.pathname === '/status') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.end(JSON.stringify({ ok: true, version: VERSION, port: LOCAL_HTTP_PORT, bind: LOCAL_HTTP_BIND, public_host: LOCAL_PUBLIC_HOST, cameras: localFrameStatus() }, null, 2));
+    }
+    const mLatest = u.pathname.match(/^\/latest\/(CH\d+)\.jpg$/i);
+    if (mLatest) {
+      const id = mLatest[1].toUpperCase();
+      const f = LOCAL_LATEST[id];
+      if (!f || !f.jpeg) { res.statusCode = 404; return res.end('NO_LOCAL_FRAME'); }
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('X-RT7-Seq', String(f.seq));
+      res.setHeader('X-RT7-Age-Ms', String(Date.now() - f.ts));
+      return res.end(f.jpeg);
+    }
+    const mStream = u.pathname.match(/^\/stream\/(CH\d+)\.mjpg$/i);
+    if (mStream) {
+      const id = mStream[1].toUpperCase();
+      res.writeHead(200, {
+        'Content-Type': 'multipart/x-mixed-replace; boundary=' + boundary,
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Connection': 'close',
+        'Access-Control-Allow-Origin': '*'
+      });
+      let lastSeq = -1;
+      const timer = setInterval(() => {
+        const f = LOCAL_LATEST[id];
+        if (!f || !f.jpeg || f.seq === lastSeq) return;
+        lastSeq = f.seq;
+        try {
+          res.write(`--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${f.jpeg.length}\r\nX-RT7-Seq: ${f.seq}\r\nX-RT7-Age-Ms: ${Date.now()-f.ts}\r\n\r\n`);
+          res.write(f.jpeg);
+          res.write('\r\n');
+        } catch (_) {}
+      }, Math.max(80, Math.floor(1000 / Math.max(1, STREAM_FPS))));
+      req.on('close', () => clearInterval(timer));
+      return;
+    }
+    res.statusCode = 404; res.end('RT7_LOCAL_NOT_FOUND');
+  });
+  srv.listen(LOCAL_HTTP_PORT, LOCAL_HTTP_BIND, () => {
+    console.log(`[LAN] Direct LAN View server http://${LOCAL_HTTP_BIND}:${LOCAL_HTTP_PORT}/  public=${LOCAL_PUBLIC_HOST || '(set LOCAL_PUBLIC_HOST=192.168.0.xx)'}`);
+  });
+  srv.on('error', e => console.log('[LAN] local server error', e.message || e));
+}
 
 // V6.2B: 單一 net_video.cgi 來源鎖定 CH01，避免把同一畫面誤標成 CH02/CH03/CH04。
 // V6.1D: iCATCH/SoCatch net_video.cgi 可在 Authorization + Magic 下直接串流。
@@ -403,7 +482,8 @@ function startContinuousFfmpegChannel(ch) {
     lastUploadAt = now;
     uploadBusy = true;
     try {
-      const up = await upload(ch, frame, 'icatch-3fps-low-delay-balance-v62h');
+      rememberLocalFrame(ch, frame);
+      const up = await upload(ch, frame, 'icatch-direct-lan-view-v62i');
       frameCount++;
       console.log(`[${id}] stream frame=${frame.length} upload=${up.ok?'OK':'FAIL'} ${up.status||''} fps=${STREAM_FPS} n=${frameCount} ${up.error||''}`);
     } finally {
@@ -499,5 +579,6 @@ function checkFfmpeg() {
   await initIcatchSessionOnce();
   if (PROBE_ONLY || TEST_ONLY) { await testOne(); return; }
   console.log('Press Ctrl+C to stop.');
+startLocalLanServer();
   loop();
 })();
