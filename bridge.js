@@ -1,7 +1,7 @@
 'use strict';
 
 /*
-  RT7_V6_4A_DIRECT_SOCKET_RELAY
+  RT7_V6_4B_DIRECT_SOCKET_RELAY_BOUNDARY_IP_SERVERJS_FIX
   目的：不再用 latest.jpg / poll / jpeg-js / FFmpeg decode。
   Node 只做 HTTP socket relay：DVR net_video.cgi -> 手機瀏覽器。
 
@@ -13,7 +13,7 @@ const http = require('http');
 const net = require('net');
 const os = require('os');
 
-const VERSION = 'RT7_V6_4A_DIRECT_SOCKET_RELAY';
+const VERSION = 'RT7_V6_4B_DIRECT_SOCKET_RELAY_BOUNDARY_IP_SERVERJS_FIX';
 const PORT = Number(process.env.LOCAL_PORT || process.env.PORT || 8787);
 const DVR_HOST = process.env.DVR_HOST || '192.168.0.123';
 const DVR_HTTP_PORT = Number(process.env.DVR_HTTP_PORT || 80);
@@ -38,18 +38,26 @@ function authHeader() {
 }
 
 function localIPv4() {
+  if (process.env.LOCAL_PUBLIC_HOST && process.env.LOCAL_PUBLIC_HOST.trim()) {
+    return process.env.LOCAL_PUBLIC_HOST.trim();
+  }
   const nets = os.networkInterfaces();
+  const all = [];
   for (const name of Object.keys(nets)) {
+    if (/vmware|virtualbox|tailscale|loopback|docker|hyper-v/i.test(name)) continue;
     for (const ni of nets[name] || []) {
-      if (ni.family === 'IPv4' && !ni.internal && ni.address.startsWith('192.168.')) return ni.address;
+      if (ni.family === 'IPv4' && !ni.internal) all.push(ni.address);
     }
   }
-  for (const name of Object.keys(nets)) {
-    for (const ni of nets[name] || []) {
-      if (ni.family === 'IPv4' && !ni.internal) return ni.address;
-    }
+  // Prefer the same /24 as DVR, e.g. DVR 192.168.0.123 -> PC 192.168.0.xx
+  const parts = String(DVR_HOST).split('.');
+  if (parts.length === 4) {
+    const prefix = parts.slice(0, 3).join('.') + '.';
+    const same = all.find(ip => ip.startsWith(prefix));
+    if (same) return same;
   }
-  return '127.0.0.1';
+  const lan = all.find(ip => ip.startsWith('192.168.')) || all.find(ip => ip.startsWith('10.')) || all.find(ip => ip.startsWith('172.'));
+  return lan || all[0] || '127.0.0.1';
 }
 
 function dvrPath(ch) {
@@ -142,7 +150,7 @@ function sendDvrGetSocket(res, ch = DVR_CHANNEL) {
       `Authorization: ${authHeader()}`,
       `Magic: ${MAGIC}`,
       sessionCookie ? `Cookie: ${sessionCookie}` : '',
-      'User-Agent: RT7-V6.4A-SocketRelay',
+      'User-Agent: RT7-V6.4B-SocketRelay',
       'Accept: multipart/x-mixed-replace,image/jpeg,*/*',
       'Connection: close',
       '',
@@ -175,7 +183,7 @@ function sendDvrGetSocket(res, ch = DVR_CHANNEL) {
       // 不解析 JPEG；直接用 DVR 的 multipart body。
       // 對瀏覽器重新送乾淨 header，避免 DVR HTTP/1.0 header 對手機瀏覽器相容性問題。
       res.writeHead(200, {
-        'Content-Type': 'multipart/x-mixed-replace; boundary=--myboundary',
+        'Content-Type': 'multipart/x-mixed-replace; boundary=myboundary',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
         'Connection': 'close',
@@ -222,12 +230,12 @@ function htmlPage() {
   const base = `http://${host}:${PORT}`;
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RT7 V6.4A Direct Socket Relay</title>
+<title>RT7 V6.4B Direct Socket Relay</title>
 <style>
 body{margin:0;background:#06242a;color:#fff;font-family:Arial,'Microsoft JhengHei',sans-serif}.wrap{max-width:760px;margin:auto;padding:32px 22px}h1{font-size:44px;line-height:1.12}.card{background:#fff;color:#123;border-radius:24px;padding:22px;margin:20px 0}.video{width:100%;border-radius:18px;background:#000}.btn{display:inline-block;background:#11aee8;color:#fff;padding:14px 18px;border-radius:12px;margin:8px;text-decoration:none;font-weight:700}.muted{color:#607080;font-size:15px;line-height:1.6}code{font-size:16px}
 </style></head><body><div class="wrap">
-<h1>RT7 V6.4A<br>Direct Socket Relay</h1>
-<div class="card"><b>LAN Bridge：</b>${base}<br><b>Socket Relay：</b>/relay/CH01.mjpg<br><span class="muted">本版不經 FFmpeg / 不寫 latest.jpg / 不做藍屏過濾；Node 只把 DVR HTTP 串流直接轉送給手機，延遲最低。</span></div>
+<h1>RT7 V6.4B<br>Direct Socket Relay</h1>
+<div class="card"><b>LAN Bridge：</b>${base}<br><b>Socket Relay：</b>/relay/CH01.mjpg<br><span class="muted">本版修正 MJPEG boundary 與本機 IP 選擇；Node 不經 FFmpeg、不寫 latest.jpg，只把 DVR HTTP 串流直接轉送給手機。</span></div>
 <div class="card"><img id="v" class="video" src="/relay/CH01.mjpg?ts=${Date.now()}" onerror="document.getElementById('st').textContent='MJPEG_ERROR：請按重連，或改用 /status 檢查 Bridge。'">
 <p id="st" class="muted">若 DVR 輸出 VIDEO LOSS，本版會直接顯示，這是低延遲 relay 的正常現象。</p>
 <a class="btn" href="javascript:location.reload()">重連</a><a class="btn" href="/relay/CH01.mjpg">直接MJPEG</a><a class="btn" href="/status">狀態JSON</a></div>
@@ -270,7 +278,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(`RT7 V6.4A 404\n/direct\n/status\n/relay/CH01.mjpg\n`);
+  res.end(`RT7 V6.4B 404\n/direct\n/status\n/relay/CH01.mjpg\n`);
 });
 
 server.on('clientError', (err, socket) => {

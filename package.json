@@ -1,10 +1,11 @@
 {
-  "name": "rt7-v6-4a-direct-socket-relay",
-  "version": "6.4.0-a",
-  "description": "RT7 V6.4A iCATCH Direct Socket Relay - no JPEG decode, no latest.jpg, no blue filter",
-  "main": "bridge.js",
+  "name": "rt7-v6-4b-direct-socket-relay-boundary-ip-serverjs-fix",
+  "version": "6.4.2",
+  "description": "RT7 V6.4B iCATCH DVR direct socket relay with boundary/IP/server.js fix",
+  "main": "server.js",
   "scripts": {
-    "start": "node bridge.js"
+    "start": "node server.js",
+    "bridge": "node bridge.js"
   },
   "dependencies": {}
 }
