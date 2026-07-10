@@ -1,6 +1,6 @@
 {
   "name": "rt7-cloud-server",
-  "version": "5.6.16",
+  "version": "8.18.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,5 +11,6 @@
     "jpeg-js": "^0.4.4",
     "sql.js": "^1.10.3",
     "web-push": "^3.6.7"
-  }
+  },
+  "description": "RT7 V8.18 Railway DVR Cloud Platform + Face Access Control"
 }
