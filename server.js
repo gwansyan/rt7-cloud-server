@@ -28,6 +28,8 @@ const DVR_FRAME_DIR = path.join(DATA_DIR, 'dvr_frames');
 const DVR_RUNTIME = new Map();
 const DVR_FRAME_CACHE = new Map();
 const DVR_CONTROL = new Map();
+const DVR_WS_STATS = { ingest_connections:0, viewer_connections:0, frames:0, bytes:0, broadcasts:0, dropped:0, last_frame_time:0 };
+const DVR_WS_DISK_WRITE = new Map();
 
 
 // V5.7A user login/register
@@ -4993,6 +4995,52 @@ app.get('/api/rt7/face/snapshot_trigger_test', (req,res)=>{
 
 
 wss.on('connection', (ws, req) => {
+  // V8.18C: DVR JPEG WebSocket ingest/viewer multiplexed on the existing /ws endpoint.
+  try {
+    const u = new URL(req.url || '/ws', 'http://localhost');
+    const role = safeString(u.searchParams.get('role') || '');
+    if (role === 'dvr_ingest') {
+      const expected = safeString(process.env.RT7_DVR_INGEST_KEY || '');
+      const supplied = safeString(u.searchParams.get('key') || req.headers['x-rt7-dvr-key'] || '');
+      if (expected && supplied !== expected) { try { ws.close(1008, 'DVR_INGEST_KEY_INVALID'); } catch (_) {} return; }
+      ws.rt7Role = 'dvr_ingest';
+      ws.rt7DvrId = rt7DvrSafeId_(u.searchParams.get('dvr_id') || 'dvr1');
+      ws.rt7DvrCh = rt7DvrSafeChannel_(u.searchParams.get('ch') || 1);
+      DVR_WS_STATS.ingest_connections++;
+      try { ws.send(JSON.stringify({ok:true,type:'dvr_ingest_ready',version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',dvr_id:ws.rt7DvrId,ch:ws.rt7DvrCh,time:Date.now()})); } catch (_) {}
+      ws.on('message', (data, isBinary) => {
+        if (!isBinary) return;
+        const buf = Buffer.from(data);
+        if (buf.length < 128 || buf[0] !== 0xff || buf[1] !== 0xd8) return;
+        const dvrId=ws.rt7DvrId, ch=ws.rt7DvrCh, key=rt7DvrRuntimeKey_(dvrId,ch), now=Date.now(), old=DVR_RUNTIME.get(key)||{frames:0,bytes:0};
+        DVR_FRAME_CACHE.set(key,{buf:Buffer.from(buf),time:now});
+        DVR_RUNTIME.set(key,{frames:old.frames+1,bytes:old.bytes+buf.length,last_time:now,last_size:buf.length,source_ip:clientIp(req),transport:'websocket'});
+        DVR_WS_STATS.frames++; DVR_WS_STATS.bytes += buf.length; DVR_WS_STATS.last_frame_time=now;
+        const lastDisk=DVR_WS_DISK_WRITE.get(key)||0;
+        if(now-lastDisk>1000){ DVR_WS_DISK_WRITE.set(key,now); try{ const fp=rt7DvrFramePath_(dvrId,ch),tmp=fp+'.tmp'; fs.writeFileSync(tmp,buf); fs.renameSync(tmp,fp); }catch(_){} }
+        let sent=0;
+        for (const client of wss.clients) {
+          if (client !== ws && client.readyState === WebSocket.OPEN && client.rt7Role === 'dvr_view' && client.rt7DvrId === dvrId && client.rt7DvrCh === ch) {
+            if (client.bufferedAmount > 1024*1024) { DVR_WS_STATS.dropped++; continue; }
+            try { client.send(buf,{binary:true}); sent++; } catch (_) {}
+          }
+        }
+        DVR_WS_STATS.broadcasts += sent;
+      });
+      ws.on('close',()=>{DVR_WS_STATS.ingest_connections=Math.max(0,DVR_WS_STATS.ingest_connections-1)});
+      return;
+    }
+    if (role === 'dvr_view') {
+      const user = rt7GetSessionUser_(req);
+      if (!user || !rt7UserSystemEnabled_(user)) { try { ws.close(1008,'LOGIN_REQUIRED'); } catch (_) {} return; }
+      ws.rt7Role='dvr_view'; ws.rt7DvrId=rt7DvrSafeId_(u.searchParams.get('dvr_id')||'dvr1'); ws.rt7DvrCh=rt7DvrSafeChannel_(u.searchParams.get('ch')||1);
+      DVR_WS_STATS.viewer_connections++;
+      try { ws.send(JSON.stringify({ok:true,type:'dvr_view_ready',version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',dvr_id:ws.rt7DvrId,ch:ws.rt7DvrCh,time:Date.now()})); } catch (_) {}
+      const latest=rt7DvrReadFrame_(ws.rt7DvrId,ws.rt7DvrCh); if(latest){ try{ws.send(latest.buf,{binary:true})}catch(_){} }
+      ws.on('close',()=>{DVR_WS_STATS.viewer_connections=Math.max(0,DVR_WS_STATS.viewer_connections-1)});
+      return;
+    }
+  } catch (_) {}
   ws.rt7Role = 'control';
   ws.rt7DeviceId = '';
   try {
@@ -5335,7 +5383,7 @@ app.post('/api/rt7/dvr/frame', express.raw({type:()=>true,limit:'4mb'}), (req,re
   try { const p=rt7DvrFramePath_(dvrId,ch), tmp=p+'.tmp'; fs.writeFileSync(tmp,buf); fs.renameSync(tmp,p); } catch(e) { console.warn('[RT7_DVR][DISK_WRITE_FAIL]',String(e&&e.message||e)); }
   DVR_RUNTIME.set(key,{frames:old.frames+1,bytes:old.bytes+buf.length,last_time:now,last_size:buf.length,source_ip:clientIp(req)});
   res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18B3_RAILWAY_DVR_LOW_LATENCY_ONE_CLICK_FIX',dvr_id:dvrId,ch,bytes:buf.length,frame_key:key});
+  res.json({ok:true,version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',dvr_id:dvrId,ch,bytes:buf.length,frame_key:key});
 });
 function rt7DvrSendLatest_(req,res){
   const dvrId=rt7DvrSafeId_(req.params.dvr_id||req.query.dvr_id||'dvr1'), ch=rt7DvrSafeChannel_(req.params.ch||req.query.ch||1), item=rt7DvrReadFrame_(dvrId,ch);
@@ -5358,7 +5406,7 @@ app.post('/api/rt7/dvr/control', rt7RequireLogin_, (req,res)=>{
   };
   DVR_CONTROL.set(dvrId,ctl);
   res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18B3_RAILWAY_DVR_LOW_LATENCY_ONE_CLICK_FIX',control:ctl});
+  res.json({ok:true,version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',control:ctl});
 });
 app.get('/api/rt7/dvr/control', (req,res)=>{
   const expected=safeString(process.env.RT7_DVR_INGEST_KEY||'');
@@ -5367,7 +5415,7 @@ app.get('/api/rt7/dvr/control', (req,res)=>{
   const dvrId=rt7DvrSafeId_(req.query.dvr_id||req.headers['x-rt7-dvr-id']||'dvr1');
   const ctl=DVR_CONTROL.get(dvrId)||{dvr_id:dvrId,active_channel:1,mode:1,quality:'low',updated_at:0};
   res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18B3_RAILWAY_DVR_LOW_LATENCY_ONE_CLICK_FIX',control:ctl,server_time:Date.now()});
+  res.json({ok:true,version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',control:ctl,server_time:Date.now()});
 });
 
 app.get('/api/rt7/dvr/status', rt7RequireLogin_, (req,res)=>{
@@ -5377,12 +5425,12 @@ app.get('/api/rt7/dvr/status', rt7RequireLogin_, (req,res)=>{
     channels.push({ch,online:!!(r&&Date.now()-r.last_time<10000),age_ms:r?Date.now()-r.last_time:(f?Date.now()-f.time:null),has_frame:!!f,frame_url:'/api/rt7/dvr/latest/'+site.dvr_id+'/'+ch+'.jpg',runtime:r});
   }
   res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18B3_RAILWAY_DVR_LOW_LATENCY_ONE_CLICK_FIX',site,channels,server_time:nowIso()});
+  res.json({ok:true,version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',site,channels,server_time:nowIso()});
 });
 app.get('/api/rt7/dvr/diagnostic', rt7RequireLogin_, (req,res)=>{
   const site=rt7DvrGetSite_(req); const files=[];
   for(let ch=1;ch<=site.channels;ch++){ const p=rt7DvrFramePath_(site.dvr_id,ch); files.push({ch,path:path.basename(p),exists:fs.existsSync(p),memory:DVR_FRAME_CACHE.has(rt7DvrRuntimeKey_(site.dvr_id,ch))}); }
-  res.json({ok:true,version:'RT7_V8_18B3_RAILWAY_DVR_LOW_LATENCY_ONE_CLICK_FIX',site,data_dir:DATA_DIR,frame_dir:DVR_FRAME_DIR,files});
+  res.json({ok:true,version:'RT7_V8_18C_RAILWAY_DVR_WEBSOCKET_LIVE_STREAM',site,data_dir:DATA_DIR,frame_dir:DVR_FRAME_DIR,files});
 });
 
 app.get('/rt7_dvr_monitor', rt7RequireLogin_, (req,res)=>{
@@ -5390,9 +5438,9 @@ app.get('/rt7_dvr_monitor', rt7RequireLogin_, (req,res)=>{
   const active=rt7DvrSafeChannel_(q.ch||1), quality=safeString(q.quality||site.quality)==='high'?'high':'low';
   const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const cells=Array.from({length:mode},(_,i)=>{const ch=i+1;const initial='/api/rt7/dvr/latest/'+encodeURIComponent(site.dvr_id)+'/'+ch+'.jpg?v='+Date.now();return `<button class="cell ${ch===active?'active':''}" data-ch="${ch}"><span>CH${String(ch).padStart(2,'0')}</span><img alt="CH${ch}" src="${initial}"><div class="wait">等待 DVR 畫面</div></button>`}).join('');
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V8.18B3 DVR Cloud Platform</title><style>
+  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V8.18C DVR WebSocket Live Stream</title><style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;background:#211f1f;color:#fff;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}body{max-width:760px;margin:auto;min-height:100vh}.top{height:58px;background:linear-gradient(#17343b,#0b252b);display:flex;align-items:center;padding:0 9px;gap:8px}.top a,.top select{height:36px;border:0;border-radius:7px;background:#40516a;color:#fff;padding:0 10px;font-weight:900}.title{flex:1;text-align:center;font-size:13px;font-weight:900}.device{background:#fff;color:#111;padding:7px;display:grid;grid-template-columns:1fr 95px;gap:6px}.device input,.device select{height:37px;border:1px solid #334155;border-radius:5px;padding:0 8px;font-weight:900}.status{padding:8px;background:#080808;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.grid{display:grid;gap:4px;padding:5px;background:#111}.grid.m1{grid-template-columns:1fr}.grid.m4{grid-template-columns:repeat(2,1fr)}.grid.m9{grid-template-columns:repeat(3,1fr)}.grid.m16{grid-template-columns:repeat(4,1fr)}.cell{position:relative;border:2px solid #555;background:#000;padding:0;aspect-ratio:16/10;overflow:hidden}.cell.active{border-color:#ffd45b}.cell img{width:100%;height:100%;object-fit:contain;display:block}.cell span{position:absolute;z-index:2;left:5px;top:5px;background:#000b;border-radius:4px;padding:3px 6px;color:#fff;font-weight:900}.wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bcc7d3;font-weight:900;font-size:12px}.tools{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:linear-gradient(#736d69,#302c2a)}.tool{border:0;border-radius:10px;background:linear-gradient(#eee,#8e8985);box-shadow:inset 0 0 0 2px #6a6662;color:#111;min-height:58px;font-size:14px;font-weight:900}.tool.on{outline:3px solid #ffd45b}.setup{display:none;background:#fff;color:#17262a;padding:12px}.setup.open{display:block}.setup label{display:block;font-weight:900;margin-top:8px}.setup input,.setup select{width:100%;height:40px;margin-top:4px;border:1px solid #94a3b8;border-radius:7px;padding:0 8px}.save{width:100%;height:44px;margin-top:12px;border:0;border-radius:8px;background:#159bd7;color:#fff;font-weight:900}@media(max-width:430px){.grid.m16{gap:2px}.cell span{font-size:9px}.tools{gap:5px;padding:7px}.tool{font-size:12px;min-height:52px}}
-</style></head><body><div class="top"><a href="/rt7_return_doorbell?from=dvr">← 返回</a><div class="title">RT7 V8.18B3<br>DVR CLOUD PLATFORM</div><select id="pageNav"><option value="">功能 ▾</option><option value="/rt7_gpio_control">GPIO 專用畫面</option><option value="/rt7_dvr_monitor">DVR 監控畫面</option><option value="/rt7_cloud_original_ui_doorbell">專案主頁</option></select></div>
+</style></head><body><div class="top"><a href="/rt7_return_doorbell?from=dvr">← 返回</a><div class="title">RT7 V8.18C<br>DVR WEBSOCKET LIVE</div><select id="pageNav"><option value="">功能 ▾</option><option value="/rt7_gpio_control">GPIO 專用畫面</option><option value="/rt7_dvr_monitor">DVR 監控畫面</option><option value="/rt7_cloud_original_ui_doorbell">專案主頁</option></select></div>
 <div class="device"><input id="adapter" value="${esc(site.adapter_base)}"><select id="quality"><option value="low" ${quality==='low'?'selected':''}>LQ</option><option value="high" ${quality==='high'?'selected':''}>HQ</option></select></div><div id="status" class="status">B2 初始化：檢查 Railway DVR Frame...</div><div id="grid" class="grid m${mode}">${cells}</div>
 <div class="tools"><button class="tool ${mode===1?'on':''}" data-mode="1">▣<br>1CH</button><button class="tool ${mode===4?'on':''}" data-mode="4">▦<br>4CH</button><button class="tool ${mode===9?'on':''}" data-mode="9">▦<br>9CH</button><button class="tool ${mode===16?'on':''}" data-mode="16">▦<br>16CH</button><button id="btnQuality" class="tool">${quality==='high'?'H':'L'}<br>${quality==='high'?'高畫質':'低畫質'}</button><button id="btnSnap" class="tool">📷<br>快照</button><button id="btnFull" class="tool">⛶<br>全螢幕</button><button id="btnSetup" class="tool">ⓘ<br>設定</button></div>
 <div id="setup" class="setup"><b>社區 DVR 設定</b><label>DVR 名稱<input id="dvrName" value="${esc(site.name)}"></label><label>DVR ID<input id="dvrId" value="${esc(site.dvr_id)}"></label><label>本地 Adapter URL<input id="adapter2" value="${esc(site.adapter_base)}"></label><label>實體通道數<select id="channels"><option>4</option><option>9</option><option>16</option></select></label><button id="save" class="save">儲存 Railway DVR 設定</button><a style="display:block;margin-top:10px" href="/api/rt7/dvr/diagnostic" target="_blank">開啟 DVR 診斷 JSON</a></div>
@@ -5402,12 +5450,16 @@ try{
 const site=${JSON.stringify(site)}, q=id=>document.getElementById(id); let mode=${mode},active=${active},quality='${quality}',stopped=false;
 q('channels').value=String(site.channels||4); q('pageNav').onchange=e=>{if(e.target.value)location.href=e.target.value};
 function frameUrl(ch){return '/api/rt7/dvr/latest/'+encodeURIComponent(q('dvrId').value||site.dvr_id)+'/'+ch+'.jpg?v='+Date.now()}
-async function refreshCell(c){const ch=+c.dataset.ch,img=c.querySelector('img'),w=c.querySelector('.wait');try{const r=await fetch(frameUrl(ch),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);const blob=await r.blob();if(blob.size<128)throw new Error('EMPTY');const old=img.dataset.obj||'';const u=URL.createObjectURL(blob);img.onload=()=>{w.style.display='none';if(old)URL.revokeObjectURL(old)};img.src=u;img.dataset.obj=u;}catch(e){w.style.display='flex';w.textContent='等待 DVR 畫面 ('+e.message+')';}}
-async function refreshAll(){if(stopped)return;await Promise.all(Array.from(document.querySelectorAll('.cell')).map(refreshCell));setTimeout(refreshAll,350)}
+let dvrWs=null,wsRetry=null,wsFrames=0,wsLastFrame=0;
+function applyBlob(c,blob){const img=c.querySelector('img'),w=c.querySelector('.wait'),old=img.dataset.obj||'',u=URL.createObjectURL(blob);img.onload=()=>{w.style.display='none';if(old)URL.revokeObjectURL(old)};img.src=u;img.dataset.obj=u;}
+async function refreshCellHttp(c){const ch=+c.dataset.ch;try{const r=await fetch(frameUrl(ch),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);const blob=await r.blob();if(blob.size<128)throw new Error('EMPTY');applyBlob(c,blob);}catch(e){const w=c.querySelector('.wait');w.style.display='flex';w.textContent='等待 DVR 畫面 ('+e.message+')';}}
+async function refreshMulti(){if(stopped||mode===1)return;await Promise.all(Array.from(document.querySelectorAll('.cell')).map(refreshCellHttp));setTimeout(refreshMulti,500)}
+function closeWs(){if(wsRetry){clearTimeout(wsRetry);wsRetry=null}if(dvrWs){try{dvrWs.onclose=null;dvrWs.close()}catch(_){ }dvrWs=null}}
+function connectWs(){if(stopped||mode!==1)return;closeWs();const proto=location.protocol==='https:'?'wss:':'ws:';const id=encodeURIComponent(q('dvrId').value||site.dvr_id);const url=proto+'//'+location.host+'/ws?role=dvr_view&dvr_id='+id+'&ch='+active+'&v='+Date.now();const cell=document.querySelector('.cell[data-ch="'+active+'"]');try{dvrWs=new WebSocket(url);dvrWs.binaryType='blob';dvrWs.onopen=()=>{q('status').textContent='18C WebSocket connected | CH'+String(active).padStart(2,'0')};dvrWs.onmessage=e=>{if(typeof e.data==='string')return;if(cell){applyBlob(cell,e.data);wsFrames++;wsLastFrame=Date.now()}};dvrWs.onerror=()=>{};dvrWs.onclose=()=>{if(!stopped&&mode===1)wsRetry=setTimeout(connectWs,900)}}catch(e){wsRetry=setTimeout(connectWs,1200)}}
 async function sendControl(){try{await fetch('/api/rt7/dvr/control',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({dvr_id:q('dvrId').value||site.dvr_id,active_channel:active,mode:mode,quality:quality})});}catch(e){}}
-async function status(){try{const r=await fetch('/api/rt7/dvr/status?v='+Date.now(),{cache:'no-store',credentials:'same-origin'});const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||('HTTP '+r.status));const arr=j.channels||[],on=arr.filter(x=>x.online).length,has=arr.filter(x=>x.has_frame).length,cur=arr.find(x=>x.ch===active),age=cur&&cur.age_ms!=null?(cur.age_ms/1000).toFixed(1):'-';q('status').textContent='B3 LOW LATENCY | CH'+String(active).padStart(2,'0')+' | age '+age+'s | '+on+'/'+arr.length+' online | '+new Date().toLocaleTimeString();}catch(e){q('status').textContent='B3 status error: '+e.message;}setTimeout(status,2000)}
-document.querySelectorAll('.cell').forEach(c=>c.onclick=()=>{active=+c.dataset.ch;document.querySelectorAll('.cell').forEach(x=>x.classList.toggle('active',x===c));sendControl()});document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{mode=+b.dataset.mode;location.href='/rt7_dvr_monitor?mode='+mode+'&quality='+quality+'&ch='+active});q('quality').onchange=e=>{quality=e.target.value;sendControl()};q('btnQuality').onclick=()=>{quality=quality==='high'?'low':'high';q('quality').value=quality;sendControl()};q('btnSnap').onclick=()=>{const a=document.createElement('a');a.href=frameUrl(active);a.download='RT7_DVR_CH'+String(active).padStart(2,'0')+'.jpg';a.click()};q('btnFull').onclick=()=>{const e=q('grid');if(document.fullscreenElement)document.exitFullscreen();else e.requestFullscreen&&e.requestFullscreen()};q('btnSetup').onclick=()=>q('setup').classList.toggle('open');q('adapter').onchange=()=>{q('adapter2').value=q('adapter').value};q('save').onclick=async()=>{const body={name:q('dvrName').value,dvr_id:q('dvrId').value,adapter_base:q('adapter2').value,channels:q('channels').value,quality};const r=await fetch('/api/rt7/dvr/config',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});const j=await r.json();q('status').textContent=j.ok?'DVR 設定已儲存':'儲存失敗 '+(j.error||r.status)};
-sendControl();refreshAll();status();setInterval(sendControl,3000);
+async function status(){try{const r=await fetch('/api/rt7/dvr/status?v='+Date.now(),{cache:'no-store',credentials:'same-origin'});const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||('HTTP '+r.status));const arr=j.channels||[],on=arr.filter(x=>x.online).length,has=arr.filter(x=>x.has_frame).length,cur=arr.find(x=>x.ch===active),age=cur&&cur.age_ms!=null?(cur.age_ms/1000).toFixed(1):'-';q('status').textContent='18C WS LIVE | CH'+String(active).padStart(2,'0')+' | age '+age+'s | ws '+wsFrames+' | '+on+'/'+arr.length+' online | '+new Date().toLocaleTimeString();}catch(e){q('status').textContent='B3 status error: '+e.message;}setTimeout(status,2000)}
+document.querySelectorAll('.cell').forEach(c=>c.onclick=()=>{active=+c.dataset.ch;document.querySelectorAll('.cell').forEach(x=>x.classList.toggle('active',x===c));sendControl();if(mode===1)connectWs()});document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{mode=+b.dataset.mode;location.href='/rt7_dvr_monitor?mode='+mode+'&quality='+quality+'&ch='+active});q('quality').onchange=e=>{quality=e.target.value;sendControl()};q('btnQuality').onclick=()=>{quality=quality==='high'?'low':'high';q('quality').value=quality;sendControl()};q('btnSnap').onclick=()=>{const a=document.createElement('a');a.href=frameUrl(active);a.download='RT7_DVR_CH'+String(active).padStart(2,'0')+'.jpg';a.click()};q('btnFull').onclick=()=>{const e=q('grid');if(document.fullscreenElement)document.exitFullscreen();else e.requestFullscreen&&e.requestFullscreen()};q('btnSetup').onclick=()=>q('setup').classList.toggle('open');q('adapter').onchange=()=>{q('adapter2').value=q('adapter').value};q('save').onclick=async()=>{const body={name:q('dvrName').value,dvr_id:q('dvrId').value,adapter_base:q('adapter2').value,channels:q('channels').value,quality};const r=await fetch('/api/rt7/dvr/config',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});const j=await r.json();q('status').textContent=j.ok?'DVR 設定已儲存':'儲存失敗 '+(j.error||r.status)};
+sendControl();if(mode===1)connectWs();else refreshMulti();status();setInterval(sendControl,3000);window.addEventListener('beforeunload',()=>{stopped=true;closeWs()});
 }catch(e){var s=document.getElementById('status');if(s)s.textContent='B2 JavaScript error: '+(e&&e.message||e);console.error(e)}
 })();</script></body></html>`);
 });
