@@ -22,15 +22,6 @@ const LEGACY_DEVICES_FILE = path.join(DATA_DIR, 'rt7_devices.json');
 
 const PUSH_SUBS_FILE = path.join(DATA_DIR, 'push_subscriptions.json');
 const VAPID_FILE = path.join(DATA_DIR, 'vapid_keys.json');
-// V8.18 Railway DVR Cloud Platform
-const DVR_CONFIG_FILE = path.join(DATA_DIR, 'rt7_dvr_config.json');
-const DVR_FRAME_DIR = path.join(DATA_DIR, 'dvr_frames');
-const DVR_RUNTIME = new Map();
-const DVR_FRAME_CACHE = new Map();
-const DVR_CONTROL = new Map();
-const DVR_WS_STATS = { ingest_connections:0, viewer_connections:0, frames:0, bytes:0, broadcasts:0, dropped:0, last_frame_time:0 };
-const DVR_WS_DISK_WRITE = new Map();
-
 
 // V5.7A user login/register
 const USERS_FILE = path.join(DATA_DIR, 'rt7_users.json');
@@ -264,7 +255,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_V8_18_RAILWAY_DVR_CLOUD_PLATFORM';
+const SERVER_VERSION = 'RT7_PHASE10_DVR_DEVICE_INTEGRATION_V1';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -276,8 +267,6 @@ function ensureDataDir() {
   }
   if (!fs.existsSync(EVENT_LOG)) fs.writeFileSync(EVENT_LOG, '', 'utf8');
   if (!fs.existsSync(PUSH_SUBS_FILE)) fs.writeFileSync(PUSH_SUBS_FILE, '[]', 'utf8');
-  if (!fs.existsSync(DVR_FRAME_DIR)) fs.mkdirSync(DVR_FRAME_DIR, { recursive: true });
-  if (!fs.existsSync(DVR_CONFIG_FILE)) fs.writeFileSync(DVR_CONFIG_FILE, JSON.stringify({sites:{}}, null, 2), 'utf8');
 }
 
 function defaultDevices() {
@@ -1703,7 +1692,7 @@ app.get('/rt7_return_doorbell', (req, res) => {
 app.use((req, res, next) => {
   const p = req.path || '';
   const protectedPages = [
-    '/rt7_cloud_original_ui_doorbell','/rt7_dvr_monitor','/rt7_cloud_admin','/rt7_device_manager','/rt7_face_db_manager','/rt7_gpio_control','/rt7_push_enable','/rt7_music_player','/rt7_cloud_doorbell_player','/rt7_snapshot_bridge_test','/rt7_cloud_phase10_no_nodered','/rt7_independent_full_video_intercom','/rt7_face_guard','/rt7_user_manager','/rt7_device_bind_status','/rt7_event_log','/rt7_log_viewer','/rt7_mapping','/rt7_stream_compare_test','/rt7_auto_stream_test'
+    '/rt7_cloud_original_ui_doorbell','/rt7_cloud_admin','/rt7_device_manager','/rt7_face_db_manager','/rt7_gpio_control','/rt7_push_enable','/rt7_music_player','/rt7_cloud_doorbell_player','/rt7_snapshot_bridge_test','/rt7_cloud_phase10_no_nodered','/rt7_independent_full_video_intercom','/rt7_face_guard','/rt7_user_manager','/rt7_device_bind_status','/rt7_event_log','/rt7_log_viewer','/rt7_mapping','/rt7_stream_compare_test','/rt7_auto_stream_test'
   ];
   if (protectedPages.some(x => p === x || p.startsWith(x + '/'))) {
     res.set('Cache-Control','no-store');
@@ -3144,8 +3133,8 @@ app.get('/rt7_cloud_original_ui_doorbell', (req, res) => {
 :root{--dark:#0b252b;--dark2:#0d2c32;--red:#ef2b24;--blue:#17a8e5;--green:#22a951;--text:#17262a;--line:#e5e7eb;--orange:#9a3b18}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent} html,body{margin:0;padding:0;background:#fff;color:var(--text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif} body{max-width:520px;margin:0 auto;min-height:100vh;padding-bottom:28px}
 a,button,input,select{pointer-events:auto!important;touch-action:manipulation!important}.noTouch,.video img,.emptyVideo,.badge{pointer-events:none!important}
-.top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900;position:relative;z-index:2100}.hamb{font-size:34px}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:auto;min-width:44px}.navWrap{position:relative}.navBtn{border:0;background:#12363d;color:#fff;border-radius:8px;padding:9px 10px;font-size:13px;font-weight:900}.navShade{display:none;position:fixed;inset:66px 0 0 0;z-index:1998;background:rgba(0,0,0,.34)}.navShade.open{display:block}.navMenu{display:block;position:fixed;left:0;top:66px;z-index:2000;width:min(82vw,290px);height:calc(100dvh - 66px);background:#fff;border:0;border-right:1px solid #cbd5e1;border-radius:0;box-shadow:8px 0 28px #0005;overflow-y:auto;transform:translateX(-102%);transition:transform .2s ease}.navMenu.open{transform:translateX(0)}.navMenu a{display:block;padding:16px 18px;color:#10212b!important;background:#fff;text-decoration:none;font-weight:900;border-bottom:1px solid #e5e7eb;white-space:nowrap}.navMenu a:last-child{border-bottom:0}.navMenu a:active{background:#eef6f8}
-.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}
+.top{height:66px;background:linear-gradient(90deg,var(--dark),var(--dark2));color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:900}.hamb{font-size:34px}.title{text-align:center;line-height:1.15;font-size:17px;letter-spacing:.4px}.spacer{width:34px}
+.deviceBar{padding:8px 12px;background:#fff;border-bottom:1px solid var(--line)}.deviceText{height:42px;border:1px solid #334155;border-radius:8px;font-weight:900;padding:0 10px;background:#fff;font-size:17px;display:flex;align-items:center;justify-content:space-between;color:#111827}.deviceText select{border:0;background:#fff;font:inherit;font-weight:900;width:100%;outline:0}.dvrHint{display:none;padding:7px 12px;background:#fff7d6;color:#7c4a03;border-bottom:1px solid #f0d98a;font-size:12px;font-weight:900}.dvrHint.show{display:block}
 .video{position:relative;background:#000;aspect-ratio:4/3;overflow:hidden}.video img{width:100%;height:100%;object-fit:cover;background:#000;display:block;border:0}.emptyVideo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#cbd5e1;font-weight:900;font-size:18px;line-height:1.45;padding:12px}.badge{position:absolute;top:12px;border-radius:7px;padding:7px 12px;color:white;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.22)}.idle{left:14px;background:#71839d}.idle.aiOn{background:#16a34a}.live{right:14px;background:var(--red)}
 .videoBtns{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#fff;padding:6px 8px;border-bottom:1px solid var(--line);align-items:center}.wakePanel{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:#fff}.wakeBtn{border:0;border-radius:8px;color:#fff;background:#16a34a;font-weight:900;font-size:14px;height:38px}.wakeHint{font-size:12px;color:#64748b;font-weight:800;display:flex;align-items:center}.vbtn{display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;color:#fff;font-weight:900;padding:8px 3px;font-size:13px;line-height:1;min-width:0;width:100%;height:38px;text-decoration:none;white-space:nowrap;overflow:hidden}.vblue{background:var(--blue)}.vred{background:var(--red)}.vdark{background:#102a31}.vorange{background:#f59e0b}
 .statusLine{min-height:46px;display:grid;grid-template-columns:1fr 1fr;gap:8px;border-bottom:1px solid var(--line);align-items:center;padding:8px 12px;background:#fff;font-size:15px;font-weight:800}.faceSnapBox{display:none;border-bottom:1px solid var(--line);padding:8px 12px;background:#fff}.faceSnapTitle{font-weight:900;color:#0f172a;margin-bottom:6px}.faceSnapBox img{width:128px;max-width:40%;border:2px solid #cbd5e1;border-radius:8px;background:#000;vertical-align:top}.faceSnapMeta{display:inline-block;vertical-align:top;margin-left:10px;font-size:12px;font-weight:900;color:#5b1f14;line-height:1.5;max-width:55%;word-break:break-all}.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--green);margin-right:8px}.answer{color:#5b1f14;white-space:pre-line}.door{color:#8a2f15;text-align:right}.door.bellNow{color:#9a3412;font-weight:900}.doorAlert{display:none!important}
@@ -3154,8 +3143,8 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 .selfiePanel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:9999;padding:14px;color:#fff;overflow:auto}.selfieCard{max-width:500px;margin:0 auto;background:#0b252b;border-radius:16px;padding:14px;box-shadow:0 8px 28px rgba(0,0,0,.45)}.selfieTitle{font-size:20px;font-weight:900;margin:4px 0 10px;text-align:center}.selfieVideo{width:100%;background:#000;border-radius:12px;border:2px solid #334155;aspect-ratio:3/4;object-fit:cover}.selfieBtns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.selfieBtns button{border:0;border-radius:10px;height:46px;font-size:17px;font-weight:900}.selfieShot{background:#22c55e;color:#fff}.selfieCancel{background:#ef4444;color:#fff}.selfieHint{font-size:13px;color:#dbeafe;line-height:1.45;margin-top:8px;text-align:center}
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
-<header class="top"><div class="navWrap"><button id="rt7NavBtn" class="navBtn" type="button" aria-label="開啟功能選單">☰</button></div><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><div class="navWrap"><button id="rt7ModeBtn" class="navBtn" type="button" aria-label="開啟功能選單">功能 ▾</button></div></header><div id="rt7NavShade" class="navShade"></div><nav id="rt7NavMenu" class="navMenu" aria-hidden="true"><a href="/rt7_cloud_original_ui_doorbell">🏠 專案主頁</a><a href="/rt7_gpio_control">GPIO 專用畫面</a><a href="/rt7_dvr_monitor">DVR 監控畫面</a><a href="/rt7_face_db_manager">人臉資料庫</a><a href="/rt7_device_bind_status">設備綁定</a><a href="/api/auth/logout">登出</a></nav><script>(function(){var m=document.getElementById('rt7NavMenu'),sh=document.getElementById('rt7NavShade'),a=document.getElementById('rt7NavBtn'),b=document.getElementById('rt7ModeBtn');function setOpen(v){if(!m||!sh)return;m.classList.toggle('open',v);sh.classList.toggle('open',v);m.setAttribute('aria-hidden',v?'false':'true');document.body.style.overflow=v?'hidden':''}function toggle(e){if(e){e.preventDefault();e.stopPropagation()}setOpen(!m.classList.contains('open'))}if(a)a.addEventListener('click',toggle);if(b)b.addEventListener('click',toggle);if(sh)sh.addEventListener('click',function(){setOpen(false)});if(m)m.querySelectorAll('a').forEach(function(x){x.addEventListener('click',function(){setOpen(false)})});document.addEventListener('keydown',function(e){if(e.key==='Escape')setOpen(false)});})();</script>
-<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div>
+<header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
+<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div><div id="dvrHint" class="dvrHint">DVR 模式：一次只啟動一個通道。請先在同一區網電腦啟動 DVR_LOCAL_BRIDGE。</div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
@@ -3166,7 +3155,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 <div id="selfiePanel" class="selfiePanel"><div class="selfieCard"><div class="selfieTitle">手機前鏡頭人臉註冊</div><video id="selfieVideo" class="selfieVideo" playsinline autoplay muted></video><canvas id="selfieCanvas" style="display:none"></canvas><div class="selfieHint">請讓臉在畫面中央，光線充足後按「拍照註冊」。辨識仍使用 ESP32-CAM，只有註冊照片改用手機前鏡頭。</div><div class="selfieBtns"><button id="btnSelfieCapture" class="selfieShot" type="button">拍照註冊</button><button id="btnSelfieCancel" class="selfieCancel" type="button">取消</button></div></div></div>
 <script>
 (function(){
-  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
+  var ip=${JSON.stringify(ip)}; var mode=${JSON.stringify(mode)}; var selectedDeviceId='#1'; var selectedDeviceType='esp32'; var selectedDvrChannel=1; var dvrBridgeHost='192.168.0.55:8080'; try{dvrBridgeHost=localStorage.getItem('RT7_DVR_BRIDGE_HOST')||dvrBridgeHost;}catch(_){ } var ai=false; try{ ai=(localStorage.getItem('RT7_FACE_MODE')==='1'); selectedDeviceId=localStorage.getItem('RT7_CURRENT_DEVICE_ID')||'#1'; }catch(e){ ai=${aiOn?'true':'false'}; } var img=document.getElementById('stream'); var empty=document.getElementById('emptyVideo'); var badge=document.getElementById('streamModeBadge'); var answer=document.getElementById('answerText'); var debug=null; var audioCtx=null; var audioOK=false; var audioTried=false;
   // V5.4W: FACE_GATE is default OFF and persistent. UI state alone must never re-enable it.
   setTimeout(function(){ setAiUi(ai); rt7FaceGateEspEnable(ai, true); }, 600);
   function setAnswer(t){ if(answer) answer.textContent=t; }
@@ -3196,10 +3185,12 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       }
       var list=(d.devices||[]).filter(function(x){return x && x.enabled!==false;});
       if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true}];
+      /* DVR V1 virtual devices: they are intentionally not written into devices.json because the existing permission model accepts #1~#4 only. */
+      [1,2,3,4].forEach(function(ch){ list.push({id:'DVR-CH'+ch,name:'DVR HQ CH'+ch,ip:dvrBridgeHost,enabled:true,type:'dvr',channel:ch}); });
       var sel=document.getElementById('deviceSel'); if(!sel) return;
       sel.innerHTML=list.map(function(x){
         var id=x.id||'#1'; var name=x.name||'RT7'; var dip=rt7CleanHost(x.ip||'');
-        return '<option value="'+rt7Esc(id)+'" data-ip="'+rt7Esc(dip)+'" data-name="'+rt7Esc(name)+'">'+rt7Esc(id+' / '+name+(dip?' / '+dip:''))+'</option>';
+        var typ=x.type||((String(id).indexOf('DVR-CH')===0)?'dvr':'esp32'); var ch=x.channel||parseInt(String(id).replace(/\D/g,''),10)||1; return '<option value="'+rt7Esc(id)+'" data-ip="'+rt7Esc(dip)+'" data-name="'+rt7Esc(name)+'" data-type="'+rt7Esc(typ)+'" data-channel="'+ch+'">'+rt7Esc(id+' / '+name+(dip?' / '+dip:''))+'</option>';
       }).join('');
       var want=selectedDeviceId||d.current_device_id||'#1'; sel.value=want; if(sel.value!==want) sel.selectedIndex=0;
       rt7ApplySelectedDevice(false);
@@ -3210,14 +3201,14 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var sel=document.getElementById('deviceSel'); if(!sel || !sel.options.length) return;
     var opt=sel.options[sel.selectedIndex]; selectedDeviceId=sel.value||'#1';
     var nextIp=rt7CleanHost(opt&&opt.getAttribute('data-ip')||''); if(nextIp) ip=nextIp;
-    var nextName=(opt&&opt.getAttribute('data-name')||'').trim();
-    try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',selectedDeviceId); localStorage.setItem('RT7_CURRENT_DEVICE_IP',ip); localStorage.setItem('RT7_CURRENT_DEVICE_NAME',nextName);}catch(e){}
+    var nextName=(opt&&opt.getAttribute('data-name')||'').trim(); selectedDeviceType=(opt&&opt.getAttribute('data-type')||((selectedDeviceId.indexOf('DVR-CH')===0)?'dvr':'esp32')); selectedDvrChannel=parseInt(opt&&opt.getAttribute('data-channel')||'1',10)||1; var dh=document.getElementById('dvrHint'); if(dh) dh.classList.toggle('show',selectedDeviceType==='dvr'); if(selectedDeviceType==='dvr' && nextIp) dvrBridgeHost=nextIp;
+    try{localStorage.setItem('RT7_CURRENT_DEVICE_ID',selectedDeviceId); localStorage.setItem('RT7_CURRENT_DEVICE_TYPE',selectedDeviceType); if(selectedDeviceType==='dvr')localStorage.setItem('RT7_DVR_BRIDGE_HOST',dvrBridgeHost); localStorage.setItem('RT7_CURRENT_DEVICE_IP',ip); localStorage.setItem('RT7_CURRENT_DEVICE_NAME',nextName);}catch(e){}
     if(save){
       fetch('/api/rt7/device/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:selectedDeviceId})}).catch(function(){});
       setAnswer('已切換設備 '+selectedDeviceId+(nextName?' '+nextName:'')+(ip?' / '+ip:''));
     }
   }
-  setTimeout(function(){ var sel=document.getElementById('deviceSel'); if(sel){sel.addEventListener('change',function(){rt7ApplySelectedDevice(true); stopVideo(); setAnswer('已切換設備 '+selectedDeviceId+' / '+ip+'，請按開始影像');});} rt7LoadDeviceSelector(); }, 50);
+  setTimeout(function(){ var sel=document.getElementById('deviceSel'); if(sel){sel.addEventListener('change',function(){rt7ApplySelectedDevice(true); stopVideo(); setAnswer('已切換設備 '+selectedDeviceId+(selectedDeviceType==='dvr'?'（單一 DVR 通道）':' / '+ip)+'，請按開始影像');});} rt7LoadDeviceSelector(); }, 50);
   function tone(freq, delay, dur){ if(!audioCtx) return; try{ setTimeout(function(){ var o=audioCtx.createOscillator(); var g=audioCtx.createGain(); o.frequency.value=freq; g.gain.value=0.22; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(function(){try{o.stop()}catch(e){}}, dur); }, delay); }catch(e){} }
   function playDingdong(){ if(!audioOK) return; tone(880,0,180); tone(660,260,220); }
   async function enableDoorbellAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume(); audioOK=true; audioTried=true; setAnswer('門鈴提示音已啟用'); setDebug('audio enabled'); playDingdong(); return true; }catch(e){ setAnswer('提示音啟用失敗：'+(e.message||e)); setDebug('audio failed'); return false; } }
@@ -3226,11 +3217,28 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   document.addEventListener('click', tryUnlockAudioSilently, {once:true, passive:true});
   var videoWanted=false; var currentStreamMode='IDLE'; var lanReconnectTimer=null; var lanRetryCount=0; var lanProbeDone=false;
   function clearLanReconnect(){ if(lanReconnectTimer){ clearTimeout(lanReconnectTimer); lanReconnectTimer=null; } }
-  function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='等待影像串流<br><span class="small">自動判斷：內網直連 / Railway 雲端</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
+  function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent=(selectedDeviceType==='dvr'?'DVR':'AUTO'); if(empty) empty.innerHTML='等待影像串流<br><span class="small">'+(selectedDeviceType==='dvr'?'DVR 單一通道 / 本機 Bridge':'自動判斷：內網直連 / Railway 雲端')+'</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
+  function dvr(){
+    videoWanted=true; currentStreamMode='DVR'; clearLanReconnect();
+    try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','DVR');}catch(e){}
+    if(badge) badge.textContent='DVR CH'+selectedDvrChannel;
+    if(empty) empty.innerHTML='DVR HQ CH'+selectedDvrChannel+' 連線中<br><span class="small">'+dvrBridgeHost+' / 單一 Active Channel</span>';
+    /* GET beacon works even when Chrome restricts cross-origin JSON fetch. The local bridge also sends CORS headers. */
+    try{var sw=new Image();sw.src='http://'+dvrBridgeHost+'/api/channel?channel='+(selectedDvrChannel-1)+'&_='+Date.now();}catch(e){}
+    setTimeout(function(){
+      if(!videoWanted||currentStreamMode!=='DVR')return;
+      if(img){
+        img.onerror=function(){if(!videoWanted||currentStreamMode!=='DVR')return;setAnswer('DVR 串流連線失敗：請啟動 DVR_LOCAL_BRIDGE，並確認位址 '+dvrBridgeHost);};
+        img.onload=function(){setAnswer('DVR HQ CH'+selectedDvrChannel+' 已連線');};
+        img.src='http://'+dvrBridgeHost+'/stream.mjpg?channel='+(selectedDvrChannel-1)+'&_='+Date.now();
+      }
+    },450);
+    setAnswer('正在切換 DVR HQ CH'+selectedDvrChannel);
+  }
   function cloud(){ videoWanted=true; currentStreamMode='CLOUD'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','CLOUD');}catch(e){} clearLanReconnect(); if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img){ img.onerror=function(){ if(!videoWanted || currentStreamMode!=='CLOUD') return; setAnswer('雲端影像暫停，5 秒後重連'); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(videoWanted && currentStreamMode==='CLOUD'){ img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud_re='+Date.now(); } },5000); }; img.onload=function(){ setDebug('cloud mjpeg loaded'); }; img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud='+Date.now(); } setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
   function lan(){ videoWanted=true; currentStreamMode='LAN'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','LAN');}catch(e){} clearLanReconnect(); lanRetryCount=0; if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ img.style.backgroundImage='url("/api/rt7/camera/latest.jpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_hold='+Date.now()+'")'; img.style.backgroundSize='cover'; img.style.backgroundPosition='center'; img.onerror=function(){ if(!videoWanted || currentStreamMode!=='LAN') return; lanRetryCount++; setAnswer('LAN 串流暫停，5 秒後重連（保留畫面，不清空黑屏）'); setDebug('lan onerror retry='+lanRetryCount); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(!videoWanted || currentStreamMode!=='LAN') return; // Do NOT clear img.src here. Clearing src causes Android Chrome black screen. Replace source directly.
         var next='http://'+ip+'/api/camera/stream?_lan_re='+Date.now(); try{ img.src=next; }catch(e){} },5000); }; img.onload=function(){ lanRetryCount=0; setDebug('lan mjpeg loaded'); }; var first='http://'+ip+'/api/camera/stream?_lan='+Date.now(); try{ img.src=first; }catch(e){} } setAnswer('內網直連影像模式'); setDebug('lan stream '+ip); }
-  function startAuto(){ try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','AUTO');}catch(e){} if(videoWanted && (currentStreamMode==='LAN' || currentStreamMode==='CLOUD')){ setAnswer(currentStreamMode==='LAN'?'內網直連影像模式':'雲端遠端影像模式'); return; } videoWanted=true; currentStreamMode='AUTO'; clearLanReconnect(); setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先用單張 snapshot 測內網，成功才開啟 LAN 串流'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done||!videoWanted)return; done=true; try{probe.src='about:blank'}catch(e){} cloud(); },1800); probe.onload=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} lan(); }; probe.onerror=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} cloud(); }; probe.src='http://'+ip+'/api/camera/snapshot?_probe_once='+Date.now(); }
+  function startAuto(){ if(selectedDeviceType==='dvr'){ dvr(); return; } try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','AUTO');}catch(e){} if(videoWanted && (currentStreamMode==='LAN' || currentStreamMode==='CLOUD')){ setAnswer(currentStreamMode==='LAN'?'內網直連影像模式':'雲端遠端影像模式'); return; } videoWanted=true; currentStreamMode='AUTO'; clearLanReconnect(); setAnswer('自動判斷影像來源中'); if(badge) badge.textContent='AUTO'; if(empty) empty.innerHTML='自動判斷中：先用單張 snapshot 測內網，成功才開啟 LAN 串流'; var probe=new Image(); var done=false; var t=setTimeout(function(){ if(done||!videoWanted)return; done=true; try{probe.src='about:blank'}catch(e){} cloud(); },1800); probe.onload=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} lan(); }; probe.onerror=function(){ if(done||!videoWanted)return; done=true; clearTimeout(t); try{probe.src='about:blank'}catch(e){} cloud(); }; probe.src='http://'+ip+'/api/camera/snapshot?_probe_once='+Date.now(); }
   async function j(url,opt){ var r=await fetch(url+(url.indexOf('?')>=0?'&':'?')+'_='+Date.now(), Object.assign({cache:'no-store'}, opt||{})); var tx=await r.text(); try{return JSON.parse(tx)}catch(e){return{ok:r.ok,status:r.status,raw:tx}} }
   function rt7EspImgBeacon(path){
     var url='http://'+ip+path+(path.indexOf('?')>=0?'&':'?')+'_='+Date.now();
@@ -3244,6 +3252,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   }
   function rt7FaceGateEspEnable(on, silent){
     try{ localStorage.setItem('RT7_FACE_MODE', on ? '1' : '0'); }catch(e){}
+    if(selectedDeviceType==='dvr'){ if(!silent)setAnswer('DVR 影像已整合；V1 的人臉觸發仍保留 ESP32 控制，未向 DVR 發送 motion 指令'); setAiUi(on); return; }
     if(on){
       // V5.4X: use fast 8081 control first. Port 80 may be busy when LAN MJPEG is open.
       rt7EspFast8081('/api/motion/enable_fast');
@@ -4995,52 +5004,6 @@ app.get('/api/rt7/face/snapshot_trigger_test', (req,res)=>{
 
 
 wss.on('connection', (ws, req) => {
-  // V8.18C: DVR JPEG WebSocket ingest/viewer multiplexed on the existing /ws endpoint.
-  try {
-    const u = new URL(req.url || '/ws', 'http://localhost');
-    const role = safeString(u.searchParams.get('role') || '');
-    if (role === 'dvr_ingest') {
-      const expected = safeString(process.env.RT7_DVR_INGEST_KEY || '');
-      const supplied = safeString(u.searchParams.get('key') || req.headers['x-rt7-dvr-key'] || '');
-      if (expected && supplied !== expected) { try { ws.close(1008, 'DVR_INGEST_KEY_INVALID'); } catch (_) {} return; }
-      ws.rt7Role = 'dvr_ingest';
-      ws.rt7DvrId = rt7DvrSafeId_(u.searchParams.get('dvr_id') || 'dvr1');
-      ws.rt7DvrCh = rt7DvrSafeChannel_(u.searchParams.get('ch') || 1);
-      DVR_WS_STATS.ingest_connections++;
-      try { ws.send(JSON.stringify({ok:true,type:'dvr_ingest_ready',version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',dvr_id:ws.rt7DvrId,ch:ws.rt7DvrCh,time:Date.now()})); } catch (_) {}
-      ws.on('message', (data, isBinary) => {
-        if (!isBinary) return;
-        const buf = Buffer.from(data);
-        if (buf.length < 128 || buf[0] !== 0xff || buf[1] !== 0xd8) return;
-        const dvrId=ws.rt7DvrId, ch=ws.rt7DvrCh, key=rt7DvrRuntimeKey_(dvrId,ch), now=Date.now(), old=DVR_RUNTIME.get(key)||{frames:0,bytes:0};
-        DVR_FRAME_CACHE.set(key,{buf:Buffer.from(buf),time:now});
-        DVR_RUNTIME.set(key,{frames:old.frames+1,bytes:old.bytes+buf.length,last_time:now,last_size:buf.length,source_ip:clientIp(req),transport:'websocket'});
-        DVR_WS_STATS.frames++; DVR_WS_STATS.bytes += buf.length; DVR_WS_STATS.last_frame_time=now;
-        const lastDisk=DVR_WS_DISK_WRITE.get(key)||0;
-        if(now-lastDisk>1000){ DVR_WS_DISK_WRITE.set(key,now); try{ const fp=rt7DvrFramePath_(dvrId,ch),tmp=fp+'.tmp'; fs.writeFileSync(tmp,buf); fs.renameSync(tmp,fp); }catch(_){} }
-        let sent=0;
-        for (const client of wss.clients) {
-          if (client !== ws && client.readyState === WebSocket.OPEN && client.rt7Role === 'dvr_view' && client.rt7DvrId === dvrId && client.rt7DvrCh === ch) {
-            if (client.bufferedAmount > 1024*1024) { DVR_WS_STATS.dropped++; continue; }
-            try { client.send(buf,{binary:true}); sent++; } catch (_) {}
-          }
-        }
-        DVR_WS_STATS.broadcasts += sent;
-      });
-      ws.on('close',()=>{DVR_WS_STATS.ingest_connections=Math.max(0,DVR_WS_STATS.ingest_connections-1)});
-      return;
-    }
-    if (role === 'dvr_view') {
-      const user = rt7GetSessionUser_(req);
-      if (!user || !rt7UserSystemEnabled_(user)) { try { ws.close(1008,'LOGIN_REQUIRED'); } catch (_) {} return; }
-      ws.rt7Role='dvr_view'; ws.rt7DvrId=rt7DvrSafeId_(u.searchParams.get('dvr_id')||'dvr1'); ws.rt7DvrCh=rt7DvrSafeChannel_(u.searchParams.get('ch')||1);
-      DVR_WS_STATS.viewer_connections++;
-      try { ws.send(JSON.stringify({ok:true,type:'dvr_view_ready',version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',dvr_id:ws.rt7DvrId,ch:ws.rt7DvrCh,time:Date.now()})); } catch (_) {}
-      const latest=rt7DvrReadFrame_(ws.rt7DvrId,ws.rt7DvrCh); if(latest){ try{ws.send(latest.buf,{binary:true})}catch(_){} }
-      ws.on('close',()=>{DVR_WS_STATS.viewer_connections=Math.max(0,DVR_WS_STATS.viewer_connections-1)});
-      return;
-    }
-  } catch (_) {}
   ws.rt7Role = 'control';
   ws.rt7DeviceId = '';
   try {
@@ -5212,7 +5175,7 @@ app.get('/rt7_gpio_control', (req,res)=>{
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;background:#fff;font-family:system-ui,-apple-system,'Noto Sans TC','Microsoft JhengHei',Arial,sans-serif;color:#17262a}body{max-width:520px;margin:0 auto;padding-bottom:34px}.top{height:56px;background:linear-gradient(90deg,#0b252b,#0d2c32);color:#fff;display:flex;align-items:center;padding:0 10px}.back{background:#41546b;color:#fff;text-decoration:none;border-radius:8px;padding:8px 10px;font-weight:900;font-size:13px}.menu{font-size:28px;margin-left:8px;color:#dbeafe;text-decoration:none}.title{flex:1;text-align:center;font-weight:900;line-height:1.05;font-size:12px;letter-spacing:.3px}.wrap{padding:7px}.deviceRow{display:grid;grid-template-columns:1fr 54px;gap:6px}.device{width:100%;height:36px;font-size:13px;font-weight:900;border:1px solid #334155;border-radius:4px;background:#fff;padding:0 7px}.apply{height:36px;border:0;border-radius:5px;background:#40516a;color:#fff;font-weight:900}.video{position:relative;background:#000;aspect-ratio:16/9;overflow:hidden;margin-top:6px}.video img{width:100%;height:100%;object-fit:cover;display:block;background:#000}.badge{position:absolute;top:10px;left:10px;background:#71839d;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.badge2{position:absolute;top:10px;right:10px;background:#e03131;color:#fff;border-radius:5px;padding:6px 10px;font-size:12px;font-weight:900}.hint{position:absolute;left:0;right:0;top:43%;text-align:center;color:#dbe3ee;font-weight:900;font-size:16px}.videoBtns{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.vbtn{display:block;text-align:center;text-decoration:none;color:#fff;border-radius:7px;padding:12px 8px;font-size:17px;font-weight:900;min-height:44px;background:#08272d}.vblue{background:#1293dd}.vdark{background:#0b252b}.keypadBox{display:flex;justify-content:center;margin:12px 0 6px}.keypad{background:#333;border:4px solid #777;border-radius:10px;padding:8px;display:grid;grid-template-columns:repeat(4,56px);gap:8px}.key{width:56px;height:45px;border-radius:6px;background:#2d8fd6;border:2px solid #9fc5dd;color:#fff;font-size:24px;font-weight:900;line-height:41px;padding:0;text-align:center;text-decoration:none;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.key:active{transform:scale(.96);filter:brightness(1.2)}.key.red{background:#c73b3b;border-color:#e6a0a0}.small{text-align:center;color:#64748b;font-size:12px;margin:7px 0}.card{border-top:1px solid #e5e7eb;padding:10px 8px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.btn{display:block;text-align:center;text-decoration:none;border:0;border-radius:8px;padding:13px 8px;font-weight:900;color:#fff;background:#0b88d8;font-size:16px}.green{background:#13a85a}.redBtn{background:#d12f2f}.orange{background:#f39c12}.gray{background:#40516a}input{width:100%;font-size:17px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-top:7px}.status{white-space:pre-wrap;background:#071120;color:#d8f7ff;border-radius:8px;padding:9px;font-family:monospace;font-size:12px;margin:8px;min-height:38px}@media(max-width:380px){.keypad{grid-template-columns:repeat(4,47px)}.key{width:47px;height:38px;line-height:34px;font-size:20px}.title{font-size:11px}}
 </style></head><body>
-<div class="top"><a class="back" href="/rt7_return_doorbell?from=gpio">← 返回</a><a class="menu" href="#" id="gpioMenuBtn">☰</a><div class="title">RT7 PHASE10<br>GPIO FAST CONTROL</div><select id="gpioPageNav" style="width:118px;height:34px;border-radius:7px;font-weight:900"><option value="">功能選單</option><option value="/rt7_gpio_control">GPIO 專用畫面</option><option value="/rt7_dvr_monitor">DVR 監控畫面</option><option value="/rt7_cloud_original_ui_doorbell">專案主頁</option></select></div><script>(function(){var s=document.getElementById('gpioPageNav'),b=document.getElementById('gpioMenuBtn');function go(){if(s&&s.value)location.href=s.value}if(s)s.onchange=go;if(b)b.onclick=function(e){e.preventDefault();if(s){s.focus();s.click()}}})();</script>
+<div class="top"><a class="back" href="/rt7_return_doorbell?from=gpio">← 返回</a><a class="menu" href="/rt7_return_doorbell?from=gpio">☰</a><div class="title">RT7 PHASE10<br>GPIO FAST CONTROL</div></div>
 <div class="wrap">
   <form id="devForm" method="get" action="/rt7_gpio_control" class="deviceRow"><select id="devSel" name="d" class="device">${optHtml}</select><button class="apply" type="submit">切換</button></form>
   <div class="video" id="videoBox"><img id="cam" alt="preview" ${camSrc?`src="${camSrc}"`:''}><div class="badge">${streamOn?'LAN':'IDLE'}</div><div class="badge2">LAN</div>${streamOn?'':`<div class="hint">等待影像串流<br><span style="font-size:12px;color:#94a3b8">按開始影像</span></div>`}</div>
@@ -5325,144 +5288,6 @@ app.get('/rt7_gpio_control', (req,res)=>{
   document.addEventListener('visibilitychange', function(){ if(document.hidden) releaseKey(); });
 })();
 </script></body></html>`);
-});
-
-
-// ================= V8.18B2 Railway DVR Cloud Frame Delivery Fix =================
-function rt7DvrSafeId_(v) { return safeString(v || 'dvr1').toLowerCase().replace(/[^a-z0-9_-]/g,'').slice(0,40) || 'dvr1'; }
-function rt7DvrSafeChannel_(v) { return Math.max(1, Math.min(16, parseInt(v || 1,10) || 1)); }
-function rt7DvrReadConfig_() {
-  const obj = rt7ReadJsonFile_(DVR_CONFIG_FILE, {sites:{}});
-  if (!obj.sites || typeof obj.sites !== 'object') obj.sites = {};
-  return obj;
-}
-function rt7DvrSiteKeyForReq_(req) {
-  const u = req && (req.rt7User || rt7GetSessionUser_(req));
-  return rt7CommunityKey_(rt7CommunityName_(u));
-}
-function rt7DvrDefaultSite_() {
-  return { name:'社區 DVR', dvr_id:'dvr1', adapter_base:'http://192.168.0.55:8080', channels:4, quality:'low', updated_at:nowIso() };
-}
-function rt7DvrGetSite_(req) {
-  const cfg = rt7DvrReadConfig_(); const key = rt7DvrSiteKeyForReq_(req);
-  return Object.assign(rt7DvrDefaultSite_(), cfg.sites[key] || {}, {community_id:key});
-}
-function rt7DvrFramePath_(dvrId,ch) { return path.join(DVR_FRAME_DIR, rt7DvrSafeId_(dvrId)+'_ch'+String(rt7DvrSafeChannel_(ch)).padStart(2,'0')+'.jpg'); }
-function rt7DvrRuntimeKey_(dvrId,ch) { return rt7DvrSafeId_(dvrId)+':'+rt7DvrSafeChannel_(ch); }
-function rt7DvrReadFrame_(dvrId,ch) {
-  const key=rt7DvrRuntimeKey_(dvrId,ch), mem=DVR_FRAME_CACHE.get(key);
-  if (mem && Buffer.isBuffer(mem.buf) && mem.buf.length>128) return {buf:mem.buf,time:mem.time,source:'memory'};
-  const p=rt7DvrFramePath_(dvrId,ch);
-  try { if(fs.existsSync(p)){ const buf=fs.readFileSync(p); if(buf.length>128){ DVR_FRAME_CACHE.set(key,{buf,time:Date.now()}); return {buf,time:fs.statSync(p).mtimeMs||Date.now(),source:'disk'}; } } } catch(_) {}
-  return null;
-}
-
-app.get('/api/rt7/dvr/config', rt7RequireLogin_, (req,res)=> res.json({ok:true,version:SERVER_VERSION,site:rt7DvrGetSite_(req)}));
-app.post('/api/rt7/dvr/config', rt7RequireLogin_, (req,res)=>{
-  const old=rt7DvrGetSite_(req), cfg=rt7DvrReadConfig_(), key=rt7DvrSiteKeyForReq_(req), b=req.body||{};
-  cfg.sites[key]={
-    name:safeString(b.name||old.name).slice(0,80), dvr_id:rt7DvrSafeId_(b.dvr_id||old.dvr_id),
-    adapter_base:safeString(b.adapter_base||old.adapter_base).trim().replace(/\/$/,''),
-    channels:Math.max(1,Math.min(16,parseInt(b.channels||old.channels,10)||4)),
-    quality:(safeString(b.quality||old.quality).toLowerCase()==='high'?'high':'low'), updated_at:nowIso()
-  };
-  rt7WriteJsonFile_(DVR_CONFIG_FILE,cfg); appendEvent({type:'dvr_config_update',community:key,dvr_id:cfg.sites[key].dvr_id});
-  res.json({ok:true,version:SERVER_VERSION,site:Object.assign({},cfg.sites[key],{community_id:key})});
-});
-
-app.post('/api/rt7/dvr/frame', express.raw({type:()=>true,limit:'4mb'}), (req,res)=>{
-  const expected=safeString(process.env.RT7_DVR_INGEST_KEY||'');
-  const supplied=safeString(req.headers['x-rt7-dvr-key']||req.query.key||'');
-  if(expected && supplied!==expected) return res.status(403).json({ok:false,error:'DVR_INGEST_KEY_INVALID'});
-  const dvrId=rt7DvrSafeId_(req.query.dvr_id||req.headers['x-rt7-dvr-id']||'dvr1');
-  const ch=rt7DvrSafeChannel_(req.query.ch||req.headers['x-rt7-channel']||1);
-  const buf=Buffer.isBuffer(req.body)?req.body:Buffer.alloc(0);
-  if(buf.length<128 || buf[0]!==0xff || buf[1]!==0xd8) return res.status(400).json({ok:false,error:'JPEG_REQUIRED',bytes:buf.length,content_type:req.headers['content-type']||''});
-  const key=rt7DvrRuntimeKey_(dvrId,ch), now=Date.now(), old=DVR_RUNTIME.get(key)||{frames:0,bytes:0};
-  DVR_FRAME_CACHE.set(key,{buf:Buffer.from(buf),time:now});
-  try { const p=rt7DvrFramePath_(dvrId,ch), tmp=p+'.tmp'; fs.writeFileSync(tmp,buf); fs.renameSync(tmp,p); } catch(e) { console.warn('[RT7_DVR][DISK_WRITE_FAIL]',String(e&&e.message||e)); }
-  DVR_RUNTIME.set(key,{frames:old.frames+1,bytes:old.bytes+buf.length,last_time:now,last_size:buf.length,source_ip:clientIp(req)});
-  res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',dvr_id:dvrId,ch,bytes:buf.length,frame_key:key});
-});
-function rt7DvrSendLatest_(req,res){
-  const dvrId=rt7DvrSafeId_(req.params.dvr_id||req.query.dvr_id||'dvr1'), ch=rt7DvrSafeChannel_(req.params.ch||req.query.ch||1), item=rt7DvrReadFrame_(dvrId,ch);
-  if(!item) return res.status(404).set('Cache-Control','no-store').type('text').send('DVR_FRAME_NOT_READY '+dvrId+' CH'+ch);
-  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, max-age=0');
-  res.setHeader('Pragma','no-cache'); res.setHeader('Expires','0');
-  res.setHeader('X-RT7-DVR-ID',dvrId); res.setHeader('X-RT7-Channel',String(ch)); res.setHeader('X-RT7-Frame-Source',item.source);
-  res.type('image/jpeg').send(item.buf);
-}
-app.get('/api/rt7/dvr/latest.jpg', rt7DvrSendLatest_);
-app.get('/api/rt7/dvr/latest/:dvr_id/:ch.jpg', rt7DvrSendLatest_);
-app.post('/api/rt7/dvr/control', rt7RequireLogin_, (req,res)=>{
-  const site=rt7DvrGetSite_(req), b=req.body||{}, dvrId=rt7DvrSafeId_(b.dvr_id||site.dvr_id);
-  const ctl={
-    dvr_id:dvrId,
-    active_channel:rt7DvrSafeChannel_(b.active_channel||1),
-    mode:[1,4,9,16].includes(parseInt(b.mode,10))?parseInt(b.mode,10):1,
-    quality:safeString(b.quality||site.quality).toLowerCase()==='high'?'high':'low',
-    updated_at:Date.now()
-  };
-  DVR_CONTROL.set(dvrId,ctl);
-  res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',control:ctl});
-});
-app.get('/api/rt7/dvr/control', (req,res)=>{
-  const expected=safeString(process.env.RT7_DVR_INGEST_KEY||'');
-  const supplied=safeString(req.headers['x-rt7-dvr-key']||req.query.key||'');
-  if(expected && supplied!==expected) return res.status(403).json({ok:false,error:'DVR_INGEST_KEY_INVALID'});
-  const dvrId=rt7DvrSafeId_(req.query.dvr_id||req.headers['x-rt7-dvr-id']||'dvr1');
-  const ctl=DVR_CONTROL.get(dvrId)||{dvr_id:dvrId,active_channel:1,mode:1,quality:'low',updated_at:0};
-  res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',control:ctl,server_time:Date.now()});
-});
-
-app.get('/api/rt7/dvr/status', rt7RequireLogin_, (req,res)=>{
-  const site=rt7DvrGetSite_(req), channels=[];
-  for(let ch=1;ch<=site.channels;ch++){
-    const key=rt7DvrRuntimeKey_(site.dvr_id,ch), r=DVR_RUNTIME.get(key)||null, f=rt7DvrReadFrame_(site.dvr_id,ch);
-    channels.push({ch,online:!!(r&&Date.now()-r.last_time<10000),age_ms:r?Date.now()-r.last_time:(f?Date.now()-f.time:null),has_frame:!!f,frame_url:'/api/rt7/dvr/latest/'+site.dvr_id+'/'+ch+'.jpg',runtime:r});
-  }
-  res.setHeader('Cache-Control','no-store');
-  res.json({ok:true,version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',site,channels,server_time:nowIso()});
-});
-app.get('/api/rt7/dvr/diagnostic', rt7RequireLogin_, (req,res)=>{
-  const site=rt7DvrGetSite_(req); const files=[];
-  for(let ch=1;ch<=site.channels;ch++){ const p=rt7DvrFramePath_(site.dvr_id,ch); files.push({ch,path:path.basename(p),exists:fs.existsSync(p),memory:DVR_FRAME_CACHE.has(rt7DvrRuntimeKey_(site.dvr_id,ch))}); }
-  res.json({ok:true,version:'RT7_V8_18C1_WEBSOCKET_CHANNEL_IDENTITY_RESYNC_FIX',site,data_dir:DATA_DIR,frame_dir:DVR_FRAME_DIR,files});
-});
-
-app.get('/rt7_dvr_monitor', rt7RequireLogin_, (req,res)=>{
-  const site=rt7DvrGetSite_(req), q=req.query||{}, mode=[1,4,9,16].includes(parseInt(q.mode,10))?parseInt(q.mode,10):1;
-  const active=rt7DvrSafeChannel_(q.ch||1), quality=safeString(q.quality||site.quality)==='high'?'high':'low';
-  const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const cells=Array.from({length:mode},(_,i)=>{const ch=i+1;const initial='/api/rt7/dvr/latest/'+encodeURIComponent(site.dvr_id)+'/'+ch+'.jpg?v='+Date.now();return `<button class="cell ${ch===active?'active':''}" data-ch="${ch}"><span>CH${String(ch).padStart(2,'0')}</span><img alt="CH${ch}" src="${initial}"><div class="wait">等待 DVR 畫面</div></button>`}).join('');
-  res.type('html').send(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>RT7 V8.18C1 DVR Channel Identity Resync</title><style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;background:#211f1f;color:#fff;font-family:system-ui,-apple-system,'Noto Sans TC',sans-serif}body{max-width:760px;margin:auto;min-height:100vh}.top{height:58px;background:linear-gradient(#17343b,#0b252b);display:flex;align-items:center;padding:0 9px;gap:8px}.top a,.top select{height:36px;border:0;border-radius:7px;background:#40516a;color:#fff;padding:0 10px;font-weight:900}.title{flex:1;text-align:center;font-size:13px;font-weight:900}.device{background:#fff;color:#111;padding:7px;display:grid;grid-template-columns:1fr 95px;gap:6px}.device input,.device select{height:37px;border:1px solid #334155;border-radius:5px;padding:0 8px;font-weight:900}.status{padding:8px;background:#080808;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.grid{display:grid;gap:4px;padding:5px;background:#111}.grid.m1{grid-template-columns:1fr}.grid.m4{grid-template-columns:repeat(2,1fr)}.grid.m9{grid-template-columns:repeat(3,1fr)}.grid.m16{grid-template-columns:repeat(4,1fr)}.cell{position:relative;border:2px solid #555;background:#000;padding:0;aspect-ratio:16/10;overflow:hidden}.cell.active{border-color:#ffd45b}.cell img{width:100%;height:100%;object-fit:contain;display:block}.cell span{position:absolute;z-index:2;left:5px;top:5px;background:#000b;border-radius:4px;padding:3px 6px;color:#fff;font-weight:900}.wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bcc7d3;font-weight:900;font-size:12px}.tools{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:linear-gradient(#736d69,#302c2a)}.tool{border:0;border-radius:10px;background:linear-gradient(#eee,#8e8985);box-shadow:inset 0 0 0 2px #6a6662;color:#111;min-height:58px;font-size:14px;font-weight:900}.tool.on{outline:3px solid #ffd45b}.setup{display:none;background:#fff;color:#17262a;padding:12px}.setup.open{display:block}.setup label{display:block;font-weight:900;margin-top:8px}.setup input,.setup select{width:100%;height:40px;margin-top:4px;border:1px solid #94a3b8;border-radius:7px;padding:0 8px}.save{width:100%;height:44px;margin-top:12px;border:0;border-radius:8px;background:#159bd7;color:#fff;font-weight:900}@media(max-width:430px){.grid.m16{gap:2px}.cell span{font-size:9px}.tools{gap:5px;padding:7px}.tool{font-size:12px;min-height:52px}}
-</style></head><body><div class="top"><a href="/rt7_return_doorbell?from=dvr">← 返回</a><div class="title">RT7 V8.18C1<br>CHANNEL ID RESYNC</div><select id="pageNav"><option value="">功能 ▾</option><option value="/rt7_gpio_control">GPIO 專用畫面</option><option value="/rt7_dvr_monitor">DVR 監控畫面</option><option value="/rt7_cloud_original_ui_doorbell">專案主頁</option></select></div>
-<div class="device"><input id="adapter" value="${esc(site.adapter_base)}"><select id="quality"><option value="low" ${quality==='low'?'selected':''}>LQ</option><option value="high" ${quality==='high'?'selected':''}>HQ</option></select></div><div id="status" class="status">B2 初始化：檢查 Railway DVR Frame...</div><div id="grid" class="grid m${mode}">${cells}</div>
-<div class="tools"><button class="tool ${mode===1?'on':''}" data-mode="1">▣<br>1CH</button><button class="tool ${mode===4?'on':''}" data-mode="4">▦<br>4CH</button><button class="tool ${mode===9?'on':''}" data-mode="9">▦<br>9CH</button><button class="tool ${mode===16?'on':''}" data-mode="16">▦<br>16CH</button><button id="btnQuality" class="tool">${quality==='high'?'H':'L'}<br>${quality==='high'?'高畫質':'低畫質'}</button><button id="btnSnap" class="tool">📷<br>快照</button><button id="btnFull" class="tool">⛶<br>全螢幕</button><button id="btnSetup" class="tool">ⓘ<br>設定</button></div>
-<div id="setup" class="setup"><b>社區 DVR 設定</b><label>DVR 名稱<input id="dvrName" value="${esc(site.name)}"></label><label>DVR ID<input id="dvrId" value="${esc(site.dvr_id)}"></label><label>本地 Adapter URL<input id="adapter2" value="${esc(site.adapter_base)}"></label><label>實體通道數<select id="channels"><option>4</option><option>9</option><option>16</option></select></label><button id="save" class="save">儲存 Railway DVR 設定</button><a style="display:block;margin-top:10px" href="/api/rt7/dvr/diagnostic" target="_blank">開啟 DVR 診斷 JSON</a></div>
-<script>(function(){
-'use strict';
-try{
-const site=${JSON.stringify(site)}, q=id=>document.getElementById(id); let mode=${mode},active=${active},quality='${quality}',stopped=false;
-q('channels').value=String(site.channels||4); q('pageNav').onchange=e=>{if(e.target.value)location.href=e.target.value};
-function frameUrl(ch){return '/api/rt7/dvr/latest/'+encodeURIComponent(q('dvrId').value||site.dvr_id)+'/'+ch+'.jpg?v='+Date.now()}
-let dvrWs=null,wsRetry=null,wsFrames=0,wsLastFrame=0;
-function applyBlob(c,blob){const img=c.querySelector('img'),w=c.querySelector('.wait'),old=img.dataset.obj||'',u=URL.createObjectURL(blob);img.onload=()=>{w.style.display='none';if(old)URL.revokeObjectURL(old)};img.src=u;img.dataset.obj=u;}
-function clearCellStale(c,msg){if(!c)return;const img=c.querySelector('img'),w=c.querySelector('.wait'),old=img.dataset.obj||'';if(old){try{URL.revokeObjectURL(old)}catch(_){}}img.removeAttribute('src');img.dataset.obj='';w.style.display='flex';w.textContent=msg||'Relay 離線／等待目前通道';}
-async function refreshCellHttp(c){const ch=+c.dataset.ch;try{const r=await fetch(frameUrl(ch),{cache:'no-store',credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);const blob=await r.blob();if(blob.size<128)throw new Error('EMPTY');applyBlob(c,blob);}catch(e){const w=c.querySelector('.wait');w.style.display='flex';w.textContent='等待 DVR 畫面 ('+e.message+')';}}
-async function refreshMulti(){if(stopped||mode===1)return;await Promise.all(Array.from(document.querySelectorAll('.cell')).map(refreshCellHttp));setTimeout(refreshMulti,500)}
-function closeWs(){if(wsRetry){clearTimeout(wsRetry);wsRetry=null}if(dvrWs){try{dvrWs.onclose=null;dvrWs.close()}catch(_){ }dvrWs=null}}
-function connectWs(){if(stopped||mode!==1)return;closeWs();const proto=location.protocol==='https:'?'wss:':'ws:';const id=encodeURIComponent(q('dvrId').value||site.dvr_id);const url=proto+'//'+location.host+'/ws?role=dvr_view&dvr_id='+id+'&ch='+active+'&v='+Date.now();const cell=document.querySelector('.cell[data-ch="'+active+'"]');try{dvrWs=new WebSocket(url);dvrWs.binaryType='blob';dvrWs.onopen=()=>{q('status').textContent='18C WebSocket connected | CH'+String(active).padStart(2,'0')};dvrWs.onmessage=e=>{if(typeof e.data==='string')return;if(cell){applyBlob(cell,e.data);wsFrames++;wsLastFrame=Date.now()}};dvrWs.onerror=()=>{};dvrWs.onclose=()=>{if(!stopped&&mode===1)wsRetry=setTimeout(connectWs,900)}}catch(e){wsRetry=setTimeout(connectWs,1200)}}
-async function sendControl(){try{await fetch('/api/rt7/dvr/control',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({dvr_id:q('dvrId').value||site.dvr_id,active_channel:active,mode:mode,quality:quality})});}catch(e){}}
-async function status(){try{const r=await fetch('/api/rt7/dvr/status?v='+Date.now(),{cache:'no-store',credentials:'same-origin'});const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||('HTTP '+r.status));const arr=j.channels||[],on=arr.filter(x=>x.online).length,cur=arr.find(x=>x.ch===active),ageMs=cur&&cur.age_ms!=null?cur.age_ms:null,age=ageMs!=null?(ageMs/1000).toFixed(1):'-',cell=document.querySelector('.cell[data-ch="'+active+'"]');if(mode===1&&(!cur||!cur.online||ageMs==null||ageMs>5000)){clearCellStale(cell,'CH'+String(active).padStart(2,'0')+' Relay 離線／影格過期');}q('status').textContent='18C1 ID SYNC | physical CH'+String(active).padStart(2,'0')+' | age '+age+'s | ws '+wsFrames+' | '+on+'/'+arr.length+' online | '+new Date().toLocaleTimeString();}catch(e){q('status').textContent='18C1 status error: '+e.message;}setTimeout(status,1000)}
-document.querySelectorAll('.cell').forEach(c=>c.onclick=()=>{active=+c.dataset.ch;document.querySelectorAll('.cell').forEach(x=>x.classList.toggle('active',x===c));sendControl();if(mode===1)connectWs()});document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{mode=+b.dataset.mode;location.href='/rt7_dvr_monitor?mode='+mode+'&quality='+quality+'&ch='+active});q('quality').onchange=e=>{quality=e.target.value;sendControl()};q('btnQuality').onclick=()=>{quality=quality==='high'?'low':'high';q('quality').value=quality;sendControl()};q('btnSnap').onclick=()=>{const a=document.createElement('a');a.href=frameUrl(active);a.download='RT7_DVR_CH'+String(active).padStart(2,'0')+'.jpg';a.click()};q('btnFull').onclick=()=>{const e=q('grid');if(document.fullscreenElement)document.exitFullscreen();else e.requestFullscreen&&e.requestFullscreen()};q('btnSetup').onclick=()=>q('setup').classList.toggle('open');q('adapter').onchange=()=>{q('adapter2').value=q('adapter').value};q('save').onclick=async()=>{const body={name:q('dvrName').value,dvr_id:q('dvrId').value,adapter_base:q('adapter2').value,channels:q('channels').value,quality};const r=await fetch('/api/rt7/dvr/config',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)});const j=await r.json();q('status').textContent=j.ok?'DVR 設定已儲存':'儲存失敗 '+(j.error||r.status)};
-sendControl();if(mode===1)connectWs();else refreshMulti();status();setInterval(sendControl,3000);window.addEventListener('beforeunload',()=>{stopped=true;closeWs()});
-}catch(e){var s=document.getElementById('status');if(s)s.textContent='B2 JavaScript error: '+(e&&e.message||e);console.error(e)}
-})();</script></body></html>`);
 });
 
 ensureDataDir();
