@@ -3218,22 +3218,93 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   var videoWanted=false; var currentStreamMode='IDLE'; var lanReconnectTimer=null; var lanRetryCount=0; var lanProbeDone=false;
   function clearLanReconnect(){ if(lanReconnectTimer){ clearTimeout(lanReconnectTimer); lanReconnectTimer=null; } }
   function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent=(selectedDeviceType==='dvr'?'DVR':'AUTO'); if(empty) empty.innerHTML='等待影像串流<br><span class="small">'+(selectedDeviceType==='dvr'?'DVR 單一通道 / 本機 Bridge':'自動判斷：內網直連 / Railway 雲端')+'</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
+  var dvrSwitchToken=0;
+  function rt7DvrFetchJson_(url, timeoutMs){
+    var ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+    var timer=ctl?setTimeout(function(){try{ctl.abort()}catch(e){}},timeoutMs||2500):null;
+    return fetch(url,{cache:'no-store',mode:'cors',signal:ctl?ctl.signal:undefined}).then(function(r){
+      if(timer)clearTimeout(timer);
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return r.json();
+    }).catch(function(e){if(timer)clearTimeout(timer);throw e;});
+  }
+  function rt7DvrOpenStream_(channel, token){
+    if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+    if(!img)return;
+    img.onerror=function(){
+      if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+      setAnswer('DVR CH'+channel+' 串流連線失敗：請確認 DVR_LOCAL_BRIDGE '+dvrBridgeHost);
+    };
+    img.onload=function(){
+      if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+      setAnswer('DVR HQ CH'+channel+' 已連線');
+    };
+    /* 先關閉舊 MJPEG 連線，再用唯一時間戳建立新連線，避免 Android Chrome 保留舊 Channel。 */
+    try{img.src='about:blank';}catch(e){}
+    img.removeAttribute('src');
+    setTimeout(function(){
+      if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+      img.src='http://'+dvrBridgeHost+'/stream.mjpg?channel='+channel+'&switch='+Date.now();
+    },80);
+  }
+  function rt7DvrPollUntilLive_(channel, token, startedAt){
+    if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+    var statusUrl='http://'+dvrBridgeHost+'/status?_='+Date.now();
+    rt7DvrFetchJson_(statusUrl,2200).then(function(st){
+      if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+      var current=parseInt(st&&st.current_channel,10)||0;
+      var target=parseInt(st&&st.target_channel,10)||0;
+      var state=String(st&&st.state||'');
+      if(current===channel&&target===channel&&state==='live'){
+        if(badge)badge.textContent='DVR CH'+channel;
+        if(empty)empty.innerHTML='DVR HQ CH'+channel+' 已連線<br><span class="small">'+dvrBridgeHost+' / 單一 Active Channel</span>';
+        rt7DvrOpenStream_(channel,token);
+        return;
+      }
+      if(state==='error'||(st&&st.last_error)){
+        setAnswer('DVR CH'+channel+' 切換失敗：'+String(st.last_error||state));
+        return;
+      }
+      if(Date.now()-startedAt>=15000){
+        setAnswer('DVR CH'+channel+' 切換逾時，目前 CH'+(current||'?')+' / '+(state||'unknown'));
+        return;
+      }
+      setAnswer('正在切換 DVR HQ CH'+channel+'（目前 CH'+(current||'?')+' / '+(state||'starting')+'）');
+      setTimeout(function(){rt7DvrPollUntilLive_(channel,token,startedAt);},500);
+    }).catch(function(){
+      /* 部分 Android/HTTPS 環境會阻擋跨來源 JSON；命令仍以 Image beacon 送達。
+         此時等待 Bridge 完成切換後再重連，避免 450ms 太早接回舊畫面。 */
+      if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
+      var elapsed=Date.now()-startedAt;
+      if(elapsed<3500){
+        setAnswer('正在切換 DVR HQ CH'+channel+'，等待 Bridge 完成');
+        setTimeout(function(){rt7DvrPollUntilLive_(channel,token,startedAt);},700);
+      }else{
+        rt7DvrOpenStream_(channel,token);
+      }
+    });
+  }
   function dvr(){
     videoWanted=true; currentStreamMode='DVR'; clearLanReconnect();
+    var channel=Math.max(1,Math.min(4,parseInt(selectedDvrChannel,10)||1));
+    selectedDvrChannel=channel;
+    var token=++dvrSwitchToken;
+    var startedAt=Date.now();
     try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','DVR');}catch(e){}
-    if(badge) badge.textContent='DVR CH'+selectedDvrChannel;
-    if(empty) empty.innerHTML='DVR HQ CH'+selectedDvrChannel+' 連線中<br><span class="small">'+dvrBridgeHost+' / 單一 Active Channel</span>';
-    /* GET beacon works even when Chrome restricts cross-origin JSON fetch. The local bridge also sends CORS headers. */
-    try{var sw=new Image();sw.src='http://'+dvrBridgeHost+'/api/channel?channel='+(selectedDvrChannel-1)+'&_='+Date.now();}catch(e){}
-    setTimeout(function(){
-      if(!videoWanted||currentStreamMode!=='DVR')return;
-      if(img){
-        img.onerror=function(){if(!videoWanted||currentStreamMode!=='DVR')return;setAnswer('DVR 串流連線失敗：請啟動 DVR_LOCAL_BRIDGE，並確認位址 '+dvrBridgeHost);};
-        img.onload=function(){setAnswer('DVR HQ CH'+selectedDvrChannel+' 已連線');};
-        img.src='http://'+dvrBridgeHost+'/stream.mjpg?channel='+(selectedDvrChannel-1)+'&_='+Date.now();
-      }
-    },450);
-    setAnswer('正在切換 DVR HQ CH'+selectedDvrChannel);
+    if(badge)badge.textContent='DVR CH'+channel;
+    if(empty)empty.innerHTML='DVR HQ CH'+channel+' 切換中<br><span class="small">'+dvrBridgeHost+' / 等待實際 Channel=CH'+channel+'</span>';
+    setAnswer('正在切換 DVR HQ CH'+channel);
+    /* Bridge API 採 1-based：CH1=1、CH2=2、CH3=3、CH4=4。 */
+    var switchUrl='http://'+dvrBridgeHost+'/api/channel?channel='+channel+'&_='+Date.now();
+    rt7DvrFetchJson_(switchUrl,2500).then(function(resp){
+      if(token!==dvrSwitchToken)return;
+      if(resp&&resp.ok===false)throw new Error(resp.error||'Bridge 拒絕切換');
+      rt7DvrPollUntilLive_(channel,token,startedAt);
+    }).catch(function(){
+      /* fetch 被 HTTPS→LAN/CORS/PNA 阻擋時，用 Image beacon 保證命令仍可送達。 */
+      try{var sw=new Image();sw.src=switchUrl;}catch(e){}
+      setTimeout(function(){rt7DvrPollUntilLive_(channel,token,startedAt);},600);
+    });
   }
   function cloud(){ videoWanted=true; currentStreamMode='CLOUD'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','CLOUD');}catch(e){} clearLanReconnect(); if(badge) badge.textContent='CLOUD'; if(empty) empty.innerHTML='Railway 雲端遠端影像<br><span class="small">外網或內網偵測失敗，自動切換</span>'; if(img){ img.onerror=function(){ if(!videoWanted || currentStreamMode!=='CLOUD') return; setAnswer('雲端影像暫停，5 秒後重連'); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(videoWanted && currentStreamMode==='CLOUD'){ img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud_re='+Date.now(); } },5000); }; img.onload=function(){ setDebug('cloud mjpeg loaded'); }; img.src='/api/rt7/camera/stream.mjpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_cloud='+Date.now(); } setAnswer('雲端遠端影像模式'); setDebug('cloud stream'); }
   function lan(){ videoWanted=true; currentStreamMode='LAN'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','LAN');}catch(e){} clearLanReconnect(); lanRetryCount=0; if(badge) badge.textContent='LAN'; if(empty) empty.innerHTML='內網直連 ESP32 流暢影像<br><span class="small">'+ip+'</span>'; if(img){ img.style.backgroundImage='url("/api/rt7/camera/latest.jpg?device_id='+encodeURIComponent(selectedDeviceId||'#1')+'&_hold='+Date.now()+'")'; img.style.backgroundSize='cover'; img.style.backgroundPosition='center'; img.onerror=function(){ if(!videoWanted || currentStreamMode!=='LAN') return; lanRetryCount++; setAnswer('LAN 串流暫停，5 秒後重連（保留畫面，不清空黑屏）'); setDebug('lan onerror retry='+lanRetryCount); clearLanReconnect(); lanReconnectTimer=setTimeout(function(){ if(!videoWanted || currentStreamMode!=='LAN') return; // Do NOT clear img.src here. Clearing src causes Android Chrome black screen. Replace source directly.
