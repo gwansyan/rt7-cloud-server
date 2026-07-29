@@ -255,7 +255,7 @@ async function rt7SendPushDoorbell_(payload) {
   return { ok:true, sent, removed, total:subs.length, failures };
 }
 
-const SERVER_VERSION = 'RT7_PHASE10_DVR_DEVICE_INTEGRATION_V1';
+const SERVER_VERSION = 'RT7_PHASE10_NATIVE_RTSP_PROJECT_SOURCE_MENU_V1';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -3144,7 +3144,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
 @media(max-height:740px){.top{height:56px}.videoBtns{gap:4px;padding:5px 6px}.vbtn{height:34px;font-size:12px;padding:7px 2px}.title{font-size:15px}.video{aspect-ratio:16/9}.bigMic{width:104px;height:104px;font-size:58px}.circle{width:50px;height:50px;font-size:24px}.act{font-size:11px}.statusLine{font-size:13px;min-height:38px}.reg{padding-top:4px}}
 </style></head><body>
 <header class="top"><a class="hamb" href="/rt7_gpio_control" style="color:#fff;text-decoration:none">☰</a><div class="title">RT7 PHASE10<br>AI MODE ROUTER</div><a class="spacer" href="/rt7_gpio_control" style="color:#fff;text-decoration:none;font-size:13px;font-weight:900">GPIO</a></header>
-<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div><div id="dvrHint" class="dvrHint">DVR 模式：一次只啟動一個通道。請先在同一區網電腦啟動 DVR_LOCAL_BRIDGE。</div>
+<div class="deviceBar"><div class="deviceText"><select id="deviceSel"><option value="${ip}">#1 / RT7 ESP32-S3-CAM / ${ip}</option></select></div></div><div id="dvrHint" class="dvrHint">DVR Native RTSP 模式：一次只啟動一個通道。請先在同一區網電腦啟動 RT7 Native RTSP Gateway V2。</div>
 <section class="video"><div id="emptyVideo" class="emptyVideo">${hint}<br><span class="small">網內使用 ESP32 直連；網外使用 Railway 雲端</span></div><img id="stream" alt=""><div id="aiBadge" class="badge idle ${aiOn?'aiOn':''}">${aiOn?'FACE_ENABLE':'IDLE'}</div><div id="streamModeBadge" class="badge live">${modeLabel}</div></section>
 <section class="videoBtns"><button id="btnAiOn" class="vbtn vblue" type="button">啟用人臉</button><button id="btnAiOff" class="vbtn vred" type="button">關閉人臉</button><button id="btnAudio" class="vbtn vorange" type="button">啟用提示音</button><button id="btnStart" class="vbtn vdark" type="button">開始影像</button><button id="btnStop" class="vbtn vdark" type="button">停止影像</button></section>
 <section class="statusLine"><div class="answer"><span class="dot"></span>回答：<span id="answerText">${answer}</span></div><div class="door">門鈴：<span id="doorText">${doorText}</span></div><div id="doorAlert" class="doorAlert">🔔 有人按門鈴</div></section>
@@ -3186,7 +3186,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var list=(d.devices||[]).filter(function(x){return x && x.enabled!==false;});
       if(!list.length) list=[{id:'#1',name:'RT7 ESP32-S3-CAM',ip:ip,enabled:true}];
       /* DVR V1 virtual devices: they are intentionally not written into devices.json because the existing permission model accepts #1~#4 only. */
-      [1,2,3,4].forEach(function(ch){ list.push({id:'DVR-CH'+ch,name:'DVR HQ CH'+ch,ip:dvrBridgeHost,enabled:true,type:'dvr',channel:ch}); });
+      [1,2,3,4].forEach(function(ch){ list.push({id:'DVR-CH'+ch,name:'DVR RTSP CH'+ch,ip:dvrBridgeHost,enabled:true,type:'dvr',channel:ch}); });
       var sel=document.getElementById('deviceSel'); if(!sel) return;
       sel.innerHTML=list.map(function(x){
         var id=x.id||'#1'; var name=x.name||'RT7'; var dip=rt7CleanHost(x.ip||'');
@@ -3217,7 +3217,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
   document.addEventListener('click', tryUnlockAudioSilently, {once:true, passive:true});
   var videoWanted=false; var currentStreamMode='IDLE'; var lanReconnectTimer=null; var lanRetryCount=0; var lanProbeDone=false;
   function clearLanReconnect(){ if(lanReconnectTimer){ clearTimeout(lanReconnectTimer); lanReconnectTimer=null; } }
-  function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent=(selectedDeviceType==='dvr'?'DVR':'AUTO'); if(empty) empty.innerHTML='等待影像串流<br><span class="small">'+(selectedDeviceType==='dvr'?'DVR 單一通道 / 本機 Bridge':'自動判斷：內網直連 / Railway 雲端')+'</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
+  function stopVideo(){ videoWanted=false; currentStreamMode='IDLE'; try{localStorage.setItem('RT7_V50_WANTED_VIDEO','0');localStorage.setItem('RT7_V50_STREAM_MODE','IDLE');}catch(e){} clearLanReconnect(); if(img){ img.onerror=null; img.onload=null; try{ img.src='about:blank'; }catch(e){} img.removeAttribute('src'); } if(badge) badge.textContent=(selectedDeviceType==='dvr'?'DVR':'AUTO'); if(empty) empty.innerHTML='等待影像串流<br><span class="small">'+(selectedDeviceType==='dvr'?'DVR Native RTSP / 單一 Active Channel':'自動判斷：內網直連 / Railway 雲端')+'</span>'; setAnswer('雲端門鈴待機中'); setDebug('stop video'); }
   var dvrSwitchToken=0;
   function rt7DvrFetchJson_(url, timeoutMs){
     var ctl=(typeof AbortController!=='undefined')?new AbortController():null;
@@ -3233,11 +3233,11 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     if(!img)return;
     img.onerror=function(){
       if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
-      setAnswer('DVR CH'+channel+' 串流連線失敗：請確認 DVR_LOCAL_BRIDGE '+dvrBridgeHost);
+      setAnswer('DVR RTSP CH'+channel+' 串流連線失敗：請確認 Native RTSP Gateway V2 '+dvrBridgeHost);
     };
     img.onload=function(){
       if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
-      setAnswer('DVR HQ CH'+channel+' 已連線');
+      setAnswer('DVR RTSP CH'+channel+' 已連線');
     };
     /* 先關閉舊 MJPEG 連線，再用唯一時間戳建立新連線，避免 Android Chrome 保留舊 Channel。 */
     try{img.src='about:blank';}catch(e){}
@@ -3257,7 +3257,7 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
       var state=String(st&&st.state||'');
       if(current===channel&&target===channel&&state==='live'){
         if(badge)badge.textContent='DVR CH'+channel;
-        if(empty)empty.innerHTML='DVR HQ CH'+channel+' 已連線<br><span class="small">'+dvrBridgeHost+' / 單一 Active Channel</span>';
+        if(empty)empty.innerHTML='DVR RTSP CH'+channel+' 已連線<br><span class="small">'+dvrBridgeHost+' / 單一 Active Channel</span>';
         rt7DvrOpenStream_(channel,token);
         return;
       }
@@ -3269,15 +3269,15 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
         setAnswer('DVR CH'+channel+' 切換逾時，目前 CH'+(current||'?')+' / '+(state||'unknown'));
         return;
       }
-      setAnswer('正在切換 DVR HQ CH'+channel+'（目前 CH'+(current||'?')+' / '+(state||'starting')+'）');
+      setAnswer('正在切換 DVR RTSP CH'+channel+'（目前 CH'+(current||'?')+' / '+(state||'starting')+'）');
       setTimeout(function(){rt7DvrPollUntilLive_(channel,token,startedAt);},500);
     }).catch(function(){
       /* 部分 Android/HTTPS 環境會阻擋跨來源 JSON；命令仍以 Image beacon 送達。
-         此時等待 Bridge 完成切換後再重連，避免 450ms 太早接回舊畫面。 */
+         此時等待 Native RTSP Gateway 完成切換後再重連，避免 450ms 太早接回舊畫面。 */
       if(token!==dvrSwitchToken||!videoWanted||currentStreamMode!=='DVR')return;
       var elapsed=Date.now()-startedAt;
       if(elapsed<3500){
-        setAnswer('正在切換 DVR HQ CH'+channel+'，等待 Bridge 完成');
+        setAnswer('正在切換 DVR RTSP CH'+channel+'，等待 Native RTSP Gateway 完成');
         setTimeout(function(){rt7DvrPollUntilLive_(channel,token,startedAt);},700);
       }else{
         rt7DvrOpenStream_(channel,token);
@@ -3292,13 +3292,13 @@ a,button,input,select{pointer-events:auto!important;touch-action:manipulation!im
     var startedAt=Date.now();
     try{localStorage.setItem('RT7_V50_WANTED_VIDEO','1');localStorage.setItem('RT7_V50_STREAM_MODE','DVR');}catch(e){}
     if(badge)badge.textContent='DVR CH'+channel;
-    if(empty)empty.innerHTML='DVR HQ CH'+channel+' 切換中<br><span class="small">'+dvrBridgeHost+' / 等待實際 Channel=CH'+channel+'</span>';
-    setAnswer('正在切換 DVR HQ CH'+channel);
-    /* Bridge API 採 1-based：CH1=1、CH2=2、CH3=3、CH4=4。 */
+    if(empty)empty.innerHTML='DVR RTSP CH'+channel+' 切換中<br><span class="small">'+dvrBridgeHost+' / 等待實際 Channel=CH'+channel+'</span>';
+    setAnswer('正在切換 DVR RTSP CH'+channel);
+    /* Native RTSP Gateway API 採 1-based：CH1=1、CH2=2、CH3=3、CH4=4。 */
     var switchUrl='http://'+dvrBridgeHost+'/api/channel?channel='+channel+'&_='+Date.now();
     rt7DvrFetchJson_(switchUrl,2500).then(function(resp){
       if(token!==dvrSwitchToken)return;
-      if(resp&&resp.ok===false)throw new Error(resp.error||'Bridge 拒絕切換');
+      if(resp&&resp.ok===false)throw new Error(resp.error||'Native RTSP Gateway 拒絕切換');
       rt7DvrPollUntilLive_(channel,token,startedAt);
     }).catch(function(){
       /* fetch 被 HTTPS→LAN/CORS/PNA 阻擋時，用 Image beacon 保證命令仍可送達。 */
